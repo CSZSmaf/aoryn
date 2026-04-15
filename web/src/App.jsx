@@ -124,7 +124,7 @@ function WorkspaceStage({ copy }) {
       <article className="workspace-frame">
         <div className="workspace-frame__topbar">
           <div className="workspace-brand">
-            <img src="/logo-mark.svg" alt="" />
+            <img src="/aoryn-logo-web.png" alt="" />
             <div>
               <strong>{copy.windowLabel}</strong>
               <span>{copy.windowMeta}</span>
@@ -346,7 +346,7 @@ export default function App() {
 
       <header className="topbar">
         <a className="brand" href="#top" aria-label={siteConfig.siteName}>
-          <img src="/logo-mark.svg" alt="" />
+          <img src="/aoryn-logo-web.png" alt="" />
           <div>
             <strong>{siteConfig.siteName}</strong>
             <span>{siteConfig.domain}</span>
