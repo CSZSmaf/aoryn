@@ -12,10 +12,9 @@ const INITIAL_FORM = {
 };
 
 function getPreferredLocale() {
-  if (typeof window === "undefined") return "en-US";
+  if (typeof window === "undefined") return "zh-CN";
   const stored = window.localStorage.getItem(siteConfig.localeStorageKey);
-  if (stored === "zh-CN" || stored === "en-US") return stored;
-  return window.navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US";
+  return stored === "zh-CN" || stored === "en-US" ? stored : "zh-CN";
 }
 
 function validateRegistration(form, validationCopy) {
@@ -73,79 +72,121 @@ function trapFocus(container, event) {
   }
 }
 
-function ProductPreview({ copy }) {
+function SectionIntro({ eyebrow, title, body, align = "left" }) {
   return (
-    <div className="hero-preview reveal" aria-label={copy.windowLabel}>
-      <div className="preview-shell">
-        <div className="preview-topbar">
-          <div className="preview-brand">
-            <img src="/logo-mark.svg" alt="" />
-            <span>{copy.windowLabel}</span>
-          </div>
-          <span className="status-pill">{copy.status}</span>
-        </div>
+    <div className={`section-intro reveal section-intro--${align}`}>
+      <span className="section-eyebrow">{eyebrow}</span>
+      <h2>{title}</h2>
+      {body ? <p>{body}</p> : null}
+    </div>
+  );
+}
 
-        <div className="preview-grid">
-          <div className="preview-column preview-column--stack">
-            {copy.cards.map((item) => (
-              <article className="preview-card" key={item.label}>
-                <span className="preview-label">{item.label}</span>
-                <strong>{item.value}</strong>
-              </article>
-            ))}
-          </div>
+function HeroOrbital({ copy }) {
+  return (
+    <div className="hero-orbital reveal" aria-label={copy.ariaLabel}>
+      <div className="hero-orbital__halo hero-orbital__halo--outer" />
+      <div className="hero-orbital__halo hero-orbital__halo--middle" />
+      <div className="hero-orbital__halo hero-orbital__halo--inner" />
 
-          <div className="preview-column">
-            <article className="preview-terminal">
-              <span className="preview-label">{copy.timelineTitle}</span>
-              <ol>
-                {copy.timeline.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ol>
-            </article>
+      <article className="hero-orbital__core">
+        <span className="status-pill status-pill--soft">{copy.status}</span>
+        <strong>{copy.title}</strong>
+        <p>{copy.body}</p>
+      </article>
 
-            <article className="preview-window">
-              <div className="preview-window__chrome">
-                <span />
-                <span />
-                <span />
-              </div>
-              <div className="preview-window__body">
-                <div className="preview-chip-row">
-                  {copy.chips.map((item) => (
-                    <span className="preview-chip" key={item}>
-                      {item}
-                    </span>
-                  ))}
-                </div>
-                <div className="preview-panel">
-                  <strong>{copy.panelTitle}</strong>
-                  <p>{copy.panelBody}</p>
-                </div>
-                <div className="preview-metrics">
-                  {copy.metrics.map((item) => (
-                    <div key={`${item.value}-${item.label}`}>
-                      <strong>{item.value}</strong>
-                      <span>{item.label}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </article>
-          </div>
-        </div>
+      {copy.cards.map((card, index) => (
+        <article
+          className={`hero-orbital__card hero-orbital__card--${index + 1}`}
+          key={card.title}
+        >
+          <span>{card.title}</span>
+          <p>{card.body}</p>
+        </article>
+      ))}
+
+      <div className="hero-orbital__tags">
+        {copy.tags.map((tag) => (
+          <span className="hero-tag" key={tag}>
+            {tag}
+          </span>
+        ))}
       </div>
     </div>
   );
 }
 
-function SectionHeading({ eyebrow, title, body }) {
+function WorkspaceStage({ copy }) {
   return (
-    <div className="section-heading reveal">
-      <span className="section-eyebrow">{eyebrow}</span>
-      <h2>{title}</h2>
-      {body ? <p>{body}</p> : null}
+    <div className="workspace-stage reveal" aria-label={copy.ariaLabel}>
+      <div className="workspace-stage__glow" />
+
+      <article className="workspace-frame">
+        <div className="workspace-frame__topbar">
+          <div className="workspace-brand">
+            <img src="/logo-mark.svg" alt="" />
+            <div>
+              <strong>{copy.windowLabel}</strong>
+              <span>{copy.windowMeta}</span>
+            </div>
+          </div>
+
+          <span className="status-pill">{copy.status}</span>
+        </div>
+
+        <div className="workspace-frame__body">
+          <aside className="workspace-rail">
+            <span className="workspace-label">{copy.railLabel}</span>
+            <ul>
+              {copy.railItems.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </aside>
+
+          <div className="workspace-main">
+            <div className="workspace-chip-row">
+              {copy.chips.map((item) => (
+                <span className="workspace-chip" key={item}>
+                  {item}
+                </span>
+              ))}
+            </div>
+
+            <div className="workspace-focus">
+              <span className="workspace-label">{copy.focusLabel}</span>
+              <h3>{copy.focusTitle}</h3>
+              <p>{copy.focusBody}</p>
+            </div>
+
+            <div className="workspace-panels">
+              <article className="workspace-panel">
+                <span className="workspace-label">{copy.currentTaskLabel}</span>
+                <strong>{copy.currentTask}</strong>
+              </article>
+
+              <article className="workspace-panel">
+                <span className="workspace-label">{copy.checkpointLabel}</span>
+                <strong>{copy.checkpoint}</strong>
+              </article>
+            </div>
+
+            <div className="workspace-metrics">
+              {copy.metrics.map((item) => (
+                <div className="workspace-metric" key={item.label}>
+                  <strong>{item.value}</strong>
+                  <span>{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="workspace-frame__footer">
+          <span className="workspace-label">{copy.footerLabel}</span>
+          <strong>{copy.footerValue}</strong>
+        </div>
+      </article>
     </div>
   );
 }
@@ -162,14 +203,41 @@ export default function App() {
   const fieldRefs = useRef({});
   const lastActiveElementRef = useRef(null);
 
-  const copy = siteCopy[locale] || siteCopy["en-US"];
+  const copy = siteCopy[locale] || siteCopy["zh-CN"];
   const currentYear = new Date().getFullYear();
 
   useEffect(() => {
     document.documentElement.lang = locale;
-    document.title = `${siteConfig.siteName} | ${copy.hero.eyebrow}`;
+    document.title = copy.meta.title;
     window.localStorage.setItem(siteConfig.localeStorageKey, locale);
-  }, [copy.hero.eyebrow, locale]);
+
+    const metaDescription = document.querySelector('meta[name="description"]');
+    metaDescription?.setAttribute("content", copy.meta.description);
+  }, [copy.meta.description, copy.meta.title, locale]);
+
+  useEffect(() => {
+    const nodes = Array.from(document.querySelectorAll(".reveal"));
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (reducedMotion || typeof IntersectionObserver === "undefined") {
+      nodes.forEach((node) => node.classList.add("is-visible"));
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
+        });
+      },
+      { threshold: 0.16, rootMargin: "0px 0px -10% 0px" }
+    );
+
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, [locale]);
 
   useEffect(() => {
     if (isRegisterOpen) return;
@@ -260,10 +328,7 @@ export default function App() {
 
       setForm(INITIAL_FORM);
       setErrors({});
-      setSubmitFeedback({
-        tone: "success",
-        message: response.message,
-      });
+      setSubmitFeedback({ tone: "success", message: response.message });
     } catch (error) {
       setSubmitFeedback({
         tone: "error",
@@ -276,8 +341,8 @@ export default function App() {
 
   return (
     <div className="site-shell">
-      <div className="site-orb site-orb--left" />
-      <div className="site-orb site-orb--right" />
+      <div className="site-backdrop site-backdrop--left" />
+      <div className="site-backdrop site-backdrop--right" />
 
       <header className="topbar">
         <a className="brand" href="#top" aria-label={siteConfig.siteName}>
@@ -289,8 +354,8 @@ export default function App() {
         </a>
 
         <nav className="topnav" aria-label="Primary">
-          <a href="#product">{copy.nav.product}</a>
-          <a href="#workflow">{copy.nav.workflow}</a>
+          <a href="#capabilities">{copy.nav.capabilities}</a>
+          <a href="#experience">{copy.nav.experience}</a>
           <a href="#download">{copy.nav.download}</a>
           <a href="#faq">{copy.nav.faq}</a>
         </nav>
@@ -299,7 +364,7 @@ export default function App() {
           <button className="ghost-button" type="button" onClick={toggleLocale}>
             {copy.langSwitch}
           </button>
-          <button className="primary-button" type="button" onClick={openRegisterModal}>
+          <button className="secondary-button" type="button" onClick={openRegisterModal}>
             {copy.nav.register}
           </button>
         </div>
@@ -309,9 +374,7 @@ export default function App() {
         <section className="hero">
           <div className="hero-copy reveal">
             <span className="announcement-pill">{copy.announcement}</span>
-            <span className="hero-eyebrow">
-              {siteConfig.siteName} {siteConfig.release.version} · {copy.hero.eyebrow}
-            </span>
+            <span className="hero-eyebrow">{copy.hero.eyebrow}</span>
             <h1>{copy.hero.title}</h1>
             <p className="hero-body">{copy.hero.body}</p>
 
@@ -331,31 +394,34 @@ export default function App() {
 
             <p className="hero-note">{copy.hero.availability}</p>
 
-            <div className="hero-stats">
-              {copy.hero.stats.map((item) => (
-                <article className="stat-card" key={item.value}>
-                  <strong>{item.value}</strong>
-                  <span>{item.label}</span>
-                </article>
+            <div className="hero-mini-meta">
+              {copy.hero.labels.map((item) => (
+                <span className="hero-mini-pill" key={item}>
+                  {item}
+                </span>
               ))}
             </div>
-
-            <ul className="hero-proof">
-              {copy.hero.proof.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
           </div>
 
-          <ProductPreview copy={copy.preview} />
+          <HeroOrbital copy={copy.heroOrbital} />
         </section>
 
-        <section className="content-section" id="product">
-          <SectionHeading eyebrow={copy.product.eyebrow} title={copy.product.title} body={copy.product.body} />
-          <div className="feature-grid">
-            {copy.product.items.map((item) => (
-              <article className="feature-card reveal" key={item.title}>
-                <span className="card-kicker">{siteConfig.siteName}</span>
+        <section className="content-section" id="capabilities">
+          <SectionIntro
+            eyebrow={copy.capabilities.eyebrow}
+            title={copy.capabilities.title}
+            body={copy.capabilities.body}
+            align="center"
+          />
+
+          <div className="capability-grid">
+            {copy.capabilities.items.map((item, index) => (
+              <article
+                className="capability-card reveal"
+                key={item.title}
+                style={{ "--delay": `${index * 90}ms` }}
+              >
+                <span className="capability-note">{item.note}</span>
                 <h3>{item.title}</h3>
                 <p>{item.body}</p>
               </article>
@@ -363,45 +429,45 @@ export default function App() {
           </div>
         </section>
 
-        <section className="content-section content-section--contrast">
-          <SectionHeading eyebrow={copy.difference.eyebrow} title={copy.difference.title} />
-          <div className="difference-grid">
-            {copy.difference.items.map((item) => (
-              <article className="difference-card reveal" key={item.title}>
-                <h3>{item.title}</h3>
-                <p>{item.body}</p>
-              </article>
-            ))}
+        <section className="content-section content-section--experience" id="experience">
+          <div className="experience-layout">
+            <div className="experience-copy reveal">
+              <SectionIntro
+                eyebrow={copy.experience.eyebrow}
+                title={copy.experience.title}
+                body={copy.experience.body}
+              />
+
+              <ul className="experience-list">
+                {copy.experience.bullets.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+
+              <div className="experience-signals">
+                {copy.experience.signals.map((item) => (
+                  <article className="experience-signal" key={item.label}>
+                    <strong>{item.value}</strong>
+                    <span>{item.label}</span>
+                  </article>
+                ))}
+              </div>
+            </div>
+
+            <WorkspaceStage copy={copy.experience.preview} />
           </div>
         </section>
 
-        <section className="content-section" id="workflow">
-          <SectionHeading eyebrow={copy.workflow.eyebrow} title={copy.workflow.title} />
-          <div className="workflow-grid">
-            {copy.workflow.steps.map((item, index) => (
-              <article className="workflow-card reveal" key={item.title}>
-                <span className="workflow-index">0{index + 1}</span>
-                <h3>{item.title}</h3>
-                <p>{item.body}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="content-section content-section--download" id="download">
-          <SectionHeading eyebrow={copy.download.eyebrow} title={copy.download.title} body={copy.download.body} />
-
-          <div className="download-layout">
-            <article className="download-card reveal">
-              <div className="download-card__head">
-                <div>
-                  <span className="card-kicker">{siteConfig.release.channel}</span>
-                  <h3>{siteConfig.release.fileName}</h3>
-                </div>
-                <span className="status-pill status-pill--dark">{siteConfig.release.version}</span>
+        <section className="content-section content-section--cta" id="download">
+          <div className="cta-layout">
+            <article className="download-panel reveal">
+              <div className="download-panel__header">
+                <span className="section-eyebrow">{copy.download.eyebrow}</span>
+                <h2>{copy.download.title}</h2>
+                <p>{copy.download.body}</p>
               </div>
 
-              <div className="download-meta">
+              <div className="download-meta-grid">
                 <div>
                   <span>{copy.download.labels.version}</span>
                   <strong>{siteConfig.release.version}</strong>
@@ -422,9 +488,13 @@ export default function App() {
                   <span>{copy.download.labels.hosting}</span>
                   <strong>{siteConfig.release.hosting}</strong>
                 </div>
+                <div>
+                  <span>{copy.download.labels.release}</span>
+                  <strong>{siteConfig.release.fileName}</strong>
+                </div>
               </div>
 
-              <div className="download-actions">
+              <div className="hero-actions">
                 <a
                   className="primary-button"
                   href={siteConfig.release.downloadUrl}
@@ -437,45 +507,49 @@ export default function App() {
                   {copy.download.secondaryCta}
                 </button>
               </div>
-            </article>
 
-            <aside className="download-notes reveal">
-              <h3>{siteConfig.siteName}</h3>
-              <ul>
+              <ul className="download-notes">
                 {copy.download.notes.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
-            </aside>
-          </div>
-        </section>
+            </article>
 
-        <section className="content-section">
-          <div className="account-cta reveal">
-            <div>
+            <article className="register-panel reveal">
               <span className="section-eyebrow">{copy.register.eyebrow}</span>
               <h2>{copy.register.title}</h2>
               <p>{copy.register.body}</p>
-            </div>
 
-            <div className="account-cta__side">
-              <ul>
+              <div className="register-benefits">
                 {copy.register.benefits.map((item) => (
-                  <li key={item}>{item}</li>
+                  <div className="register-benefit" key={item}>
+                    {item}
+                  </div>
                 ))}
-              </ul>
+              </div>
+
               <button className="primary-button" type="button" onClick={openRegisterModal}>
                 {copy.register.cta}
               </button>
-            </div>
+            </article>
           </div>
         </section>
 
-        <section className="content-section" id="faq">
-          <SectionHeading eyebrow={copy.faq.eyebrow} title={copy.faq.title} />
+        <section className="content-section content-section--faq" id="faq">
+          <SectionIntro
+            eyebrow={copy.faq.eyebrow}
+            title={copy.faq.title}
+            body={copy.faq.body}
+            align="center"
+          />
+
           <div className="faq-list">
-            {copy.faq.items.map((item) => (
-              <details className="faq-item reveal" key={item.question}>
+            {copy.faq.items.map((item, index) => (
+              <details
+                className="faq-item reveal"
+                key={item.question}
+                style={{ "--delay": `${index * 70}ms` }}
+              >
                 <summary>{item.question}</summary>
                 <p>{item.answer}</p>
               </details>
@@ -495,7 +569,10 @@ export default function App() {
       </footer>
 
       {isRegisterOpen ? (
-        <div className="modal-shell" onMouseDown={(event) => event.target === event.currentTarget && closeRegisterModal()}>
+        <div
+          className="modal-shell"
+          onMouseDown={(event) => event.target === event.currentTarget && closeRegisterModal()}
+        >
           <div
             className="modal-card"
             ref={modalRef}
@@ -508,7 +585,12 @@ export default function App() {
                 <span className="section-eyebrow">{copy.register.eyebrow}</span>
                 <h2 id="register-modal-title">{copy.register.modalTitle}</h2>
               </div>
-              <button className="icon-button" type="button" onClick={closeRegisterModal} aria-label={copy.register.form.close}>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={closeRegisterModal}
+                aria-label={copy.register.form.close}
+              >
                 ×
               </button>
             </div>
@@ -575,7 +657,9 @@ export default function App() {
                     placeholder={copy.register.form.confirmPasswordPlaceholder}
                     aria-invalid={Boolean(errors.confirmPassword)}
                   />
-                  {errors.confirmPassword ? <small className="field-error">{errors.confirmPassword}</small> : null}
+                  {errors.confirmPassword ? (
+                    <small className="field-error">{errors.confirmPassword}</small>
+                  ) : null}
                 </label>
               </div>
 
