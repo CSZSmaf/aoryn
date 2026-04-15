@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#ffffff" />
+    <title>__APP_NAME__</title>
+    <link rel="icon" type="image/png" href="/assets/icons/logo-mark.png?v=__APP_ASSET_VERSION__" />
+    <link rel="icon" href="/favicon.ico" sizes="64x64" />
+    <link rel="stylesheet" href="/assets/styles.css?v=__APP_ASSET_VERSION__" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.38/dist/katex.min.css" />
+  </head>
+  <body data-ui-mode="agent" data-sidebar-collapsed="false" data-sidebar-open="false">
+    <div class="app-shell">
+      <aside class="history-sidebar" id="historySidebar" aria-label="History">
+        <div class="sidebar-head">
+          <button class="sidebar-brand sidebar-brand-toggle" id="sidebarBrandButton" type="button" aria-label="Toggle sidebar" title="Toggle sidebar">
+            <div class="brand-mark" aria-hidden="true">
+              <img class="brand-mark__image" src="/assets/icons/logo-mark.png?v=__APP_ASSET_VERSION__" alt="" />
+            </div>
+            <div class="sidebar-brand__copy">
+              <strong class="brand-wordmark" data-i18n="sidebar.appTitle">Aoryn</strong>
+              <span data-i18n="sidebar.appSubtitle">任务</span>
+            </div>
+          </button>
+        </div>
+
+        <button class="new-task-button" id="newTaskButton" type="button" data-i18n="sidebar.newTask" aria-label="新建">
+          新建
+        </button>
+
+        <div class="sidebar-section-head">
+          <p data-i18n="sidebar.history">历史</p>
+          <button class="sidebar-refresh" id="refreshRunsButton" type="button" aria-label="刷新" title="刷新">
+            <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
+                fill="none"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.8"
+              />
+            </svg>
+          </button>
+        </div>
+
+        <div class="sidebar-run-list" id="sidebarRunList">
+          <div class="sidebar-skeleton"></div>
+          <div class="sidebar-skeleton"></div>
+          <div class="sidebar-skeleton"></div>
+        </div>
+      </aside>
+
+      <button class="sidebar-backdrop" id="sidebarBackdrop" type="button" hidden aria-label="Close sidebar"></button>
+
+      <section class="main-shell">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button class="mobile-menu-button" id="mobileSidebarButton" type="button" data-i18n="topbar.menu">菜单</button>
+            <div class="topbar-title">
+              <h1 id="topbarTitle">Aoryn</h1>
+              <p id="topbarSubtitle"></p>
+            </div>
+          </div>
+
+          <div class="topbar-actions">
+            <span class="connection-chip connection-chip--status" id="connectionBadge" role="status" aria-live="polite" aria-label="离线" title="离线">
+              <span class="connection-chip__dot" aria-hidden="true"></span>
+            </span>
+
+            <div class="mode-switch" id="uiModeTabs" aria-label="Mode switch">
+              <button class="mode-switch__button" data-ui-mode="chat" type="button" aria-label="普通对话" title="普通对话">
+                <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M5.5 6.5A3.5 3.5 0 0 1 9 3h6a3.5 3.5 0 0 1 3.5 3.5v4A3.5 3.5 0 0 1 15 14h-2.4l-3.3 2.7c-.55.45-1.3.06-1.3-.64V14H9a3.5 3.5 0 0 1-3.5-3.5z"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.8"
+                  />
+                </svg>
+              </button>
+              <button class="mode-switch__button active" data-ui-mode="agent" type="button" aria-label="Agent" title="Agent">
+                <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="m9 8-4 4 4 4m6-8 4 4-4 4M12 4v16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.8"
+                  />
+                </svg>
+              </button>
+            </div>
+
+            <button class="settings-button" id="settingsButton" type="button" aria-label="设置" title="设置">
+              <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 9.2A2.8 2.8 0 1 1 9.2 12 2.8 2.8 0 0 1 12 9.2Zm7.1 2.8a6.88 6.88 0 0 0-.08-1l2-1.56-1.9-3.3-2.43.76a7.8 7.8 0 0 0-1.73-1L14.6 3h-3.2l-.26 2.89a7.8 7.8 0 0 0-1.73 1l-2.43-.76-1.9 3.3 2 1.56a6.88 6.88 0 0 0 0 2l-2 1.56 1.9 3.3 2.43-.76a7.8 7.8 0 0 0 1.73 1L11.4 21h3.2l.26-2.89a7.8 7.8 0 0 0 1.73-1l2.43.76 1.9-3.3-2-1.56c.05-.33.08-.66.08-1Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.6"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <main class="surface">
+          <section class="chat-surface" id="chatSurface" data-surface="conversation">
+            <div class="chat-scroll" id="chatScroll">
+              <div class="chat-stream" id="chatStream">
+                <div class="chat-welcome">
+                  <p class="brand-wordmark" data-i18n="chat.emptyEyebrow">Aoryn</p>
+                  <h2 data-i18n="chat.emptyTitle">开始一个任务</h2>
+                  <p data-i18n="chat.emptyBody">输入目标后，执行过程和截图会出现在对话里。</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="composer-wrap">
+              <div class="composer-suggestions" id="composerSuggestions"></div>
+
+              <form class="composer" id="taskForm" novalidate>
+                <label class="composer-field">
+                  <span class="sr-only" data-i18n="chat.inputLabel">任务</span>
+                  <textarea
+                    id="taskInput"
+                    name="task"
+                    rows="3"
+                    data-i18n-placeholder="chat.inputPlaceholder"
+                    placeholder="例如：访问 openai.com，点击 login，然后输入邮箱"
+                  ></textarea>
+                </label>
+
+                <div class="composer-toolbar">
+                  <p class="composer-hint" id="submitHint"></p>
+
+                  <div class="composer-actions">
+                    <button class="secondary-button composer-icon-button" id="stopButton" type="button" aria-label="停止" title="停止" hidden>
+                      <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="7" y="7" width="10" height="10" rx="2.2" fill="currentColor" />
+                      </svg>
+                    </button>
+                    <button class="primary-button composer-icon-button" id="submitButton" type="submit" aria-label="发送" title="发送">
+                      <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          d="M4.5 11.5 19 4l-3.2 15-4.2-5-4.3-2.5Z"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="1.8"
+                        />
+                        <path d="M19 4 11.6 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <section class="developer-surface" id="developerSurface" data-surface="developer">
+            <div class="developer-header">
+              <div>
+                <p data-i18n="developer.eyebrow">开发</p>
+                <h2 data-i18n="developer.title">开发台</h2>
+                <p data-i18n="developer.subtitle">队列、模型和原始运行细节。</p>
+              </div>
+              <button class="secondary-button" id="openSettingsFromDeveloper" type="button" data-i18n="topbar.settings">设置</button>
+            </div>
+
+            <div class="developer-grid">
+              <section class="developer-panel">
+                <div class="panel-head">
+                  <div>
+                    <p data-i18n="developer.providerEyebrow">模型</p>
+                    <h3 data-i18n="developer.providerTitle">检查</h3>
+                  </div>
+                  <span class="connection-chip connection-chip--muted" id="domStatusBadge">DOM</span>
+                </div>
+
+                <div class="developer-actions">
+                  <button class="secondary-button" id="testProviderButton" type="button" data-i18n="developer.testProvider">测试</button>
+                  <button class="secondary-button" id="refreshModelsButton" type="button" data-i18n="developer.refreshModels">刷新</button>
+                  <button class="secondary-button" id="loadLmStudioModelButton" type="button" data-i18n="developer.loadModel">加载</button>
+                </div>
+
+                <p class="developer-note" id="providerStatusNote" data-i18n="developer.providerStatus">这里显示模型连接状态。</p>
+              </section>
+
+              <section class="developer-panel">
+                <div class="panel-head">
+                  <div>
+                    <p data-i18n="developer.queueEyebrow">队列</p>
+                    <h3 data-i18n="developer.queueTitle">最近任务</h3>
+                  </div>
+                </div>
+
+                <div class="developer-job-list" id="jobList"></div>
+              </section>
+
+              <section class="developer-panel developer-panel--wide">
+                <div class="panel-head">
+                  <div>
+                    <p id="displayDetectionPanelEyebrow">Display</p>
+                    <h3 id="displayDetectionPanelTitle">Display detection</h3>
+                  </div>
+                  <span class="connection-chip connection-chip--muted" id="displayDetectionBadge">Auto</span>
+                </div>
+
+                <div class="developer-note" id="displayDetectionCompare"></div>
+                <pre class="payload-view payload-view--compact" id="displayDetectionJsonView">{}</pre>
+              </section>
+
+              <section class="developer-panel developer-panel--wide">
+                <div class="panel-head">
+                  <div>
+                    <p data-i18n="developer.payloadEyebrow">Payload</p>
+                    <h3 data-i18n="developer.payloadTitle">实时快照</h3>
+                  </div>
+                </div>
+
+                <pre class="payload-view" id="activePayloadView">{}</pre>
+              </section>
+
+              <section class="developer-panel developer-panel--wide">
+                <div class="panel-head">
+                  <div>
+                    <p data-i18n="developer.runEyebrow">运行</p>
+                    <h3 data-i18n="developer.runTitle">时间线</h3>
+                  </div>
+
+                  <button class="secondary-button" id="openInspectorButton" type="button" data-i18n="inspector.open">详情</button>
+                </div>
+
+                <div class="developer-timeline" id="developerTimeline"></div>
+              </section>
+            </div>
+          </section>
+        </main>
+      </section>
+    </div>
+
+    <div class="modal-shell" id="settingsOverlay" hidden>
+      <button class="modal-backdrop" id="settingsBackdrop" type="button" aria-label="Close settings"></button>
+
+      <aside class="settings-modal" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsDrawerTitle" tabindex="-1">
+        <div class="drawer-head">
+          <div>
+            <h2 id="settingsDrawerTitle" data-i18n="settings.title">设置</h2>
+          </div>
+
+          <button class="drawer-close" id="closeSettingsButton" type="button" data-i18n="common.close" aria-label="关闭">×</button>
+        </div>
+
+        <div class="settings-modal__content">
+          <div class="settings-profile">
+            <div class="settings-avatar">DA</div>
+            <div>
+              <small class="settings-version" id="settingsVersionBadge">v__APP_VERSION__</small>
+              <strong data-i18n="settings.profileTitle">本地工作台</strong>
+            </div>
+          </div>
+
+          <div class="settings-sections">
+            <section class="settings-section settings-section--onboarding" id="onboardingSection" hidden></section>
+            <section class="settings-section">
+              <div class="section-head">
+                <h3 data-i18n="settings.generalTitle">语言与安装</h3>
+              </div>
+
+              <label class="field">
+                <span data-i18n="settings.language">语言</span>
+                <select id="languageSelect" aria-label="Language"></select>
+              </label>
+
+            </section>
+
+            <section class="settings-section">
+              <div class="section-head">
+                <h3 data-i18n="settings.inputTitle">输入</h3>
+              </div>
+
+              <label class="field">
+                <span data-i18n="settings.sendShortcut">发送快捷键</span>
+                <select id="sendShortcutSelect" aria-label="Send shortcut"></select>
+              </label>
+            </section>
+
+            <section class="settings-section">
+              <div class="section-head">
+                <h3 data-i18n="settings.runtimeTitle">执行</h3>
+              </div>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span data-i18n="settings.maxSteps">步数</span>
+                  <input id="maxStepsInput" name="max_steps" min="1" max="50" type="number" placeholder="8" />
+                </label>
+
+                <label class="field">
+                  <span data-i18n="settings.pausePerAction">暂停</span>
+                  <input id="pauseInput" name="pause_after_action" min="0" step="0.1" type="number" placeholder="0.4" />
+                </label>
+              </div>
+            </section>
+
+            <section class="settings-section" id="displaySettingsSection">
+              <div class="section-head">
+                <h3 id="displaySettingsTitle">Display &amp; Positioning</h3>
+              </div>
+
+              <p class="field-note" id="displaySettingsHint"></p>
+              <div class="display-detection-summary" id="displayDetectionSummaryGrid"></div>
+
+              <label class="toggle-field">
+                <span>
+                  <strong id="displayOverrideLabel">Enable manual correction</strong>
+                  <small id="displayOverrideHelp">This only changes Aoryn's runtime positioning, not Windows display settings.</small>
+                </span>
+                <span class="switch">
+                  <input id="displayOverrideEnabled" type="checkbox" />
+                  <i></i>
+                </span>
+              </label>
+
+              <div class="field-grid" id="displayOverrideFields" hidden>
+                <label class="field">
+                  <span id="displayMonitorLabel">Target monitor</span>
+                  <select id="displayMonitorSelect"></select>
+                </label>
+
+                <label class="field">
+                  <span id="displayDpiLabel">DPI / Scale</span>
+                  <input id="displayDpiScaleInput" min="0.5" step="0.05" type="number" placeholder="1.25" />
+                </label>
+              </div>
+
+              <div class="field-grid" id="displayWorkAreaFields" hidden>
+                <label class="field">
+                  <span id="displayWorkAreaLeftLabel">Work area left</span>
+                  <input id="displayWorkAreaLeftInput" type="number" placeholder="0" />
+                </label>
+
+                <label class="field">
+                  <span id="displayWorkAreaTopLabel">Work area top</span>
+                  <input id="displayWorkAreaTopInput" type="number" placeholder="0" />
+                </label>
+
+                <label class="field">
+                  <span id="displayWorkAreaWidthLabel">Work area width</span>
+                  <input id="displayWorkAreaWidthInput" min="1" type="number" placeholder="1920" />
+                </label>
+
+                <label class="field">
+                  <span id="displayWorkAreaHeightLabel">Work area height</span>
+                  <input id="displayWorkAreaHeightInput" min="1" type="number" placeholder="1040" />
+                </label>
+              </div>
+
+              <p class="field-note" id="displayOverrideStatusNote"></p>
+
+              <div class="button-row">
+                <button class="secondary-button" id="displayResetButton" type="button">Reset to auto</button>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <div class="section-head">
+                <h3 data-i18n="settings.providerTitle">连接</h3>
+              </div>
+
+              <label class="field">
+                <span data-i18n="settings.providerProfile">提供方</span>
+                <select id="modelProvider" name="model_provider"></select>
+              </label>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span data-i18n="settings.baseUrl">Base URL</span>
+                  <input id="modelBaseUrl" name="model_base_url" type="text" placeholder="http://127.0.0.1:1234/v1" />
+                </label>
+
+                <label class="field">
+                  <span data-i18n="settings.modelName">模型</span>
+                  <input id="modelName" name="model_name" type="text" placeholder="auto" />
+                </label>
+              </div>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span data-i18n="settings.apiKey">API Key</span>
+                  <input id="modelApiKey" name="model_api_key" type="password" placeholder="Optional" />
+                </label>
+
+                <label class="field">
+                  <span data-i18n="settings.structuredOutput">结构化输出</span>
+                  <select id="structuredOutput" name="model_structured_output"></select>
+                </label>
+              </div>
+
+              <label class="toggle-field">
+                <span>
+                  <strong data-i18n="settings.autoDiscover">自动发现</strong>
+                  <small data-i18n="settings.autoDiscoverHint">优先使用 /v1/models 返回的第一个模型。</small>
+                </span>
+                <span class="switch">
+                  <input id="modelAutoDiscover" name="model_auto_discover" type="checkbox" />
+                  <i></i>
+                </span>
+              </label>
+
+              <div class="field field--select">
+                <div class="field-head">
+                  <span data-i18n="settings.discoveredModels">可用模型</span>
+                  <button class="icon-action-button" id="refreshCatalogButton" type="button" aria-label="刷新模型" title="刷新模型">
+                    <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="1.8"
+                      />
+                    </svg>
+                  </button>
+                </div>
+                <select id="availableModels" name="available_models"></select>
+                <p class="field-note" id="providerCatalogNote"></p>
+              </div>
+
+              <div class="button-row">
+                <button class="secondary-button" id="applyModelButton" type="button" data-i18n="settings.useSelected">使用</button>
+                <button class="secondary-button" id="openProviderPortalButton" type="button" data-i18n="settings.portal">控制台</button>
+                <button class="secondary-button" id="openProviderDocsButton" type="button" data-i18n="settings.docs">文档</button>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <div class="section-head">
+                <h3 data-i18n="settings.browserTitle">GUI + DOM</h3>
+              </div>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span data-i18n="settings.domBackend">DOM</span>
+                  <select id="browserDomBackend" name="browser_dom_backend"></select>
+                  <p class="field-note" id="domBackendNote" data-i18n="settings.domBackendHint">当前仅内置 Playwright。</p>
+                </label>
+
+                <label class="field">
+                  <span data-i18n="settings.domTimeout">超时</span>
+                  <input id="browserDomTimeout" name="browser_dom_timeout" min="1" step="0.5" type="number" placeholder="8" />
+                </label>
+              </div>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span data-i18n="settings.browserChannel">通道</span>
+                  <select id="browserChannel" name="browser_channel"></select>
+                </label>
+
+                <label class="field">
+                  <span data-i18n="settings.browserPath">路径</span>
+                  <input id="browserExecutablePath" name="browser_executable_path" type="text" placeholder="Optional browser executable path" />
+                </label>
+              </div>
+
+              <label class="toggle-field">
+                <span>
+                  <strong data-i18n="settings.headless">无头模式</strong>
+                  <small data-i18n="settings.headlessHint">适合不需要可视窗口的检查流程。</small>
+                </span>
+                <span class="switch">
+                  <input id="browserHeadless" name="browser_headless" type="checkbox" />
+                  <i></i>
+                </span>
+              </label>
+            </section>
+
+            <section class="settings-section">
+              <div class="section-head">
+                <h3 id="aboutAndLogsTitle">关于与日志</h3>
+              </div>
+
+              <p class="field-note" id="aboutAndLogsHint"></p>
+
+              <div class="button-row">
+                <button class="secondary-button" id="openAboutButton" type="button">关于 Aoryn</button>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <div class="section-head">
+                <h3 id="helpAndAdvancedTitle">文档与高级</h3>
+              </div>
+
+              <div class="button-row">
+                <button class="secondary-button" id="openHelpCenterButton" type="button">开发者文档</button>
+                <button class="secondary-button" id="openDeveloperConsoleButton" type="button">开发控制台</button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="modal-shell" id="aboutOverlay" hidden>
+      <button class="modal-backdrop" id="aboutBackdrop" type="button" aria-label="Close about"></button>
+
+      <aside class="help-modal about-modal" id="aboutModal" role="dialog" aria-modal="true" aria-labelledby="aboutTitle" tabindex="-1">
+        <div class="drawer-head">
+          <div>
+            <h2 id="aboutTitle">About Aoryn</h2>
+            <p class="drawer-description" id="aboutSubtitle">Version and diagnostics</p>
+          </div>
+
+          <button class="drawer-close" id="closeAboutButton" type="button" aria-label="Close">脳</button>
+        </div>
+
+        <div class="help-modal__content about-modal__content" id="aboutContent">
+          <div class="empty-state">Loading application info...</div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="modal-shell" id="helpOverlay" hidden>
+      <button class="modal-backdrop" id="helpBackdrop" type="button" aria-label="Close help center"></button>
+
+      <aside class="help-modal" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpCenterTitle" tabindex="-1">
+        <div class="drawer-head">
+          <div>
+            <h2 id="helpCenterTitle">开发者文档</h2>
+          </div>
+
+          <button class="drawer-close" id="closeHelpButton" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <div class="help-modal__content" id="helpContent">
+          <div class="empty-state">正在加载帮助内容…</div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="drawer-shell" id="inspectorOverlay" hidden>
+      <button class="drawer-backdrop" id="inspectorBackdrop" type="button" aria-label="Close inspector"></button>
+
+      <aside class="side-drawer inspector-drawer" id="inspectorDrawer" role="dialog" aria-modal="true" aria-labelledby="inspectorTitle">
+        <div class="drawer-head">
+          <div>
+            <p data-i18n="inspector.eyebrow">详情</p>
+            <h2 id="inspectorTitle" data-i18n="inspector.title">运行详情</h2>
+            <p class="drawer-description" id="inspectorSubtitle" data-i18n="inspector.empty">选择一条记录后在这里查看。</p>
+          </div>
+
+          <button class="drawer-close" id="closeDrawerButton" type="button" data-i18n="common.close" aria-label="关闭">×</button>
+        </div>
+
+        <div class="detail-tabs" id="detailTabs">
+          <button class="detail-tab active" data-detail-view="overview" type="button" data-i18n="inspector.overview">概览</button>
+          <button class="detail-tab" data-detail-view="timeline" type="button" data-i18n="inspector.timeline">时间线</button>
+          <button class="detail-tab" data-detail-view="gallery" type="button" data-i18n="inspector.gallery">截图</button>
+        </div>
+
+        <div class="detail-shell" id="runDetail">
+          <div class="empty-state" data-i18n="inspector.empty">选择一条记录后在这里查看。</div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="lightbox" id="imageLightbox" hidden>
+      <button class="lightbox-backdrop" data-lightbox-close="true" type="button"></button>
+
+      <div class="lightbox-shell" role="dialog" aria-modal="true">
+        <div class="lightbox-shell__head">
+          <p id="lightboxCaption">Screenshot</p>
+          <button class="drawer-close" id="lightboxCloseButton" type="button" data-i18n="common.close">×</button>
+        </div>
+
+        <img id="lightboxImage" alt="Expanded screenshot preview" />
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.38/dist/katex.min.js" defer></script>
+    <script src="/assets/vendor/desktop-markdown.js?v=__APP_ASSET_VERSION__" defer></script>
+    <script src="/assets/app.js?v=__APP_ASSET_VERSION__" defer></script>
+  </body>
+</html>

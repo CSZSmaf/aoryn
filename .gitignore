@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Local caches and temp data
+.pytest-local/
+.tmp/
+pytest_temp/
+pytest-cache-files-*/
+test_artifacts/
+
+# Build and packaged outputs
+build/
+dist/
+release/
+runs/
+
+# Website build outputs
+web/node_modules/
+web/dist/
+web/.env.local
+web/.env.*
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+TEST_RESULTS.txt
+machine_path_backup_before_python314.txt

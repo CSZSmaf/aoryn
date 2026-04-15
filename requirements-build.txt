@@ -1,0 +1,2 @@
+# Python build-time dependencies for Aoryn desktop release packaging.
+PyInstaller>=6.11.1

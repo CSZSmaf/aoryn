@@ -1,0 +1,44 @@
+planner_mode: auto
+dry_run: true
+max_steps: 6
+pause_after_action: 0.4
+max_text_length: 200
+max_browser_target_length: 512
+max_wait_seconds: 10
+max_scroll_amount: 1200
+model_base_url: http://127.0.0.1:1234/v1
+model_name: auto
+model_api_key:
+model_request_timeout: 90
+model_auto_discover: true
+model_structured_output: auto
+model_provider: lmstudio_local
+browser_control_mode: hybrid
+browser_dom_backend: playwright
+browser_dom_timeout: 8
+browser_headless: false
+browser_channel: msedge
+browser_executable_path:
+screenshot_format: png
+browser_search_url: https://www.google.com/search?q={query}
+app_launch_map:
+  notepad: notepad.exe
+  calculator: calc.exe
+  explorer: explorer.exe
+  browser: msedge.exe
+allowed_apps:
+  - notepad
+  - calculator
+  - explorer
+  - browser
+allowed_hotkeys:
+  - [win, r]
+  - [ctrl, l]
+  - [ctrl, t]
+  - [ctrl, a]
+  - [ctrl, c]
+  - [ctrl, v]
+  - [alt, tab]
+allowed_browser_schemes:
+  - http
+  - https
