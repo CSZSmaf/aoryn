@@ -52,9 +52,16 @@ www.aoryn.org
 Recommended behavior:
 
 - `aoryn.org` serves the main site
-- `www.aoryn.org` redirects to `aoryn.org`
+- `www.aoryn.org` redirects to `aoryn.org` with a `301` Bulk Redirect
 
 If `aoryn.org` is not already managed by Cloudflare DNS, add the zone first and update the domain registrar nameservers to Cloudflare.
+
+Recommended redirect setup:
+
+- Source URL: `www.aoryn.org`
+- Target URL: `https://aoryn.org`
+- Status code: `301`
+- Enable: preserve query string, subpath matching, preserve path suffix
 
 ## 4. R2 Download Domain
 
@@ -94,3 +101,14 @@ web/dist
 - `https://www.aoryn.org` redirects to `https://aoryn.org`
 - `https://downloads.aoryn.org/Aoryn-Setup-0.1.4.exe` downloads the installer
 - the website download button points to `downloads.aoryn.org`
+
+## 7. References
+
+- Cloudflare Pages Git integration:
+  `https://developers.cloudflare.com/pages/get-started/git-integration/`
+- Cloudflare Pages custom domains:
+  `https://developers.cloudflare.com/pages/configuration/custom-domains/`
+- Cloudflare Pages www redirect:
+  `https://developers.cloudflare.com/pages/how-to/www-redirect/`
+- Cloudflare R2 public buckets and custom domains:
+  `https://developers.cloudflare.com/r2/data-access/public-buckets/`

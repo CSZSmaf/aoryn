@@ -52,9 +52,16 @@ www.aoryn.org
 推荐行为：
 
 - `aoryn.org` 作为正式官网地址
-- `www.aoryn.org` 跳转到 `aoryn.org`
+- `www.aoryn.org` 通过 `301` Bulk Redirect 跳转到 `aoryn.org`
 
 如果 `aoryn.org` 还没有接入 Cloudflare DNS，需要先把域名 zone 加入 Cloudflare，并把注册商 nameserver 改到 Cloudflare。
+
+推荐的跳转规则：
+
+- Source URL: `www.aoryn.org`
+- Target URL: `https://aoryn.org`
+- Status code: `301`
+- 勾选保留 query string、子路径匹配、路径后缀保留
 
 ## 4. R2 下载域名
 
@@ -94,3 +101,14 @@ web/dist
 - `https://www.aoryn.org` 会跳转到 `https://aoryn.org`
 - `https://downloads.aoryn.org/Aoryn-Setup-0.1.4.exe` 可以正常下载安装包
 - 官网下载按钮指向 `downloads.aoryn.org`
+
+## 7. 官方参考文档
+
+- Cloudflare Pages Git 集成：
+  `https://developers.cloudflare.com/pages/get-started/git-integration/`
+- Cloudflare Pages 自定义域名：
+  `https://developers.cloudflare.com/pages/configuration/custom-domains/`
+- Cloudflare Pages `www -> 根域名` 跳转：
+  `https://developers.cloudflare.com/pages/how-to/www-redirect/`
+- Cloudflare R2 公共访问与自定义域名：
+  `https://developers.cloudflare.com/r2/data-access/public-buckets/`
