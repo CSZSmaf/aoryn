@@ -95,7 +95,7 @@ function HeroStage({ copy }) {
       <article className="hero-stage__window">
         <div className="hero-stage__window-bar">
           <div className="hero-stage__window-brand">
-            <img src="/logo-mark.svg" alt="" />
+            <img src="/aoryn-logo-web.png" alt="" />
             <div>
               <strong>{copy.windowLabel}</strong>
               <span>{copy.modeLabel}</span>
@@ -356,7 +356,7 @@ export default function App() {
 
       <header className="topbar">
         <a className="brand" href="#top" aria-label={siteConfig.siteName}>
-          <img src="/logo-mark.svg" alt="" />
+          <img src="/aoryn-logo-web.png" alt="" />
           <strong>{siteConfig.siteName}</strong>
         </a>
 
@@ -521,7 +521,7 @@ export default function App() {
 
       <footer className="site-footer">
         <div className="site-footer__brand">
-          <img src="/logo-mark.svg" alt="" />
+          <img src="/aoryn-logo-web.png" alt="" />
           <div>
             <strong>{siteConfig.siteName}</strong>
             <p>{copy.footer.tagline}</p>
