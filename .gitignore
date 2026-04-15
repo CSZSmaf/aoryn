@@ -20,6 +20,7 @@ web/node_modules/
 web/dist/
 web/.env.local
 web/.env.*
+!web/.env.example
 
 # OS/editor noise
 .DS_Store

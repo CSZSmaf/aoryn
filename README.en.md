@@ -61,6 +61,35 @@ release/Aoryn-0.1.4-win64/
 release/Aoryn-Setup-0.1.4.exe
 ```
 
+### 2.4 Deploy the Official Website
+
+The public website lives in:
+
+```text
+web/
+```
+
+It is a static React + Vite site prepared for Cloudflare Pages with:
+
+```text
+Root directory: web
+Build command: npm run build
+Build output directory: dist
+```
+
+Recommended production URLs:
+
+- `https://aoryn.org` for the main site
+- `https://www.aoryn.org` redirecting to `https://aoryn.org`
+- `https://downloads.aoryn.org/Aoryn-Setup-0.1.4.exe` for the Windows installer
+
+Deployment details are documented in:
+
+```text
+web/DEPLOYMENT.md
+web/DEPLOYMENT.zh-CN.md
+```
+
 Patch `0.1.4` adds visible display-detection diagnostics plus manual runtime overrides for monitor, DPI scale, and work-area correction, while keeping automatic Windows detection as the default.
 
 The installed app stores user data outside the install directory:
