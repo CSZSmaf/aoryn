@@ -59,9 +59,7 @@ function trapFocus(container, event) {
   const focusable = container.querySelectorAll(
     'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
   );
-
   if (!focusable.length) return;
-
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
 
@@ -74,121 +72,118 @@ function trapFocus(container, event) {
   }
 }
 
-function SectionHeader({ eyebrow, title, body, align = "left" }) {
+function SectionIntro({ eyebrow, title, body, align = "left" }) {
   return (
-    <div className={`section-header reveal section-header--${align}`}>
-      <span className="section-header__eyebrow">{eyebrow}</span>
+    <div className={`section-intro reveal section-intro--${align}`}>
+      <span className="section-eyebrow">{eyebrow}</span>
       <h2>{title}</h2>
       {body ? <p>{body}</p> : null}
     </div>
   );
 }
 
-function HeroStage({ copy }) {
+function HeroOrbital({ copy }) {
   return (
-    <div className="hero-stage reveal" aria-label={copy.ariaLabel}>
-      <div className="hero-stage__ambient hero-stage__ambient--one" />
-      <div className="hero-stage__ambient hero-stage__ambient--two" />
-      <div className="hero-stage__orbit hero-stage__orbit--one" />
-      <div className="hero-stage__orbit hero-stage__orbit--two" />
+    <div className="hero-orbital reveal" aria-label={copy.ariaLabel}>
+      <div className="hero-orbital__halo hero-orbital__halo--outer" />
+      <div className="hero-orbital__halo hero-orbital__halo--middle" />
+      <div className="hero-orbital__halo hero-orbital__halo--inner" />
 
-      <article className="hero-stage__window">
-        <div className="hero-stage__window-bar">
-          <div className="hero-stage__window-brand">
-            <img src="/logo-mark.svg" alt="" />
-            <div>
-              <strong>{copy.windowLabel}</strong>
-              <span>{copy.modeLabel}</span>
-            </div>
-          </div>
-
-          <span className="stage-pill">{copy.status}</span>
-        </div>
-
-        <div className="hero-stage__window-body">
-          <aside className="hero-stage__sidebar">
-            <span className="stage-label">{copy.sideTitle}</span>
-            <ul>
-              {copy.sideItems.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </aside>
-
-          <div className="hero-stage__main">
-            <article className="hero-stage__focus">
-              <span className="stage-label">{copy.focusLabel}</span>
-              <h3>{copy.focusTitle}</h3>
-              <p>{copy.focusBody}</p>
-            </article>
-
-            <div className="hero-stage__lane-grid">
-              {copy.lanes.map((item) => (
-                <article className="hero-stage__lane" key={item.title}>
-                  <span>{item.title}</span>
-                  <p>{item.body}</p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </div>
+      <article className="hero-orbital__core">
+        <span className="status-pill status-pill--soft">{copy.status}</span>
+        <strong>{copy.title}</strong>
+        <p>{copy.body}</p>
       </article>
 
-      {copy.floatCards.map((item, index) => (
+      {copy.cards.map((card, index) => (
         <article
-          className={`hero-stage__float hero-stage__float--${index + 1}`}
-          key={item.title}
+          className={`hero-orbital__card hero-orbital__card--${index + 1}`}
+          key={card.title}
         >
-          <span>{item.eyebrow}</span>
-          <strong>{item.title}</strong>
-          <p>{item.body}</p>
+          <span>{card.title}</span>
+          <p>{card.body}</p>
         </article>
       ))}
+
+      <div className="hero-orbital__tags">
+        {copy.tags.map((tag) => (
+          <span className="hero-tag" key={tag}>
+            {tag}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
 
-function ExperienceShowcase({ copy }) {
+function WorkspaceStage({ copy }) {
   return (
-    <div className="showcase reveal" aria-label={copy.ariaLabel}>
-      <div className="showcase__mist" />
+    <div className="workspace-stage reveal" aria-label={copy.ariaLabel}>
+      <div className="workspace-stage__glow" />
 
-      <article className="showcase__frame">
-        <div className="showcase__bar">
-          <strong>{copy.windowLabel}</strong>
-          <span className="stage-pill stage-pill--soft">{copy.status}</span>
+      <article className="workspace-frame">
+        <div className="workspace-frame__topbar">
+          <div className="workspace-brand">
+            <img src="/aoryn-logo-web.png" alt="" />
+            <div>
+              <strong>{copy.windowLabel}</strong>
+              <span>{copy.windowMeta}</span>
+            </div>
+          </div>
+
+          <span className="status-pill">{copy.status}</span>
         </div>
 
-        <div className="showcase__body">
-          <div className="showcase__rail">
-            <span className="stage-label">{copy.railLabel}</span>
+        <div className="workspace-frame__body">
+          <aside className="workspace-rail">
+            <span className="workspace-label">{copy.railLabel}</span>
             <ul>
               {copy.railItems.map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>
-          </div>
+          </aside>
 
-          <div className="showcase__canvas">
-            <article className="showcase__focus">
-              <span className="stage-label">{copy.panelLabel}</span>
-              <h3>{copy.panelTitle}</h3>
-              <p>{copy.panelBody}</p>
-            </article>
+          <div className="workspace-main">
+            <div className="workspace-chip-row">
+              {copy.chips.map((item) => (
+                <span className="workspace-chip" key={item}>
+                  {item}
+                </span>
+              ))}
+            </div>
 
-            <div className="showcase__cards">
-              {copy.cards.map((item) => (
-                <article className="showcase__card" key={item.title}>
-                  <span>{item.title}</span>
+            <div className="workspace-focus">
+              <span className="workspace-label">{copy.focusLabel}</span>
+              <h3>{copy.focusTitle}</h3>
+              <p>{copy.focusBody}</p>
+            </div>
+
+            <div className="workspace-panels">
+              <article className="workspace-panel">
+                <span className="workspace-label">{copy.currentTaskLabel}</span>
+                <strong>{copy.currentTask}</strong>
+              </article>
+
+              <article className="workspace-panel">
+                <span className="workspace-label">{copy.checkpointLabel}</span>
+                <strong>{copy.checkpoint}</strong>
+              </article>
+            </div>
+
+            <div className="workspace-metrics">
+              {copy.metrics.map((item) => (
+                <div className="workspace-metric" key={item.label}>
                   <strong>{item.value}</strong>
-                </article>
+                  <span>{item.label}</span>
+                </div>
               ))}
             </div>
           </div>
         </div>
 
-        <div className="showcase__footer">
-          <span className="stage-label">{copy.footerLabel}</span>
+        <div className="workspace-frame__footer">
+          <span className="workspace-label">{copy.footerLabel}</span>
           <strong>{copy.footerValue}</strong>
         </div>
       </article>
@@ -210,11 +205,6 @@ export default function App() {
 
   const copy = siteCopy[locale] || siteCopy["zh-CN"];
   const currentYear = new Date().getFullYear();
-  const downloadFacts = [
-    { label: copy.download.labels.version, value: siteConfig.release.version },
-    { label: copy.download.labels.platform, value: siteConfig.release.platform },
-    { label: copy.download.labels.size, value: siteConfig.release.fileSize },
-  ];
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -242,7 +232,7 @@ export default function App() {
           observer.unobserve(entry.target);
         });
       },
-      { threshold: 0.18, rootMargin: "0px 0px -8% 0px" }
+      { threshold: 0.16, rootMargin: "0px 0px -10% 0px" }
     );
 
     nodes.forEach((node) => observer.observe(node));
@@ -351,26 +341,30 @@ export default function App() {
 
   return (
     <div className="site-shell">
-      <div className="site-shell__aura site-shell__aura--left" />
-      <div className="site-shell__aura site-shell__aura--right" />
+      <div className="site-backdrop site-backdrop--left" />
+      <div className="site-backdrop site-backdrop--right" />
 
       <header className="topbar">
         <a className="brand" href="#top" aria-label={siteConfig.siteName}>
-          <img src="/logo-mark.svg" alt="" />
-          <strong>{siteConfig.siteName}</strong>
+          <img src="/aoryn-logo-web.png" alt="" />
+          <div>
+            <strong>{siteConfig.siteName}</strong>
+            <span>{siteConfig.domain}</span>
+          </div>
         </a>
 
         <nav className="topnav" aria-label="Primary">
           <a href="#capabilities">{copy.nav.capabilities}</a>
           <a href="#experience">{copy.nav.experience}</a>
           <a href="#download">{copy.nav.download}</a>
+          <a href="#faq">{copy.nav.faq}</a>
         </nav>
 
         <div className="topbar-actions">
           <button className="ghost-button" type="button" onClick={toggleLocale}>
             {copy.langSwitch}
           </button>
-          <button className="topbar-register" type="button" onClick={openRegisterModal}>
+          <button className="secondary-button" type="button" onClick={openRegisterModal}>
             {copy.nav.register}
           </button>
         </div>
@@ -379,11 +373,12 @@ export default function App() {
       <main id="top">
         <section className="hero">
           <div className="hero-copy reveal">
-            <span className="hero-copy__eyebrow">{copy.hero.eyebrow}</span>
+            <span className="announcement-pill">{copy.announcement}</span>
+            <span className="hero-eyebrow">{copy.hero.eyebrow}</span>
             <h1>{copy.hero.title}</h1>
-            <p className="hero-copy__body">{copy.hero.body}</p>
+            <p className="hero-body">{copy.hero.body}</p>
 
-            <div className="hero-copy__actions">
+            <div className="hero-actions">
               <a
                 className="primary-button"
                 href={siteConfig.release.downloadUrl}
@@ -396,13 +391,23 @@ export default function App() {
                 {copy.hero.secondaryCta}
               </button>
             </div>
+
+            <p className="hero-note">{copy.hero.availability}</p>
+
+            <div className="hero-mini-meta">
+              {copy.hero.labels.map((item) => (
+                <span className="hero-mini-pill" key={item}>
+                  {item}
+                </span>
+              ))}
+            </div>
           </div>
 
-          <HeroStage copy={copy.heroStage} />
+          <HeroOrbital copy={copy.heroOrbital} />
         </section>
 
-        <section className="section" id="capabilities">
-          <SectionHeader
+        <section className="content-section" id="capabilities">
+          <SectionIntro
             eyebrow={copy.capabilities.eyebrow}
             title={copy.capabilities.title}
             body={copy.capabilities.body}
@@ -414,9 +419,9 @@ export default function App() {
               <article
                 className="capability-card reveal"
                 key={item.title}
-                style={{ "--delay": `${index * 80}ms` }}
+                style={{ "--delay": `${index * 90}ms` }}
               >
-                <span>{item.note}</span>
+                <span className="capability-note">{item.note}</span>
                 <h3>{item.title}</h3>
                 <p>{item.body}</p>
               </article>
@@ -424,43 +429,72 @@ export default function App() {
           </div>
         </section>
 
-        <section className="section section--experience" id="experience">
+        <section className="content-section content-section--experience" id="experience">
           <div className="experience-layout">
             <div className="experience-copy reveal">
-              <SectionHeader
+              <SectionIntro
                 eyebrow={copy.experience.eyebrow}
                 title={copy.experience.title}
                 body={copy.experience.body}
               />
 
-              <ul className="experience-points">
-                {copy.experience.points.map((item) => (
+              <ul className="experience-list">
+                {copy.experience.bullets.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
+
+              <div className="experience-signals">
+                {copy.experience.signals.map((item) => (
+                  <article className="experience-signal" key={item.label}>
+                    <strong>{item.value}</strong>
+                    <span>{item.label}</span>
+                  </article>
+                ))}
+              </div>
             </div>
 
-            <ExperienceShowcase copy={copy.experience.stage} />
+            <WorkspaceStage copy={copy.experience.preview} />
           </div>
         </section>
 
-        <section className="section section--cta" id="download">
+        <section className="content-section content-section--cta" id="download">
           <div className="cta-layout">
-            <article className="download-card reveal">
-              <span className="section-header__eyebrow">{copy.download.eyebrow}</span>
-              <h2>{copy.download.title}</h2>
-              <p>{copy.download.body}</p>
-
-              <div className="download-card__facts">
-                {downloadFacts.map((item) => (
-                  <div key={item.label}>
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
-                  </div>
-                ))}
+            <article className="download-panel reveal">
+              <div className="download-panel__header">
+                <span className="section-eyebrow">{copy.download.eyebrow}</span>
+                <h2>{copy.download.title}</h2>
+                <p>{copy.download.body}</p>
               </div>
 
-              <div className="hero-copy__actions">
+              <div className="download-meta-grid">
+                <div>
+                  <span>{copy.download.labels.version}</span>
+                  <strong>{siteConfig.release.version}</strong>
+                </div>
+                <div>
+                  <span>{copy.download.labels.platform}</span>
+                  <strong>{siteConfig.release.platform}</strong>
+                </div>
+                <div>
+                  <span>{copy.download.labels.packageType}</span>
+                  <strong>{siteConfig.release.packageType}</strong>
+                </div>
+                <div>
+                  <span>{copy.download.labels.fileSize}</span>
+                  <strong>{siteConfig.release.fileSize}</strong>
+                </div>
+                <div>
+                  <span>{copy.download.labels.hosting}</span>
+                  <strong>{siteConfig.release.hosting}</strong>
+                </div>
+                <div>
+                  <span>{copy.download.labels.release}</span>
+                  <strong>{siteConfig.release.fileName}</strong>
+                </div>
+              </div>
+
+              <div className="hero-actions">
                 <a
                   className="primary-button"
                   href={siteConfig.release.downloadUrl}
@@ -474,61 +508,63 @@ export default function App() {
                 </button>
               </div>
 
-              <p className="download-card__caption">
-                {siteConfig.release.fileName} · {siteConfig.release.hosting}
-              </p>
+              <ul className="download-notes">
+                {copy.download.notes.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
             </article>
 
-            <article className="register-card reveal">
-              <span className="section-header__eyebrow">{copy.register.eyebrow}</span>
+            <article className="register-panel reveal">
+              <span className="section-eyebrow">{copy.register.eyebrow}</span>
               <h2>{copy.register.title}</h2>
               <p>{copy.register.body}</p>
 
-              <div className="register-card__items">
-                {copy.register.items.map((item) => (
-                  <div className="register-card__item" key={item}>
+              <div className="register-benefits">
+                {copy.register.benefits.map((item) => (
+                  <div className="register-benefit" key={item}>
                     {item}
                   </div>
                 ))}
               </div>
 
-              <button className="secondary-button secondary-button--wide" type="button" onClick={openRegisterModal}>
+              <button className="primary-button" type="button" onClick={openRegisterModal}>
                 {copy.register.cta}
               </button>
             </article>
           </div>
         </section>
 
-        <section className="section section--faq" id="faq">
-          <div className="faq-shell reveal">
-            <SectionHeader
-              eyebrow={copy.faq.eyebrow}
-              title={copy.faq.title}
-              body={copy.faq.body}
-            />
+        <section className="content-section content-section--faq" id="faq">
+          <SectionIntro
+            eyebrow={copy.faq.eyebrow}
+            title={copy.faq.title}
+            body={copy.faq.body}
+            align="center"
+          />
 
-            <div className="faq-list">
-              {copy.faq.items.map((item) => (
-                <details className="faq-item" key={item.question}>
-                  <summary>{item.question}</summary>
-                  <p>{item.answer}</p>
-                </details>
-              ))}
-            </div>
+          <div className="faq-list">
+            {copy.faq.items.map((item, index) => (
+              <details
+                className="faq-item reveal"
+                key={item.question}
+                style={{ "--delay": `${index * 70}ms` }}
+              >
+                <summary>{item.question}</summary>
+                <p>{item.answer}</p>
+              </details>
+            ))}
           </div>
         </section>
       </main>
 
       <footer className="site-footer">
-        <div className="site-footer__brand">
-          <img src="/logo-mark.svg" alt="" />
-          <div>
-            <strong>{siteConfig.siteName}</strong>
-            <p>{copy.footer.tagline}</p>
-          </div>
+        <div>
+          <strong>{siteConfig.siteName}</strong>
+          <p>{copy.footer.tagline}</p>
         </div>
-        <p className="site-footer__meta">
-          Copyright {currentYear} {copy.footer.copyright}
+        <p>
+          © {currentYear} {copy.footer.copyright}
         </p>
       </footer>
 
@@ -546,7 +582,7 @@ export default function App() {
           >
             <div className="modal-card__head">
               <div>
-                <span className="section-header__eyebrow">{copy.register.eyebrow}</span>
+                <span className="section-eyebrow">{copy.register.eyebrow}</span>
                 <h2 id="register-modal-title">{copy.register.modalTitle}</h2>
               </div>
               <button
@@ -555,7 +591,7 @@ export default function App() {
                 onClick={closeRegisterModal}
                 aria-label={copy.register.form.close}
               >
-                x
+                ×
               </button>
             </div>
 
