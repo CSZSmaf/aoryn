@@ -331,35 +331,45 @@ function DownloadPage({ copy, authState, authReady, openAuthModal }) {
 
   return (
     <>
-      <section className="detail-hero reveal">
-        <div className="detail-hero__copy">
-          <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
-          <h1>{pageCopy.hero.title}</h1>
-          <p>{pageCopy.hero.body}</p>
-        </div>
+      {canDownload ? (
+        <section className="section-shell section-shell--download-top">
+          <article className="download-gate reveal is-unlocked">
+            <div className="download-gate__content">
+              <span className="section-heading__eyebrow">{pageCopy.unlocked.eyebrow}</span>
+              <h2>{pageCopy.unlocked.title}</h2>
+              <p>{pageCopy.unlocked.body}</p>
+            </div>
 
-        <article className={`download-gate ${canDownload ? "is-unlocked" : "is-locked"}`}>
-          <div className="download-gate__content">
-            <span className="section-heading__eyebrow">
-              {canDownload ? pageCopy.unlocked.eyebrow : pageCopy.locked.eyebrow}
-            </span>
-            <h2>{canDownload ? pageCopy.unlocked.title : pageCopy.locked.title}</h2>
-            <p>{canDownload ? pageCopy.unlocked.body : pageCopy.locked.body}</p>
-          </div>
-
-          <div className="button-row">
-            {canDownload ? (
+            <div className="button-row">
               <a className="primary-button" href={siteConfig.release.protectedDownloadPath}>
                 {pageCopy.unlocked.primaryCta}
               </a>
-            ) : (
+            </div>
+          </article>
+        </section>
+      ) : (
+        <section className="detail-hero reveal">
+          <div className="detail-hero__copy">
+            <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
+            <h1>{pageCopy.hero.title}</h1>
+            <p>{pageCopy.hero.body}</p>
+          </div>
+
+          <article className="download-gate is-locked">
+            <div className="download-gate__content">
+              <span className="section-heading__eyebrow">{pageCopy.locked.eyebrow}</span>
+              <h2>{pageCopy.locked.title}</h2>
+              <p>{pageCopy.locked.body}</p>
+            </div>
+
+            <div className="button-row">
               <button className="primary-button" type="button" onClick={() => openAuthModal("login")}>
                 {pageCopy.locked.primaryCta}
               </button>
-            )}
-          </div>
-        </article>
-      </section>
+            </div>
+          </article>
+        </section>
+      )}
 
       <section className="section-shell section-shell--compact">
         <div className="download-meta-grid">

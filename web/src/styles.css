@@ -618,6 +618,10 @@ img {
   padding-top: 2rem;
 }
 
+.section-shell--download-top {
+  padding-top: 1.6rem;
+}
+
 .section-heading {
   max-width: 44rem;
   margin-bottom: 2rem;
