@@ -1373,6 +1373,7 @@ def test_dashboard_chat_route_returns_structured_math_recovery_payload(monkeypat
     monkeypatch.setattr(DashboardApp, "chat_reply", _raise_error)
 
     app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    app.auth_session_snapshot = lambda: {"authenticated": True, "profile": {"email": "user@example.com"}}
     server = app.create_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1417,6 +1418,7 @@ def test_dashboard_chat_stream_route_returns_structured_math_recovery_event(monk
     monkeypatch.setattr(DashboardApp, "chat_reply_stream", _stream_reply)
 
     app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    app.auth_session_snapshot = lambda: {"authenticated": True, "profile": {"email": "user@example.com"}}
     server = app.create_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1475,6 +1477,7 @@ def test_dashboard_chat_route_returns_reply(monkeypatch):
     )
 
     app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    app.auth_session_snapshot = lambda: {"authenticated": True, "profile": {"email": "user@example.com"}}
     server = app.create_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1511,6 +1514,7 @@ def test_dashboard_chat_route_passes_locale_session_meta(monkeypatch):
     monkeypatch.setattr(DashboardApp, "chat_reply", _chat_reply)
 
     app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    app.auth_session_snapshot = lambda: {"authenticated": True, "profile": {"email": "user@example.com"}}
     server = app.create_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1775,6 +1779,7 @@ def test_dashboard_chat_route_returns_bad_request_for_provider_error(monkeypatch
     monkeypatch.setattr(DashboardApp, "chat_reply", _raise_error)
 
     app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    app.auth_session_snapshot = lambda: {"authenticated": True, "profile": {"email": "user@example.com"}}
     server = app.create_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1833,6 +1838,7 @@ def test_dashboard_chat_route_surfaces_provider_http_400_details(monkeypatch):
     monkeypatch.setattr(DashboardApp, "_resolve_chat_model", lambda self, **kwargs: "test-model")
 
     app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    app.auth_session_snapshot = lambda: {"authenticated": True, "profile": {"email": "user@example.com"}}
     server = app.create_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1872,6 +1878,7 @@ def test_dashboard_chat_stream_route_returns_sse_events(monkeypatch):
     monkeypatch.setattr(DashboardApp, "chat_reply_stream", _stream_reply)
 
     app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    app.auth_session_snapshot = lambda: {"authenticated": True, "profile": {"email": "user@example.com"}}
     server = app.create_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1939,6 +1946,7 @@ def test_dashboard_chat_stream_route_surfaces_provider_http_400_details(monkeypa
     monkeypatch.setattr(DashboardApp, "_resolve_chat_model", lambda self, **kwargs: "test-model")
 
     app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    app.auth_session_snapshot = lambda: {"authenticated": True, "profile": {"email": "user@example.com"}}
     server = app.create_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1971,6 +1979,7 @@ def test_dashboard_chat_stream_route_can_return_error_event(monkeypatch):
     monkeypatch.setattr(DashboardApp, "chat_reply_stream", _stream_reply)
 
     app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    app.auth_session_snapshot = lambda: {"authenticated": True, "profile": {"email": "user@example.com"}}
     server = app.create_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

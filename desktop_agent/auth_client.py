@@ -27,6 +27,7 @@ class AuthAPIClient:
     def __init__(self, base_url: str, *, timeout: float = 15.0) -> None:
         self.base_url = normalize_auth_api_base_url(base_url)
         self.timeout = float(timeout)
+        self.default_headers = {"X-Aoryn-Client": "desktop"}
 
     def register(self, *, email: str, password: str, display_name: str) -> dict[str, Any]:
         return self._post(
@@ -93,7 +94,7 @@ class AuthAPIClient:
                 method,
                 f"{self.base_url}{path}",
                 json=payload,
-                headers=headers,
+                headers={**self.default_headers, **(headers or {})},
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:

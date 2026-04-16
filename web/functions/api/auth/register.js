@@ -48,18 +48,16 @@ export async function onRequestPost(context) {
     );
   }
 
-  const requiresEmailVerification = !data?.session;
   return jsonResponse(
     {
       ok: true,
-      requiresEmailVerification,
-      message: requiresEmailVerification
-        ? "Please check your email to verify the account."
-        : "Account created successfully.",
+      requiresEmailVerification: true,
+      message: "Please check your email to verify the account before signing in.",
       user: data?.user
         ? {
             id: data.user.id,
             email: data.user.email,
+            email_verified: false,
           }
         : null,
     },

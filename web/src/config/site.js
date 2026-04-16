@@ -10,11 +10,16 @@ export const siteConfig = {
     platform: "Windows 10 / 11",
     packageType: "EXE",
     hosting: "Cloudflare R2 via downloads.aoryn.org",
+    protectedDownloadPath: "/api/downloads/windows-installer",
     downloadUrl:
       import.meta.env.VITE_DOWNLOAD_URL ||
       "https://downloads.aoryn.org/Aoryn-Setup-0.1.4.exe",
   },
-  registration: {
-    endpoint: import.meta.env.VITE_REGISTER_ENDPOINT || "/api/auth/register",
+  auth: {
+    registerEndpoint: "/api/auth/register",
+    loginEndpoint: "/api/auth/login",
+    logoutEndpoint: "/api/auth/logout",
+    meEndpoint: "/api/auth/me",
+    refreshEndpoint: "/api/auth/refresh",
   },
 };

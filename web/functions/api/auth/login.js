@@ -1,6 +1,9 @@
 import {
+  authCookieHeaders,
+  createResolvedSession,
   extractSupabaseMessage,
-  fetchProfile,
+  isDesktopClient,
+  isUserEmailVerified,
   isValidEmail,
   jsonResponse,
   readJsonBody,
@@ -40,28 +43,41 @@ export async function onRequestPost(context) {
     );
   }
 
-  const accessToken = data?.access_token;
-  const user = data?.user || null;
-  const profile = accessToken && user?.id ? await fetchProfile(context, accessToken, user.id) : null;
+  const resolved = await createResolvedSession(context, data || {});
+  if (!isUserEmailVerified(data?.user)) {
+    return jsonResponse(
+      {
+        message: "Please verify your email before signing in.",
+        requiresEmailVerification: true,
+      },
+      403,
+    );
+  }
+
+  if (isDesktopClient(context.request)) {
+    return jsonResponse(
+      {
+        ok: true,
+        message: "Signed in successfully.",
+        session: resolved.session,
+        user: resolved.user,
+        profile: resolved.profile,
+      },
+      200,
+    );
+  }
 
   return jsonResponse(
     {
       ok: true,
+      authenticated: true,
       message: "Signed in successfully.",
-      session: {
-        access_token: data?.access_token ?? null,
-        refresh_token: data?.refresh_token ?? null,
-        expires_at: data?.expires_at ?? null,
-        token_type: data?.token_type ?? null,
-      },
-      user: user
-        ? {
-            id: user.id,
-            email: user.email,
-          }
-        : null,
-      profile,
+      user: resolved.user,
+      profile: resolved.profile,
     },
     200,
+    {
+      "set-cookie": authCookieHeaders(context, resolved.session),
+    },
   );
 }

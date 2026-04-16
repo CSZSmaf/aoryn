@@ -813,6 +813,9 @@ class DashboardApp:
                     return self._send_error(HTTPStatus.BAD_REQUEST, "Expected JSON body.")
 
                 if path == "/api/tasks":
+                    snapshot = app.auth_session_snapshot()
+                    if not snapshot.get("authenticated"):
+                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     try:
                         job = app.queue.submit(
                             task=str(body.get("task", "")),
@@ -845,6 +848,9 @@ class DashboardApp:
                     return self._send_json(payload, status=HTTPStatus.ACCEPTED)
 
                 if path == "/api/tasks/stop":
+                    snapshot = app.auth_session_snapshot()
+                    if not snapshot.get("authenticated"):
+                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     try:
                         job = app.queue.cancel_active()
                     except RuntimeError as exc:
@@ -852,6 +858,9 @@ class DashboardApp:
                     return self._send_json(job, status=HTTPStatus.ACCEPTED)
 
                 if path == "/api/chat":
+                    snapshot = app.auth_session_snapshot()
+                    if not snapshot.get("authenticated"):
+                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     try:
                         payload = app.chat_reply(
                             messages=body.get("messages"),
@@ -866,6 +875,9 @@ class DashboardApp:
                     return self._send_json(payload)
 
                 if path == "/api/chat/stream":
+                    snapshot = app.auth_session_snapshot()
+                    if not snapshot.get("authenticated"):
+                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     return self._send_event_stream(
                         app.chat_reply_stream(
                             messages=body.get("messages"),
@@ -876,6 +888,9 @@ class DashboardApp:
                     )
 
                 if path == "/api/provider/models":
+                    snapshot = app.auth_session_snapshot()
+                    if not snapshot.get("authenticated"):
+                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     try:
                         snapshot = app.provider_models(_clean_config_overrides(body.get("config_overrides")))
                     except ProviderToolError as exc:
@@ -883,6 +898,9 @@ class DashboardApp:
                     return self._send_json(snapshot)
 
                 if path == "/api/provider/load-model":
+                    snapshot = app.auth_session_snapshot()
+                    if not snapshot.get("authenticated"):
+                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     try:
                         payload = app.provider_load_model(
                             config_overrides=_clean_config_overrides(body.get("config_overrides")),
@@ -1320,7 +1338,8 @@ class DashboardApp:
                     )
                     snapshot = self.auth_session_store.snapshot()
             except AuthAPIError:
-                pass
+                self.auth_session_store.clear()
+                return self.auth_session_store.snapshot()
         return snapshot
 
     def auth_register(
@@ -1399,7 +1418,17 @@ class DashboardApp:
             }
 
         client = self._auth_client(payload.get("api_base_url"))
-        identity = client.me(access_token=str(payload["access_token"]))
+        try:
+            identity = client.me(access_token=str(payload["access_token"]))
+        except AuthAPIError:
+            self.auth_session_store.clear()
+            return {
+                "ok": True,
+                "authenticated": False,
+                "user": None,
+                "profile": None,
+                "session": self.auth_session_snapshot(),
+            }
         user = identity.get("user") if isinstance(identity, dict) else None
         profile = identity.get("profile") if isinstance(identity, dict) else None
         self.auth_session_store.save_payload(

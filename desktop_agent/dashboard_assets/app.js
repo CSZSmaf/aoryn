@@ -251,6 +251,7 @@ const state = {
   helpLoading: false,
   helpError: "",
   authSession: null,
+  authGateMode: "login",
   authBusy: false,
   authFeedbackTone: "",
   authFeedbackMessage: "",
@@ -263,6 +264,7 @@ const state = {
 };
 
 const elements = {
+  appShell: document.getElementById("appShell"),
   mobileMenuButton: document.getElementById("mobileSidebarButton"),
   sidebarBrandButton: document.getElementById("sidebarBrandButton"),
   sidebarBackdrop: document.getElementById("sidebarBackdrop"),
@@ -322,6 +324,27 @@ const elements = {
   authEmailLabel: document.getElementById("authEmailLabel"),
   authDisplayNameLabel: document.getElementById("authDisplayNameLabel"),
   authPasswordLabel: document.getElementById("authPasswordLabel"),
+  authGateOverlay: document.getElementById("authGateOverlay"),
+  authGateCard: document.getElementById("authGateCard"),
+  authGateBrandHint: document.getElementById("authGateBrandHint"),
+  authGateEyebrow: document.getElementById("authGateEyebrow"),
+  authGateTitle: document.getElementById("authGateTitle"),
+  authGateBody: document.getElementById("authGateBody"),
+  authGateTabs: document.getElementById("authGateTabs"),
+  authGateLoginTab: document.getElementById("authGateLoginTab"),
+  authGateRegisterTab: document.getElementById("authGateRegisterTab"),
+  authGateApiBaseUrlLabel: document.getElementById("authGateApiBaseUrlLabel"),
+  authGateApiBaseUrlInput: document.getElementById("authGateApiBaseUrlInput"),
+  authGateEmailLabel: document.getElementById("authGateEmailLabel"),
+  authGateEmailInput: document.getElementById("authGateEmailInput"),
+  authGateDisplayNameField: document.getElementById("authGateDisplayNameField"),
+  authGateDisplayNameLabel: document.getElementById("authGateDisplayNameLabel"),
+  authGateDisplayNameInput: document.getElementById("authGateDisplayNameInput"),
+  authGatePasswordLabel: document.getElementById("authGatePasswordLabel"),
+  authGatePasswordInput: document.getElementById("authGatePasswordInput"),
+  authGateFeedbackNote: document.getElementById("authGateFeedbackNote"),
+  authGateModeSwitchButton: document.getElementById("authGateModeSwitchButton"),
+  authGateSubmitButton: document.getElementById("authGateSubmitButton"),
   displaySettingsTitle: document.getElementById("displaySettingsTitle"),
   displaySettingsHint: document.getElementById("displaySettingsHint"),
   displayDetectionSummaryGrid: document.getElementById("displayDetectionSummaryGrid"),
@@ -395,6 +418,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyShellState();
   applyStaticCopy();
   bindEvents();
+  await loadAuthSession({ silent: true });
   await refreshOverview({ initial: true });
   state.pollingHandle = window.setInterval(() => {
     refreshOverview({ background: true });
@@ -445,13 +469,32 @@ function bindEvents() {
   elements.authRegisterButton?.addEventListener("click", handleAuthRegister);
   elements.authLoginButton?.addEventListener("click", handleAuthLogin);
   elements.authLogoutButton?.addEventListener("click", handleAuthLogout);
+  elements.authGateTabs?.addEventListener("click", handleAuthGateModeClick);
+  elements.authGateModeSwitchButton?.addEventListener("click", handleAuthGateModeSwitch);
+  elements.authGateSubmitButton?.addEventListener("click", handleAuthGateSubmit);
+  elements.authApiBaseUrlInput?.addEventListener("input", () => syncAuthForms("settings"));
+  elements.authEmailInput?.addEventListener("input", () => syncAuthForms("settings"));
+  elements.authDisplayNameInput?.addEventListener("input", () => syncAuthForms("settings"));
+  elements.authPasswordInput?.addEventListener("input", () => syncAuthForms("settings"));
   elements.authApiBaseUrlInput?.addEventListener("blur", persistAuthPreferences);
   elements.authEmailInput?.addEventListener("blur", persistAuthPreferences);
   elements.authDisplayNameInput?.addEventListener("blur", persistAuthPreferences);
+  elements.authGateApiBaseUrlInput?.addEventListener("input", () => syncAuthForms("gate"));
+  elements.authGateEmailInput?.addEventListener("input", () => syncAuthForms("gate"));
+  elements.authGateDisplayNameInput?.addEventListener("input", () => syncAuthForms("gate"));
+  elements.authGatePasswordInput?.addEventListener("input", () => syncAuthForms("gate"));
+  elements.authGateApiBaseUrlInput?.addEventListener("blur", persistAuthPreferences);
+  elements.authGateEmailInput?.addEventListener("blur", persistAuthPreferences);
+  elements.authGateDisplayNameInput?.addEventListener("blur", persistAuthPreferences);
   elements.authPasswordInput?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
     handleAuthLogin();
+  });
+  elements.authGatePasswordInput?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    handleAuthGateSubmit();
   });
   elements.displayOverrideEnabled?.addEventListener("change", handleDisplayOverrideToggle);
   elements.displayResetButton?.addEventListener("click", resetDisplayOverrides);
@@ -574,11 +617,20 @@ function hydrateDefaults() {
     if (elements.authApiBaseUrlInput) {
       elements.authApiBaseUrlInput.value = uiPreferences.auth_api_base_url || "";
     }
+    if (elements.authGateApiBaseUrlInput) {
+      elements.authGateApiBaseUrlInput.value = uiPreferences.auth_api_base_url || "";
+    }
     if (elements.authEmailInput) {
       elements.authEmailInput.value = uiPreferences.auth_email || "";
     }
+    if (elements.authGateEmailInput) {
+      elements.authGateEmailInput.value = uiPreferences.auth_email || "";
+    }
     if (elements.authDisplayNameInput) {
       elements.authDisplayNameInput.value = uiPreferences.auth_display_name || "";
+    }
+    if (elements.authGateDisplayNameInput) {
+      elements.authGateDisplayNameInput.value = uiPreferences.auth_display_name || "";
     }
     elements.modelBaseUrl.value = defaults.model_base_url ?? "";
     elements.modelName.value = defaults.model_name ?? "";
@@ -679,6 +731,7 @@ function renderAll() {
   applyShellState();
   applyStaticCopy();
   applySupplementalStaticCopy();
+  renderAuthGate();
   renderTopbar();
   renderSettingsProfile();
   renderDisplayDetection();
@@ -694,14 +747,22 @@ function renderAll() {
 }
 
 function applyShellState() {
+  const authLocked = isAuthLocked();
   document.body.dataset.uiMode = state.uiMode;
   document.body.dataset.sidebarCollapsed = String(state.sidebarCollapsed);
   document.body.dataset.sidebarOpen = String(state.mobileSidebarOpen);
+  document.body.dataset.authLocked = String(authLocked);
+  if (elements.appShell) {
+    elements.appShell.inert = authLocked;
+  }
   elements.settingsOverlay.hidden = !state.settingsOpen;
   elements.aboutOverlay.hidden = !state.aboutOpen;
   elements.helpOverlay.hidden = !state.helpOpen;
   elements.inspectorOverlay.hidden = !state.drawerOpen;
   elements.sidebarBackdrop.hidden = !state.mobileSidebarOpen;
+  if (elements.authGateOverlay) {
+    elements.authGateOverlay.hidden = !authLocked;
+  }
 }
 
 function applyStaticCopy() {
@@ -3705,12 +3766,97 @@ function setAuthFeedback(tone, message) {
   state.authFeedbackMessage = String(message || "").trim();
 }
 
+function isAuthenticatedSession() {
+  return Boolean(state.authSession?.authenticated);
+}
+
+function isAuthLocked() {
+  return !isAuthenticatedSession();
+}
+
+function setInputValue(element, value) {
+  if (!element) return;
+  element.value = String(value || "");
+}
+
+function syncAuthForms(source = "settings") {
+  const fromGate = source === "gate";
+  const sourceFields = fromGate
+    ? {
+        apiBaseUrl: elements.authGateApiBaseUrlInput,
+        email: elements.authGateEmailInput,
+        displayName: elements.authGateDisplayNameInput,
+        password: elements.authGatePasswordInput,
+      }
+    : {
+        apiBaseUrl: elements.authApiBaseUrlInput,
+        email: elements.authEmailInput,
+        displayName: elements.authDisplayNameInput,
+        password: elements.authPasswordInput,
+      };
+  const targetFields = fromGate
+    ? {
+        apiBaseUrl: elements.authApiBaseUrlInput,
+        email: elements.authEmailInput,
+        displayName: elements.authDisplayNameInput,
+        password: elements.authPasswordInput,
+      }
+    : {
+        apiBaseUrl: elements.authGateApiBaseUrlInput,
+        email: elements.authGateEmailInput,
+        displayName: elements.authGateDisplayNameInput,
+        password: elements.authGatePasswordInput,
+      };
+
+  setInputValue(targetFields.apiBaseUrl, sourceFields.apiBaseUrl?.value);
+  setInputValue(targetFields.email, sourceFields.email?.value);
+  setInputValue(targetFields.displayName, sourceFields.displayName?.value);
+  setInputValue(targetFields.password, sourceFields.password?.value);
+}
+
+function clearAuthPasswords() {
+  setInputValue(elements.authPasswordInput, "");
+  setInputValue(elements.authGatePasswordInput, "");
+}
+
+function setAuthGateMode(mode = "login") {
+  state.authGateMode = mode === "register" ? "register" : "login";
+}
+
+function handleAuthGateModeClick(event) {
+  const button = event.target.closest("[data-auth-gate-mode]");
+  if (!button || state.authBusy) return;
+  setAuthGateMode(button.dataset.authGateMode || "login");
+  syncAuthForms("gate");
+  renderAll();
+}
+
+function handleAuthGateModeSwitch() {
+  if (state.authBusy) return;
+  setAuthGateMode(state.authGateMode === "register" ? "login" : "register");
+  syncAuthForms("gate");
+  renderAll();
+}
+
+async function handleAuthGateSubmit() {
+  if (state.authGateMode === "register") {
+    await handleAuthRegister();
+    return;
+  }
+  await handleAuthLogin();
+}
+
 function readAuthFormValues() {
+  const useGate = isAuthLocked() && !elements.authGateOverlay?.hidden;
+  const apiBaseUrl = useGate ? elements.authGateApiBaseUrlInput?.value : elements.authApiBaseUrlInput?.value;
+  const email = useGate ? elements.authGateEmailInput?.value : elements.authEmailInput?.value;
+  const displayName = useGate ? elements.authGateDisplayNameInput?.value : elements.authDisplayNameInput?.value;
+  const password = useGate ? elements.authGatePasswordInput?.value : elements.authPasswordInput?.value;
   return {
-    apiBaseUrl: (elements.authApiBaseUrlInput?.value || "").trim(),
-    email: (elements.authEmailInput?.value || "").trim(),
-    displayName: (elements.authDisplayNameInput?.value || "").trim(),
-    password: elements.authPasswordInput?.value || "",
+    apiBaseUrl: String(apiBaseUrl || "").trim(),
+    email: String(email || "").trim(),
+    displayName: String(displayName || "").trim(),
+    password: String(password || ""),
   };
 }
 
@@ -3734,6 +3880,95 @@ async function loadAuthSession({ silent = false } = {}) {
     renderAll();
   }
   return state.authSession;
+}
+
+function renderAuthGate() {
+  const locked = isAuthLocked();
+  if (elements.authGateOverlay) {
+    elements.authGateOverlay.hidden = !locked;
+  }
+  if (!locked) return;
+
+  const isRegister = state.authGateMode === "register";
+  const busy = state.authBusy;
+
+  if (elements.authGateBrandHint) {
+    elements.authGateBrandHint.textContent = "Sign in to unlock the workspace.";
+  }
+  if (elements.authGateEyebrow) {
+    elements.authGateEyebrow.textContent = "Account";
+  }
+  if (elements.authGateTitle) {
+    elements.authGateTitle.textContent = isRegister ? "Create your Aoryn account" : "Sign in to unlock Aoryn";
+  }
+  if (elements.authGateBody) {
+    elements.authGateBody.textContent =
+      "Only identity and the basic profile are stored in the cloud. Runs, history, screenshots, and settings stay on this device.";
+  }
+  if (elements.authGateLoginTab) {
+    elements.authGateLoginTab.textContent = "Login";
+    elements.authGateLoginTab.classList.toggle("is-active", !isRegister);
+    elements.authGateLoginTab.disabled = busy;
+  }
+  if (elements.authGateRegisterTab) {
+    elements.authGateRegisterTab.textContent = "Register";
+    elements.authGateRegisterTab.classList.toggle("is-active", isRegister);
+    elements.authGateRegisterTab.disabled = busy;
+  }
+  if (elements.authGateApiBaseUrlLabel) {
+    elements.authGateApiBaseUrlLabel.textContent = "Auth API";
+  }
+  if (elements.authGateEmailLabel) {
+    elements.authGateEmailLabel.textContent = "Email";
+  }
+  if (elements.authGateDisplayNameLabel) {
+    elements.authGateDisplayNameLabel.textContent = "Display name";
+  }
+  if (elements.authGatePasswordLabel) {
+    elements.authGatePasswordLabel.textContent = "Password";
+  }
+  if (elements.authGateApiBaseUrlInput) {
+    elements.authGateApiBaseUrlInput.placeholder = "https://aoryn.org/api/auth";
+    elements.authGateApiBaseUrlInput.disabled = busy;
+  }
+  if (elements.authGateEmailInput) {
+    elements.authGateEmailInput.placeholder = "you@example.com";
+    elements.authGateEmailInput.disabled = busy;
+  }
+  if (elements.authGateDisplayNameInput) {
+    elements.authGateDisplayNameInput.placeholder = "Aoryn user";
+    elements.authGateDisplayNameInput.disabled = busy;
+  }
+  if (elements.authGatePasswordInput) {
+    elements.authGatePasswordInput.placeholder = "At least 8 characters";
+    elements.authGatePasswordInput.disabled = busy;
+  }
+  if (elements.authGateDisplayNameField) {
+    elements.authGateDisplayNameField.hidden = !isRegister;
+  }
+  if (elements.authGateFeedbackNote) {
+    elements.authGateFeedbackNote.textContent = state.authFeedbackMessage;
+    if (state.authFeedbackTone) {
+      elements.authGateFeedbackNote.dataset.tone = state.authFeedbackTone;
+    } else {
+      delete elements.authGateFeedbackNote.dataset.tone;
+    }
+  }
+  if (elements.authGateModeSwitchButton) {
+    elements.authGateModeSwitchButton.textContent = isRegister
+      ? "Already have an account? Login"
+      : "Need an account? Register";
+    elements.authGateModeSwitchButton.disabled = busy;
+  }
+  if (elements.authGateSubmitButton) {
+    elements.authGateSubmitButton.textContent = busy ? "Working..." : isRegister ? "Create account" : "Login";
+    elements.authGateSubmitButton.disabled = busy;
+  }
+  if (elements.authGateCard && document.activeElement === document.body) {
+    window.requestAnimationFrame(() => {
+      (isRegister ? elements.authGateDisplayNameInput : elements.authGateEmailInput)?.focus?.();
+    });
+  }
 }
 
 function renderAccountSettings() {
@@ -3845,9 +4080,8 @@ async function handleAuthRegister() {
       throw new Error(response.payload?.error || response.payload?.message || tr("注册失败。", "Registration failed."));
     }
     await persistAuthPreferences();
-    if (elements.authPasswordInput) {
-      elements.authPasswordInput.value = "";
-    }
+    clearAuthPasswords();
+    setAuthGateMode("login");
     setAuthFeedback(
       "ok",
       response.payload?.message || tr("请检查邮箱并完成验证。", "Please check your email and complete the verification.")
@@ -3887,12 +4121,13 @@ async function handleAuthLogin() {
       throw new Error(response.payload?.error || response.payload?.message || tr("登录失败。", "Login failed."));
     }
     state.authSession = response.payload?.session || state.authSession;
-    if (elements.authPasswordInput) {
-      elements.authPasswordInput.value = "";
-    }
+    clearAuthPasswords();
     const profile = state.authSession?.profile || {};
     if (elements.authDisplayNameInput && !elements.authDisplayNameInput.value.trim()) {
       elements.authDisplayNameInput.value = String(profile.display_name || displayName || "").trim();
+    }
+    if (elements.authGateDisplayNameInput && !elements.authGateDisplayNameInput.value.trim()) {
+      elements.authGateDisplayNameInput.value = String(profile.display_name || displayName || "").trim();
     }
     await persistAuthPreferences();
     setAuthFeedback("ok", response.payload?.message || tr("登录成功。", "Signed in successfully."));
@@ -3915,9 +4150,12 @@ async function handleAuthLogout() {
       throw new Error(response.payload?.error || response.payload?.message || tr("退出失败。", "Sign out failed."));
     }
     state.authSession = response.payload?.session || null;
-    if (elements.authPasswordInput) {
-      elements.authPasswordInput.value = "";
-    }
+    state.settingsOpen = false;
+    state.helpOpen = false;
+    state.aboutOpen = false;
+    state.drawerOpen = false;
+    setAuthGateMode("login");
+    clearAuthPasswords();
     setAuthFeedback("ok", response.payload?.message || tr("已退出登录。", "Signed out successfully."));
   } catch (error) {
     setAuthFeedback("bad", error instanceof Error ? error.message : tr("退出失败。", "Sign out failed."));

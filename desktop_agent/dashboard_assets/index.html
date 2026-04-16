@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.38/dist/katex.min.css" />
   </head>
   <body data-ui-mode="agent" data-sidebar-collapsed="false" data-sidebar-open="false">
-    <div class="app-shell">
+    <div class="app-shell" id="appShell">
       <aside class="history-sidebar" id="historySidebar" aria-label="History">
         <div class="sidebar-head">
           <button class="sidebar-brand sidebar-brand-toggle" id="sidebarBrandButton" type="button" aria-label="Toggle sidebar" title="Toggle sidebar">
@@ -245,6 +245,64 @@
             </div>
           </section>
         </main>
+      </section>
+    </div>
+
+    <div class="auth-gate-shell" id="authGateOverlay" hidden>
+      <div class="auth-gate-backdrop" aria-hidden="true"></div>
+
+      <section class="auth-gate-card" id="authGateCard" role="dialog" aria-modal="true" aria-labelledby="authGateTitle" tabindex="-1">
+        <div class="auth-gate-brand">
+          <div class="brand-mark" aria-hidden="true">
+            <img class="brand-mark__image" src="/assets/icons/logo-mark.png?v=__APP_ASSET_VERSION__" alt="" />
+          </div>
+          <div>
+            <strong>Aoryn</strong>
+            <span id="authGateBrandHint">Sign in to unlock the workspace.</span>
+          </div>
+        </div>
+
+        <div class="auth-gate-copy">
+          <p class="auth-gate-eyebrow" id="authGateEyebrow">Account</p>
+          <h2 id="authGateTitle">Sign in to unlock Aoryn</h2>
+          <p id="authGateBody">Only identity and the basic profile are stored in the cloud. Runs, history, screenshots, and settings stay on this device.</p>
+        </div>
+
+        <div class="auth-gate-tabs" id="authGateTabs" role="tablist" aria-label="Authentication mode">
+          <button class="auth-gate-tab is-active" id="authGateLoginTab" data-auth-gate-mode="login" type="button">Login</button>
+          <button class="auth-gate-tab" id="authGateRegisterTab" data-auth-gate-mode="register" type="button">Register</button>
+        </div>
+
+        <div class="auth-gate-form">
+          <label class="field">
+            <span id="authGateApiBaseUrlLabel">Auth API</span>
+            <input id="authGateApiBaseUrlInput" type="text" placeholder="https://aoryn.org/api/auth" />
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span id="authGateEmailLabel">Email</span>
+              <input id="authGateEmailInput" type="email" placeholder="you@example.com" />
+            </label>
+
+            <label class="field" id="authGateDisplayNameField">
+              <span id="authGateDisplayNameLabel">Display name</span>
+              <input id="authGateDisplayNameInput" type="text" placeholder="Aoryn user" />
+            </label>
+          </div>
+
+          <label class="field">
+            <span id="authGatePasswordLabel">Password</span>
+            <input id="authGatePasswordInput" type="password" placeholder="At least 8 characters" />
+          </label>
+
+          <p class="field-note" id="authGateFeedbackNote"></p>
+
+          <div class="auth-gate-actions">
+            <button class="secondary-button auth-gate-switch" id="authGateModeSwitchButton" type="button">Need an account? Register</button>
+            <button class="primary-button auth-gate-submit" id="authGateSubmitButton" type="button">Login</button>
+          </div>
+        </div>
       </section>
     </div>
 
