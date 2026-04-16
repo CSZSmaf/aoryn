@@ -1,6 +1,6 @@
 import { jsonResponse, mergeHeaders, resolveBrowserSession } from "../auth/_shared.js";
 
-const DEFAULT_WINDOWS_INSTALLER_KEY = "Aoryn-Setup-0.1.5.exe";
+const DEFAULT_WINDOWS_INSTALLER_KEY = "latest/Aoryn-Setup-latest.exe";
 const DEFAULT_WINDOWS_INSTALLER_URL = `https://downloads.aoryn.org/${DEFAULT_WINDOWS_INSTALLER_KEY}`;
 
 function guessContentType(fileName) {
