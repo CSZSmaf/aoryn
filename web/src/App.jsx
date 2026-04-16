@@ -229,10 +229,12 @@ function ProductPage({ copy }) {
 
   return (
     <>
-      <section className="detail-hero reveal">
-        <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
-        <h1>{pageCopy.hero.title}</h1>
-        <p>{pageCopy.hero.body}</p>
+      <section className="detail-hero detail-hero--single reveal">
+        <div className="detail-hero__copy">
+          <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
+          <h1>{pageCopy.hero.title}</h1>
+          <p>{pageCopy.hero.body}</p>
+        </div>
       </section>
 
       <section className="section-shell">
@@ -277,10 +279,12 @@ function WorkspacePage({ copy }) {
 
   return (
     <>
-      <section className="detail-hero reveal">
-        <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
-        <h1>{pageCopy.hero.title}</h1>
-        <p>{pageCopy.hero.body}</p>
+      <section className="detail-hero detail-hero--single reveal">
+        <div className="detail-hero__copy">
+          <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
+          <h1>{pageCopy.hero.title}</h1>
+          <p>{pageCopy.hero.body}</p>
+        </div>
       </section>
 
       <section className="section-shell">
@@ -328,14 +332,14 @@ function DownloadPage({ copy, authState, authReady, openAuthModal }) {
   return (
     <>
       <section className="detail-hero reveal">
-        <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
-        <h1>{pageCopy.hero.title}</h1>
-        <p>{pageCopy.hero.body}</p>
-      </section>
+        <div className="detail-hero__copy">
+          <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
+          <h1>{pageCopy.hero.title}</h1>
+          <p>{pageCopy.hero.body}</p>
+        </div>
 
-      <section className="section-shell">
-        <article className={`download-gate reveal ${canDownload ? "is-unlocked" : "is-locked"}`}>
-          <div>
+        <article className={`download-gate ${canDownload ? "is-unlocked" : "is-locked"}`}>
+          <div className="download-gate__content">
             <span className="section-heading__eyebrow">
               {canDownload ? pageCopy.unlocked.eyebrow : pageCopy.locked.eyebrow}
             </span>
@@ -407,10 +411,12 @@ function DownloadPage({ copy, authState, authReady, openAuthModal }) {
 function LegalPage({ pageCopy }) {
   return (
     <>
-      <section className="detail-hero reveal">
-        <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
-        <h1>{pageCopy.hero.title}</h1>
-        <p>{pageCopy.hero.body}</p>
+      <section className="detail-hero detail-hero--single reveal">
+        <div className="detail-hero__copy">
+          <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
+          <h1>{pageCopy.hero.title}</h1>
+          <p>{pageCopy.hero.body}</p>
+        </div>
       </section>
 
       <section className="section-shell">

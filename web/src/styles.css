@@ -401,6 +401,7 @@ img {
 .capability-card,
 .detail-card,
 .download-band,
+.download-gate,
 .hero-stat-card,
 .download-meta-card,
 .insight-panel,
@@ -802,8 +803,56 @@ img {
   padding: 4rem 0 2.8rem;
 }
 
+.detail-hero--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.detail-hero__copy {
+  display: grid;
+  gap: 0.85rem;
+  max-width: 42rem;
+}
+
 .detail-hero__copy h1 {
   max-width: 15ch;
+}
+
+.download-gate {
+  display: grid;
+  gap: 1.2rem;
+  align-content: start;
+  padding: 1.8rem;
+  border-radius: 2rem;
+  box-shadow: var(--shadow-card);
+}
+
+.download-gate__content {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.download-gate h2 {
+  margin: 0;
+  font-size: clamp(1.5rem, 2.8vw, 2.1rem);
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.download-gate p {
+  margin: 0;
+  color: var(--text-soft);
+}
+
+.download-gate.is-unlocked {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(244, 250, 255, 0.96) 100%);
+  border-color: rgba(138, 182, 255, 0.24);
+}
+
+.download-gate.is-locked {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(247, 244, 238, 0.96) 100%);
+  border-color: rgba(20, 20, 20, 0.08);
 }
 
 .hero-stat-stack {
@@ -832,7 +881,7 @@ img {
 }
 
 .download-meta-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .download-meta-card {
