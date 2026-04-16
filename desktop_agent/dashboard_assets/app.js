@@ -250,11 +250,6 @@ const state = {
   helpContent: null,
   helpLoading: false,
   helpError: "",
-  authSession: null,
-  authGateMode: "login",
-  authBusy: false,
-  authFeedbackTone: "",
-  authFeedbackMessage: "",
   aboutOpen: false,
   aboutRestoreFocus: null,
   onboardingPrompted: false,
@@ -307,44 +302,6 @@ const elements = {
   sendShortcutSelect: document.getElementById("sendShortcutSelect"),
   maxStepsInput: document.getElementById("maxStepsInput"),
   pauseInput: document.getElementById("pauseInput"),
-  accountSettingsTitle: document.getElementById("accountSettingsTitle"),
-  accountSettingsHint: document.getElementById("accountSettingsHint"),
-  accountStatusTitle: document.getElementById("accountStatusTitle"),
-  accountStatusDetail: document.getElementById("accountStatusDetail"),
-  accountStatusBadge: document.getElementById("accountStatusBadge"),
-  authApiBaseUrlInput: document.getElementById("authApiBaseUrlInput"),
-  authEmailInput: document.getElementById("authEmailInput"),
-  authDisplayNameInput: document.getElementById("authDisplayNameInput"),
-  authPasswordInput: document.getElementById("authPasswordInput"),
-  authFeedbackNote: document.getElementById("authFeedbackNote"),
-  authRegisterButton: document.getElementById("authRegisterButton"),
-  authLoginButton: document.getElementById("authLoginButton"),
-  authLogoutButton: document.getElementById("authLogoutButton"),
-  authApiBaseUrlLabel: document.getElementById("authApiBaseUrlLabel"),
-  authEmailLabel: document.getElementById("authEmailLabel"),
-  authDisplayNameLabel: document.getElementById("authDisplayNameLabel"),
-  authPasswordLabel: document.getElementById("authPasswordLabel"),
-  authGateOverlay: document.getElementById("authGateOverlay"),
-  authGateCard: document.getElementById("authGateCard"),
-  authGateBrandHint: document.getElementById("authGateBrandHint"),
-  authGateEyebrow: document.getElementById("authGateEyebrow"),
-  authGateTitle: document.getElementById("authGateTitle"),
-  authGateBody: document.getElementById("authGateBody"),
-  authGateTabs: document.getElementById("authGateTabs"),
-  authGateLoginTab: document.getElementById("authGateLoginTab"),
-  authGateRegisterTab: document.getElementById("authGateRegisterTab"),
-  authGateApiBaseUrlLabel: document.getElementById("authGateApiBaseUrlLabel"),
-  authGateApiBaseUrlInput: document.getElementById("authGateApiBaseUrlInput"),
-  authGateEmailLabel: document.getElementById("authGateEmailLabel"),
-  authGateEmailInput: document.getElementById("authGateEmailInput"),
-  authGateDisplayNameField: document.getElementById("authGateDisplayNameField"),
-  authGateDisplayNameLabel: document.getElementById("authGateDisplayNameLabel"),
-  authGateDisplayNameInput: document.getElementById("authGateDisplayNameInput"),
-  authGatePasswordLabel: document.getElementById("authGatePasswordLabel"),
-  authGatePasswordInput: document.getElementById("authGatePasswordInput"),
-  authGateFeedbackNote: document.getElementById("authGateFeedbackNote"),
-  authGateModeSwitchButton: document.getElementById("authGateModeSwitchButton"),
-  authGateSubmitButton: document.getElementById("authGateSubmitButton"),
   displaySettingsTitle: document.getElementById("displaySettingsTitle"),
   displaySettingsHint: document.getElementById("displaySettingsHint"),
   displayDetectionSummaryGrid: document.getElementById("displayDetectionSummaryGrid"),
@@ -418,7 +375,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyShellState();
   applyStaticCopy();
   bindEvents();
-  await loadAuthSession({ silent: true });
   await refreshOverview({ initial: true });
   state.pollingHandle = window.setInterval(() => {
     refreshOverview({ background: true });
@@ -466,36 +422,6 @@ function bindEvents() {
   elements.closeHelpButton?.addEventListener("click", closeHelpCenter);
   elements.languageSelect?.addEventListener("change", (event) => setLocale(event.target.value));
   elements.sendShortcutSelect?.addEventListener("change", (event) => setSendShortcutMode(event.target.value));
-  elements.authRegisterButton?.addEventListener("click", handleAuthRegister);
-  elements.authLoginButton?.addEventListener("click", handleAuthLogin);
-  elements.authLogoutButton?.addEventListener("click", handleAuthLogout);
-  elements.authGateTabs?.addEventListener("click", handleAuthGateModeClick);
-  elements.authGateModeSwitchButton?.addEventListener("click", handleAuthGateModeSwitch);
-  elements.authGateSubmitButton?.addEventListener("click", handleAuthGateSubmit);
-  elements.authApiBaseUrlInput?.addEventListener("input", () => syncAuthForms("settings"));
-  elements.authEmailInput?.addEventListener("input", () => syncAuthForms("settings"));
-  elements.authDisplayNameInput?.addEventListener("input", () => syncAuthForms("settings"));
-  elements.authPasswordInput?.addEventListener("input", () => syncAuthForms("settings"));
-  elements.authApiBaseUrlInput?.addEventListener("blur", persistAuthPreferences);
-  elements.authEmailInput?.addEventListener("blur", persistAuthPreferences);
-  elements.authDisplayNameInput?.addEventListener("blur", persistAuthPreferences);
-  elements.authGateApiBaseUrlInput?.addEventListener("input", () => syncAuthForms("gate"));
-  elements.authGateEmailInput?.addEventListener("input", () => syncAuthForms("gate"));
-  elements.authGateDisplayNameInput?.addEventListener("input", () => syncAuthForms("gate"));
-  elements.authGatePasswordInput?.addEventListener("input", () => syncAuthForms("gate"));
-  elements.authGateApiBaseUrlInput?.addEventListener("blur", persistAuthPreferences);
-  elements.authGateEmailInput?.addEventListener("blur", persistAuthPreferences);
-  elements.authGateDisplayNameInput?.addEventListener("blur", persistAuthPreferences);
-  elements.authPasswordInput?.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.shiftKey) return;
-    event.preventDefault();
-    handleAuthLogin();
-  });
-  elements.authGatePasswordInput?.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.shiftKey) return;
-    event.preventDefault();
-    handleAuthGateSubmit();
-  });
   elements.displayOverrideEnabled?.addEventListener("change", handleDisplayOverrideToggle);
   elements.displayResetButton?.addEventListener("click", resetDisplayOverrides);
   elements.taskForm?.addEventListener("submit", handleSubmit);
@@ -571,7 +497,6 @@ async function refreshOverview(options = {}) {
   state.usingCachedSnapshot = false;
   state.meta = payload.meta || null;
   state.runtimePreferences = payload.runtime_preferences || state.runtimePreferences;
-  state.authSession = payload.auth_session || state.authSession;
   syncChatLaunchState(state.meta);
   state.activeJob = payload.active_job || null;
   state.jobs = payload.jobs || [];
@@ -611,27 +536,8 @@ function hydrateDefaults() {
 
   if (firstHydration) {
     const defaults = state.meta.defaults || {};
-    const uiPreferences = getUiPreferences();
     elements.maxStepsInput.value = defaults.max_steps ?? "";
     elements.pauseInput.value = defaults.pause_after_action ?? "";
-    if (elements.authApiBaseUrlInput) {
-      elements.authApiBaseUrlInput.value = uiPreferences.auth_api_base_url || "";
-    }
-    if (elements.authGateApiBaseUrlInput) {
-      elements.authGateApiBaseUrlInput.value = uiPreferences.auth_api_base_url || "";
-    }
-    if (elements.authEmailInput) {
-      elements.authEmailInput.value = uiPreferences.auth_email || "";
-    }
-    if (elements.authGateEmailInput) {
-      elements.authGateEmailInput.value = uiPreferences.auth_email || "";
-    }
-    if (elements.authDisplayNameInput) {
-      elements.authDisplayNameInput.value = uiPreferences.auth_display_name || "";
-    }
-    if (elements.authGateDisplayNameInput) {
-      elements.authGateDisplayNameInput.value = uiPreferences.auth_display_name || "";
-    }
     elements.modelBaseUrl.value = defaults.model_base_url ?? "";
     elements.modelName.value = defaults.model_name ?? "";
     elements.modelApiKey.value = defaults.model_api_key ?? "";
@@ -731,7 +637,6 @@ function renderAll() {
   applyShellState();
   applyStaticCopy();
   applySupplementalStaticCopy();
-  renderAuthGate();
   renderTopbar();
   renderSettingsProfile();
   renderDisplayDetection();
@@ -747,22 +652,15 @@ function renderAll() {
 }
 
 function applyShellState() {
-  const authLocked = isAuthLocked();
   document.body.dataset.uiMode = state.uiMode;
   document.body.dataset.sidebarCollapsed = String(state.sidebarCollapsed);
   document.body.dataset.sidebarOpen = String(state.mobileSidebarOpen);
-  document.body.dataset.authLocked = String(authLocked);
-  if (elements.appShell) {
-    elements.appShell.inert = authLocked;
-  }
+  document.body.dataset.authLocked = "false";
   elements.settingsOverlay.hidden = !state.settingsOpen;
   elements.aboutOverlay.hidden = !state.aboutOpen;
   elements.helpOverlay.hidden = !state.helpOpen;
   elements.inspectorOverlay.hidden = !state.drawerOpen;
   elements.sidebarBackdrop.hidden = !state.mobileSidebarOpen;
-  if (elements.authGateOverlay) {
-    elements.authGateOverlay.hidden = !authLocked;
-  }
 }
 
 
@@ -3360,136 +3258,12 @@ function buildAboutDiagnosticsSummary() {
 }
 
 
-function getAccountUiPreferences() {
-  const preferences = getUiPreferences();
-  return {
-    auth_api_base_url: String(preferences.auth_api_base_url || "").trim() || "https://aoryn.org/api/auth",
-    auth_email: String(preferences.auth_email || "").trim(),
-    auth_display_name: String(preferences.auth_display_name || "").trim(),
-  };
-}
-
-function setAuthFeedback(tone, message) {
-  state.authFeedbackTone = tone || "";
-  state.authFeedbackMessage = String(message || "").trim();
-}
-
-function isAuthenticatedSession() {
-  return Boolean(state.authSession?.authenticated);
-}
-
-function isAuthLocked() {
-  return !isAuthenticatedSession();
-}
-
 function setInputValue(element, value) {
   if (!element) return;
   element.value = String(value || "");
 }
 
-function syncAuthForms(source = "settings") {
-  const fromGate = source === "gate";
-  const sourceFields = fromGate
-    ? {
-        apiBaseUrl: elements.authGateApiBaseUrlInput,
-        email: elements.authGateEmailInput,
-        displayName: elements.authGateDisplayNameInput,
-        password: elements.authGatePasswordInput,
-      }
-    : {
-        apiBaseUrl: elements.authApiBaseUrlInput,
-        email: elements.authEmailInput,
-        displayName: elements.authDisplayNameInput,
-        password: elements.authPasswordInput,
-      };
-  const targetFields = fromGate
-    ? {
-        apiBaseUrl: elements.authApiBaseUrlInput,
-        email: elements.authEmailInput,
-        displayName: elements.authDisplayNameInput,
-        password: elements.authPasswordInput,
-      }
-    : {
-        apiBaseUrl: elements.authGateApiBaseUrlInput,
-        email: elements.authGateEmailInput,
-        displayName: elements.authGateDisplayNameInput,
-        password: elements.authGatePasswordInput,
-      };
-
-  setInputValue(targetFields.apiBaseUrl, sourceFields.apiBaseUrl?.value);
-  setInputValue(targetFields.email, sourceFields.email?.value);
-  setInputValue(targetFields.displayName, sourceFields.displayName?.value);
-  setInputValue(targetFields.password, sourceFields.password?.value);
-}
-
-function clearAuthPasswords() {
-  setInputValue(elements.authPasswordInput, "");
-  setInputValue(elements.authGatePasswordInput, "");
-}
-
-function setAuthGateMode(mode = "login") {
-  state.authGateMode = mode === "register" ? "register" : "login";
-}
-
-function handleAuthGateModeClick(event) {
-  const button = event.target.closest("[data-auth-gate-mode]");
-  if (!button || state.authBusy) return;
-  setAuthGateMode(button.dataset.authGateMode || "login");
-  syncAuthForms("gate");
-  renderAll();
-}
-
-function handleAuthGateModeSwitch() {
-  if (state.authBusy) return;
-  setAuthGateMode(state.authGateMode === "register" ? "login" : "register");
-  syncAuthForms("gate");
-  renderAll();
-}
-
-async function handleAuthGateSubmit() {
-  if (state.authGateMode === "register") {
-    await handleAuthRegister();
-    return;
-  }
-  await handleAuthLogin();
-}
-
-function readAuthFormValues() {
-  const useGate = isAuthLocked() && !elements.authGateOverlay?.hidden;
-  const apiBaseUrl = useGate ? elements.authGateApiBaseUrlInput?.value : elements.authApiBaseUrlInput?.value;
-  const email = useGate ? elements.authGateEmailInput?.value : elements.authEmailInput?.value;
-  const displayName = useGate ? elements.authGateDisplayNameInput?.value : elements.authDisplayNameInput?.value;
-  const password = useGate ? elements.authGatePasswordInput?.value : elements.authPasswordInput?.value;
-  return {
-    apiBaseUrl: String(apiBaseUrl || "").trim(),
-    email: String(email || "").trim(),
-    displayName: String(displayName || "").trim(),
-    password: String(password || ""),
-  };
-}
-
-async function persistAuthPreferences() {
-  const { apiBaseUrl, email, displayName } = readAuthFormValues();
-  await updateUiPreferences({
-    auth_api_base_url: apiBaseUrl || "https://aoryn.org/api/auth",
-    auth_email: email,
-    auth_display_name: displayName,
-  });
-}
-
-async function loadAuthSession({ silent = false } = {}) {
-  const payload = await fetchJson("/api/auth/session");
-  if (payload) {
-    state.authSession = payload;
-  } else if (!state.authSession) {
-    state.authSession = null;
-  }
-  if (!silent) {
-    renderAll();
-  }
-  return state.authSession;
-}
-
+/*
 function renderAuthGate() {
   const locked = isAuthLocked();
   if (elements.authGateOverlay) {
@@ -3772,7 +3546,7 @@ async function handleAuthLogout() {
     renderAll();
   }
 }
-
+*/
 
 state.chatStreamDraft = state.chatStreamDraft || null;
 state.chatStreamRenderTimer = state.chatStreamRenderTimer || 0;

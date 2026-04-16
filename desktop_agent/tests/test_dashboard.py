@@ -595,10 +595,11 @@ def test_dashboard_assets_remove_browser_install_entry_points():
     assert "install-card" not in index_html
     assert 'id="installActionButton"' not in index_html
     assert 'id="displaySettingsSection"' in index_html
-    assert 'id="accountSettingsSection"' in index_html
-    assert 'id="authRegisterButton"' in index_html
-    assert 'id="authLoginButton"' in index_html
-    assert 'id="authLogoutButton"' in index_html
+    assert 'id="accountSettingsSection"' not in index_html
+    assert 'id="authRegisterButton"' not in index_html
+    assert 'id="authLoginButton"' not in index_html
+    assert 'id="authLogoutButton"' not in index_html
+    assert 'id="authGateOverlay"' not in index_html
     assert 'id="displayOverrideEnabled"' in index_html
     assert 'id="displayDetectionJsonView"' in index_html
     assert "beforeinstallprompt" not in app_js
@@ -607,8 +608,13 @@ def test_dashboard_assets_remove_browser_install_entry_points():
     assert "getInstallState" not in app_js
     assert '"/api/system/display-detection"' in app_js or "'/api/system/display-detection'" in app_js
     assert "renderDisplayDetection" in app_js
-    assert '"/api/auth/register"' in app_js or "'/api/auth/register'" in app_js
-    assert "renderAccountSettings" in app_js
+    dom_ready_section = app_js[
+        app_js.find('document.addEventListener("DOMContentLoaded", async () => {') :
+        app_js.find("function bindEvents()")
+    ]
+    render_section = app_js[app_js.find("function renderAll()") : app_js.find("function applyShellState()")]
+    assert 'loadAuthSession({ silent: true })' not in dom_ready_section
+    assert "renderAuthGate();" not in render_section
 
 
 def test_dashboard_runtime_preferences_roundtrip():
@@ -691,7 +697,6 @@ def test_dashboard_system_paths_and_open_path(monkeypatch):
         "run_root": str(temp_root / "runs"),
         "cache_dir": str(temp_root / "cache"),
         "install_dir": str(temp_root / "install"),
-        "auth_session_file": str(temp_root / "auth-session.json"),
     }
 
     server = app.create_server()
@@ -708,7 +713,7 @@ def test_dashboard_system_paths_and_open_path(monkeypatch):
             assert payload["run_root"].endswith("runs")
             assert payload["cache_dir"].endswith("cache")
             assert payload["install_dir"].endswith("install")
-            assert "auth_session_file" in payload
+            assert "auth_session_file" not in payload
 
         request = urllib.request.Request(
             f"{base_url}/api/system/open-path",
@@ -729,35 +734,44 @@ def test_dashboard_system_paths_and_open_path(monkeypatch):
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def test_dashboard_auth_routes_roundtrip():
-    temp_root = Path(__file__).resolve().parents[2] / ".pytest-local" / f"aoryn-dashboard-auth-{uuid4().hex}"
+def test_dashboard_auth_routes_are_removed_and_core_routes_stay_available(monkeypatch):
+    temp_root = Path(__file__).resolve().parents[2] / ".pytest-local" / f"aoryn-dashboard-authless-{uuid4().hex}"
     temp_root.mkdir(parents=True, exist_ok=True)
     config_path = temp_root / "config.yaml"
     config_path.write_text("{}", encoding="utf-8")
     app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
 
-    app.auth_session_snapshot = lambda: {"authenticated": False, "profile": None}
-    app.auth_me = lambda: {"ok": True, "authenticated": False, "profile": None, "session": {"authenticated": False}}
-    app.auth_register = lambda **kwargs: {
-        "ok": True,
-        "message": "Please check your email to verify the account.",
-        "requires_email_verification": True,
-    }
-    app.auth_login = lambda **kwargs: {
-        "ok": True,
-        "message": "Signed in successfully.",
-        "session": {
-            "authenticated": True,
-            "email": "user@example.com",
-            "display_name": "Aoryn User",
-            "profile": {"email": "user@example.com", "display_name": "Aoryn User"},
+    monkeypatch.setattr(
+        app.queue,
+        "submit",
+        lambda **kwargs: DashboardJob(
+            job_id="job123",
+            task=kwargs["task"],
+            planner_mode=kwargs.get("planner_mode") or "auto",
+            dry_run=bool(kwargs.get("dry_run")),
+            max_steps=kwargs.get("max_steps"),
+            pause_after_action=kwargs.get("pause_after_action"),
+            config_overrides=dict(kwargs.get("config_overrides") or {}),
+        ),
+    )
+    monkeypatch.setattr(
+        DashboardApp,
+        "chat_reply",
+        lambda self, **kwargs: {
+            "assistant_message": "No desktop sign-in required.",
+            "agent_handoff": None,
+            "session_meta": kwargs.get("session_meta"),
         },
-    }
-    app.auth_logout = lambda **kwargs: {
-        "ok": True,
-        "message": "Signed out successfully.",
-        "session": {"authenticated": False, "profile": None},
-    }
+    )
+    monkeypatch.setattr(
+        DashboardApp,
+        "provider_models",
+        lambda self, *_args, **_kwargs: {
+            "provider": "lmstudio_local",
+            "models": [],
+            "preferred_chat_model": "auto",
+        },
+    )
 
     server = app.create_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -765,61 +779,51 @@ def test_dashboard_auth_routes_roundtrip():
 
     try:
         base_url = f"http://127.0.0.1:{server.server_address[1]}"
-        with urllib.request.urlopen(f"{base_url}/api/auth/session") as response:
-            payload = json.loads(response.read().decode("utf-8"))
-            assert response.status == 200
-            assert payload["authenticated"] is False
-
-        with urllib.request.urlopen(f"{base_url}/api/auth/me") as response:
-            payload = json.loads(response.read().decode("utf-8"))
-            assert response.status == 200
-            assert payload["ok"] is True
-            assert payload["authenticated"] is False
-
-        register_request = urllib.request.Request(
-            f"{base_url}/api/auth/register",
+        task_request = urllib.request.Request(
+            f"{base_url}/api/tasks",
             data=json.dumps(
                 {
-                    "email": "user@example.com",
-                    "password": "password123",
-                    "displayName": "Aoryn User",
+                    "task": "visit openai.com and click login",
                 }
             ).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(register_request) as response:
+        with urllib.request.urlopen(task_request) as response:
             payload = json.loads(response.read().decode("utf-8"))
-            assert response.status == 201
-            assert payload["requires_email_verification"] is True
+            assert response.status == 202
+            assert payload["id"] == "job123"
+            assert payload["task"] == "visit openai.com and click login"
 
-        login_request = urllib.request.Request(
-            f"{base_url}/api/auth/login",
+        chat_request = urllib.request.Request(
+            f"{base_url}/api/chat",
             data=json.dumps(
                 {
-                    "email": "user@example.com",
-                    "password": "password123",
+                    "messages": [{"role": "user", "content": "Can I use the workspace without signing in?"}],
                 }
             ).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(login_request) as response:
+        with urllib.request.urlopen(chat_request) as response:
             payload = json.loads(response.read().decode("utf-8"))
-            assert response.status == 202
-            assert payload["session"]["authenticated"] is True
-            assert payload["session"]["email"] == "user@example.com"
+            assert response.status == 200
+            assert payload["assistant_message"] == "No desktop sign-in required."
 
-        logout_request = urllib.request.Request(
-            f"{base_url}/api/auth/logout",
-            data=json.dumps({}).encode("utf-8"),
+        provider_request = urllib.request.Request(
+            f"{base_url}/api/provider/models",
+            data=json.dumps({"config_overrides": {}}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(logout_request) as response:
+        with urllib.request.urlopen(provider_request) as response:
             payload = json.loads(response.read().decode("utf-8"))
-            assert response.status == 202
-            assert payload["session"]["authenticated"] is False
+            assert response.status == 200
+            assert payload["provider"] == "lmstudio_local"
+
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(f"{base_url}/api/auth/session")
+        assert exc_info.value.code == 404
     finally:
         server.shutdown()
         server.server_close()

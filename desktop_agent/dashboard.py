@@ -18,8 +18,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from desktop_agent.auth_client import AuthAPIClient, AuthAPIError, normalize_auth_api_base_url
-from desktop_agent.auth_state import AuthSessionStore
 from desktop_agent.browser_dom import dom_backend_status
 from desktop_agent.chat_support import (
     build_agent_handoff,
@@ -45,7 +43,6 @@ from desktop_agent.provider_tools import (
 )
 from desktop_agent.runtime_paths import (
     appdata_config_root,
-    auth_session_path_for,
     default_cache_root,
     default_packaged_config_path,
     is_frozen_runtime,
@@ -282,7 +279,6 @@ _TEXT_TEMPLATE_REPLACEMENTS = {
     "__APP_ASSET_VERSION__": APP_ASSET_VERSION,
 }
 _RUNTIME_PREFS_UNSET = object()
-DEFAULT_AUTH_API_BASE_URL = "https://aoryn.org/api/auth"
 
 
 class RuntimePreferencesStore:
@@ -379,25 +375,13 @@ def _clean_ui_preferences(raw: Any, *, existing: dict[str, Any] | None = None) -
         base.setdefault("onboarding_completed", False)
         return {
             "onboarding_completed": bool(base.get("onboarding_completed")),
-            "auth_api_base_url": _optional_text(base.get("auth_api_base_url")) or DEFAULT_AUTH_API_BASE_URL,
-            "auth_email": _optional_text(base.get("auth_email")) or "",
-            "auth_display_name": _optional_text(base.get("auth_display_name")) or "",
         }
 
     if "onboarding_completed" in raw:
         base["onboarding_completed"] = bool(raw.get("onboarding_completed"))
-    if "auth_api_base_url" in raw:
-        base["auth_api_base_url"] = _optional_text(raw.get("auth_api_base_url")) or DEFAULT_AUTH_API_BASE_URL
-    if "auth_email" in raw:
-        base["auth_email"] = _optional_text(raw.get("auth_email")) or ""
-    if "auth_display_name" in raw:
-        base["auth_display_name"] = _optional_text(raw.get("auth_display_name")) or ""
     base.setdefault("onboarding_completed", False)
     return {
         "onboarding_completed": bool(base.get("onboarding_completed")),
-        "auth_api_base_url": _optional_text(base.get("auth_api_base_url")) or DEFAULT_AUTH_API_BASE_URL,
-        "auth_email": _optional_text(base.get("auth_email")) or "",
-        "auth_display_name": _optional_text(base.get("auth_display_name")) or "",
     }
 
 
@@ -734,7 +718,6 @@ class DashboardApp:
         config = load_agent_config(self.config_path)
         self.run_root = config.run_root
         self.runtime_preferences = RuntimePreferencesStore(runtime_preferences_path_for(self.config_path))
-        self.auth_session_store = AuthSessionStore(auth_session_path_for(self.config_path))
         self.cache_root = default_cache_root()
 
     def create_server(self) -> ThreadingHTTPServer:
@@ -767,18 +750,6 @@ class DashboardApp:
                     params = parse_qs(parsed.query)
                     locale = params.get("locale", ["zh-CN"])[0]
                     return self._send_json(app.help_content(locale=locale))
-                if path == "/api/auth/session":
-                    return self._send_json(app.auth_session_snapshot())
-                if path == "/api/auth/me":
-                    try:
-                        return self._send_json(app.auth_me())
-                    except AuthAPIError as exc:
-                        status = (
-                            HTTPStatus(exc.status_code)
-                            if isinstance(getattr(exc, "status_code", None), int) and 400 <= exc.status_code <= 599
-                            else HTTPStatus.BAD_GATEWAY
-                        )
-                        return self._send_error(status, str(exc))
                 if path == "/api/overview":
                     return self._send_json(app.overview())
                 if path == "/api/jobs":
@@ -813,9 +784,6 @@ class DashboardApp:
                     return self._send_error(HTTPStatus.BAD_REQUEST, "Expected JSON body.")
 
                 if path == "/api/tasks":
-                    snapshot = app.auth_session_snapshot()
-                    if not snapshot.get("authenticated"):
-                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     try:
                         job = app.queue.submit(
                             task=str(body.get("task", "")),
@@ -848,9 +816,6 @@ class DashboardApp:
                     return self._send_json(payload, status=HTTPStatus.ACCEPTED)
 
                 if path == "/api/tasks/stop":
-                    snapshot = app.auth_session_snapshot()
-                    if not snapshot.get("authenticated"):
-                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     try:
                         job = app.queue.cancel_active()
                     except RuntimeError as exc:
@@ -858,9 +823,6 @@ class DashboardApp:
                     return self._send_json(job, status=HTTPStatus.ACCEPTED)
 
                 if path == "/api/chat":
-                    snapshot = app.auth_session_snapshot()
-                    if not snapshot.get("authenticated"):
-                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     try:
                         payload = app.chat_reply(
                             messages=body.get("messages"),
@@ -875,9 +837,6 @@ class DashboardApp:
                     return self._send_json(payload)
 
                 if path == "/api/chat/stream":
-                    snapshot = app.auth_session_snapshot()
-                    if not snapshot.get("authenticated"):
-                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     return self._send_event_stream(
                         app.chat_reply_stream(
                             messages=body.get("messages"),
@@ -888,9 +847,6 @@ class DashboardApp:
                     )
 
                 if path == "/api/provider/models":
-                    snapshot = app.auth_session_snapshot()
-                    if not snapshot.get("authenticated"):
-                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     try:
                         snapshot = app.provider_models(_clean_config_overrides(body.get("config_overrides")))
                     except ProviderToolError as exc:
@@ -898,9 +854,6 @@ class DashboardApp:
                     return self._send_json(snapshot)
 
                 if path == "/api/provider/load-model":
-                    snapshot = app.auth_session_snapshot()
-                    if not snapshot.get("authenticated"):
-                        return self._send_error(HTTPStatus.UNAUTHORIZED, "Sign in to unlock the workspace.")
                     try:
                         payload = app.provider_load_model(
                             config_overrides=_clean_config_overrides(body.get("config_overrides")),
@@ -910,55 +863,6 @@ class DashboardApp:
                     except ProviderToolError as exc:
                         return self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                     return self._send_json(payload)
-
-                if path == "/api/auth/register":
-                    try:
-                        payload = app.auth_register(
-                            email=str(body.get("email", "")).strip(),
-                            password=str(body.get("password", "")),
-                            display_name=str(body.get("displayName", body.get("name", ""))).strip(),
-                            api_base_url=_optional_text(body.get("apiBaseUrl")),
-                        )
-                    except (ValueError, AuthAPIError) as exc:
-                        status = (
-                            HTTPStatus.BAD_REQUEST
-                            if isinstance(exc, ValueError)
-                            else HTTPStatus(exc.status_code)
-                            if isinstance(getattr(exc, "status_code", None), int) and 400 <= exc.status_code <= 599
-                            else HTTPStatus.BAD_GATEWAY
-                        )
-                        return self._send_error(status, str(exc))
-                    return self._send_json(payload, status=HTTPStatus.CREATED)
-
-                if path == "/api/auth/login":
-                    try:
-                        payload = app.auth_login(
-                            email=str(body.get("email", "")).strip(),
-                            password=str(body.get("password", "")),
-                            api_base_url=_optional_text(body.get("apiBaseUrl")),
-                        )
-                    except (ValueError, AuthAPIError) as exc:
-                        status = (
-                            HTTPStatus.BAD_REQUEST
-                            if isinstance(exc, ValueError)
-                            else HTTPStatus(exc.status_code)
-                            if isinstance(getattr(exc, "status_code", None), int) and 400 <= exc.status_code <= 599
-                            else HTTPStatus.BAD_GATEWAY
-                        )
-                        return self._send_error(status, str(exc))
-                    return self._send_json(payload, status=HTTPStatus.ACCEPTED)
-
-                if path == "/api/auth/logout":
-                    try:
-                        payload = app.auth_logout(api_base_url=_optional_text(body.get("apiBaseUrl")))
-                    except AuthAPIError as exc:
-                        status = (
-                            HTTPStatus(exc.status_code)
-                            if isinstance(getattr(exc, "status_code", None), int) and 400 <= exc.status_code <= 599
-                            else HTTPStatus.BAD_GATEWAY
-                        )
-                        return self._send_error(status, str(exc))
-                    return self._send_json(payload, status=HTTPStatus.ACCEPTED)
 
                 return self._send_error(HTTPStatus.NOT_FOUND, "Route not found.")
 
@@ -1266,7 +1170,6 @@ class DashboardApp:
         return {
             "meta": self.meta(),
             "runtime_preferences": self.runtime_preferences.snapshot(),
-            "auth_session": self.auth_session_snapshot(),
             "active_job": self.queue.active_job(),
             "jobs": self.queue.list_jobs(limit=8),
             "runs": list_runs(self.run_root, limit=12),
@@ -1288,164 +1191,10 @@ class DashboardApp:
             "config_file": str(config_path),
             "config_dir": str(config_path.parent),
             "runtime_preferences_file": str(self.runtime_preferences.path),
-            "auth_session_file": str(self.auth_session_store.path),
             "appdata_dir": str(roaming_root),
             "data_dir": str(local_root),
             "run_root": str(self.run_root),
             "cache_dir": str(self.cache_root),
-        }
-
-    def _auth_ui_preferences(self) -> dict[str, Any]:
-        return dict(self.runtime_preferences.snapshot().get("ui_preferences") or {})
-
-    def _auth_api_base_url(self, override: str | None = None) -> str:
-        candidate = _optional_text(override)
-        if candidate:
-            return normalize_auth_api_base_url(candidate)
-        ui_preferences = self._auth_ui_preferences()
-        return normalize_auth_api_base_url(ui_preferences.get("auth_api_base_url") or DEFAULT_AUTH_API_BASE_URL)
-
-    def _auth_client(self, api_base_url: str | None = None) -> AuthAPIClient:
-        return AuthAPIClient(self._auth_api_base_url(api_base_url))
-
-    def auth_session_snapshot(self) -> dict[str, Any]:
-        snapshot = self.auth_session_store.snapshot()
-        if not snapshot.get("authenticated"):
-            return snapshot
-
-        payload = self.auth_session_store.load_payload()
-        if not payload:
-            return self.auth_session_store.snapshot()
-
-        expires_at = payload.get("expires_at")
-        should_refresh = isinstance(expires_at, (int, float)) and float(expires_at) <= (time.time() + 60.0)
-        if should_refresh and payload.get("refresh_token"):
-            try:
-                refreshed = self._auth_client(payload.get("api_base_url")).refresh(
-                    refresh_token=str(payload["refresh_token"])
-                )
-                session = refreshed.get("session") if isinstance(refreshed, dict) else None
-                profile = refreshed.get("profile") if isinstance(refreshed, dict) else None
-                if isinstance(session, dict) and session.get("access_token") and session.get("refresh_token"):
-                    self.auth_session_store.save_payload(
-                        {
-                            "api_base_url": self._auth_api_base_url(payload.get("api_base_url")),
-                            "access_token": session.get("access_token"),
-                            "refresh_token": session.get("refresh_token"),
-                            "expires_at": session.get("expires_at"),
-                            "profile": profile or payload.get("profile"),
-                        }
-                    )
-                    snapshot = self.auth_session_store.snapshot()
-            except AuthAPIError:
-                self.auth_session_store.clear()
-                return self.auth_session_store.snapshot()
-        return snapshot
-
-    def auth_register(
-        self,
-        *,
-        email: str,
-        password: str,
-        display_name: str,
-        api_base_url: str | None = None,
-    ) -> dict[str, Any]:
-        if not email:
-            raise ValueError("Email is required.")
-        if not password:
-            raise ValueError("Password is required.")
-        if len(password) < 8:
-            raise ValueError("Password must be at least 8 characters long.")
-        client = self._auth_client(api_base_url)
-        payload = client.register(email=email, password=password, display_name=display_name)
-        return {
-            "ok": True,
-            "message": payload.get("message") or "Registration request submitted successfully.",
-            "requires_email_verification": bool(payload.get("requiresEmailVerification", True)),
-            "api_base_url": client.base_url,
-        }
-
-    def auth_login(
-        self,
-        *,
-        email: str,
-        password: str,
-        api_base_url: str | None = None,
-    ) -> dict[str, Any]:
-        if not email:
-            raise ValueError("Email is required.")
-        if not password:
-            raise ValueError("Password is required.")
-        client = self._auth_client(api_base_url)
-        payload = client.login(email=email, password=password)
-        session = payload.get("session") if isinstance(payload, dict) else None
-        if not isinstance(session, dict):
-            raise AuthAPIError("The authentication service did not return a session.")
-        self.auth_session_store.save_payload(
-            {
-                "api_base_url": client.base_url,
-                "access_token": session.get("access_token"),
-                "refresh_token": session.get("refresh_token"),
-                "expires_at": session.get("expires_at"),
-                "profile": payload.get("profile"),
-            }
-        )
-        return {
-            "ok": True,
-            "message": payload.get("message") or "Signed in successfully.",
-            "session": self.auth_session_snapshot(),
-        }
-
-    def auth_logout(self, *, api_base_url: str | None = None) -> dict[str, Any]:
-        payload = self.auth_session_store.load_payload()
-        access_token = str((payload or {}).get("access_token") or "").strip()
-        resolved_base_url = self._auth_api_base_url(api_base_url or (payload or {}).get("api_base_url"))
-        if access_token:
-            client = AuthAPIClient(resolved_base_url)
-            client.logout(access_token=access_token)
-        self.auth_session_store.clear()
-        return {"ok": True, "message": "Signed out successfully.", "session": self.auth_session_snapshot()}
-
-    def auth_me(self) -> dict[str, Any]:
-        payload = self.auth_session_store.load_payload()
-        if not payload or not str(payload.get("access_token") or "").strip():
-            return {
-                "ok": True,
-                "authenticated": False,
-                "user": None,
-                "profile": None,
-                "session": self.auth_session_snapshot(),
-            }
-
-        client = self._auth_client(payload.get("api_base_url"))
-        try:
-            identity = client.me(access_token=str(payload["access_token"]))
-        except AuthAPIError:
-            self.auth_session_store.clear()
-            return {
-                "ok": True,
-                "authenticated": False,
-                "user": None,
-                "profile": None,
-                "session": self.auth_session_snapshot(),
-            }
-        user = identity.get("user") if isinstance(identity, dict) else None
-        profile = identity.get("profile") if isinstance(identity, dict) else None
-        self.auth_session_store.save_payload(
-            {
-                "api_base_url": self._auth_api_base_url(payload.get("api_base_url")),
-                "access_token": payload.get("access_token"),
-                "refresh_token": payload.get("refresh_token"),
-                "expires_at": payload.get("expires_at"),
-                "profile": profile or payload.get("profile"),
-            }
-        )
-        return {
-            "ok": True,
-            "authenticated": True,
-            "user": user,
-            "profile": profile,
-            "session": self.auth_session_snapshot(),
         }
 
     def environment_check(self) -> dict[str, Any]:

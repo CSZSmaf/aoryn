@@ -1,3 +1,4 @@
 # Python build-time dependencies for Aoryn desktop release packaging.
 PyInstaller>=6.11.1
 boto3>=1.37.0
+PySocks>=1.7.1

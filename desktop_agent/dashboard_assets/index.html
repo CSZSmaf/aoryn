@@ -248,64 +248,6 @@
       </section>
     </div>
 
-    <div class="auth-gate-shell" id="authGateOverlay" hidden>
-      <div class="auth-gate-backdrop" aria-hidden="true"></div>
-
-      <section class="auth-gate-card" id="authGateCard" role="dialog" aria-modal="true" aria-labelledby="authGateTitle" tabindex="-1">
-        <div class="auth-gate-brand">
-          <div class="brand-mark" aria-hidden="true">
-            <img class="brand-mark__image" src="/assets/icons/logo-mark.png?v=__APP_ASSET_VERSION__" alt="" />
-          </div>
-          <div>
-            <strong>Aoryn</strong>
-            <span id="authGateBrandHint">Sign in to unlock the workspace.</span>
-          </div>
-        </div>
-
-        <div class="auth-gate-copy">
-          <p class="auth-gate-eyebrow" id="authGateEyebrow">Account</p>
-          <h2 id="authGateTitle">Sign in to unlock Aoryn</h2>
-          <p id="authGateBody">Only identity and the basic profile are stored in the cloud. Runs, history, screenshots, and settings stay on this device.</p>
-        </div>
-
-        <div class="auth-gate-tabs" id="authGateTabs" role="tablist" aria-label="Authentication mode">
-          <button class="auth-gate-tab is-active" id="authGateLoginTab" data-auth-gate-mode="login" type="button">Login</button>
-          <button class="auth-gate-tab" id="authGateRegisterTab" data-auth-gate-mode="register" type="button">Register</button>
-        </div>
-
-        <div class="auth-gate-form">
-          <label class="field">
-            <span id="authGateApiBaseUrlLabel">Auth API</span>
-            <input id="authGateApiBaseUrlInput" type="text" placeholder="https://aoryn.org/api/auth" />
-          </label>
-
-          <div class="field-grid">
-            <label class="field">
-              <span id="authGateEmailLabel">Email</span>
-              <input id="authGateEmailInput" type="email" placeholder="you@example.com" />
-            </label>
-
-            <label class="field" id="authGateDisplayNameField">
-              <span id="authGateDisplayNameLabel">Display name</span>
-              <input id="authGateDisplayNameInput" type="text" placeholder="Aoryn user" />
-            </label>
-          </div>
-
-          <label class="field">
-            <span id="authGatePasswordLabel">Password</span>
-            <input id="authGatePasswordInput" type="password" placeholder="At least 8 characters" />
-          </label>
-
-          <p class="field-note" id="authGateFeedbackNote"></p>
-
-          <div class="auth-gate-actions">
-            <button class="secondary-button auth-gate-switch" id="authGateModeSwitchButton" type="button">Need an account? Register</button>
-            <button class="primary-button auth-gate-submit" id="authGateSubmitButton" type="button">Login</button>
-          </div>
-        </div>
-      </section>
-    </div>
-
     <div class="modal-shell" id="settingsOverlay" hidden>
       <button class="modal-backdrop" id="settingsBackdrop" type="button" aria-label="Close settings"></button>
 
@@ -367,52 +309,6 @@
                   <span data-i18n="settings.pausePerAction">暂停</span>
                   <input id="pauseInput" name="pause_after_action" min="0" step="0.1" type="number" placeholder="0.4" />
                 </label>
-              </div>
-            </section>
-
-            <section class="settings-section" id="accountSettingsSection">
-              <div class="section-head">
-                <h3 id="accountSettingsTitle">Account</h3>
-              </div>
-
-              <p class="field-note" id="accountSettingsHint"></p>
-
-              <div class="account-status-card">
-                <div class="account-status-card__copy">
-                  <strong id="accountStatusTitle">Signed out</strong>
-                  <small id="accountStatusDetail">Register and sign in with the same account used by the website.</small>
-                </div>
-                <span class="status-pill" id="accountStatusBadge">Signed out</span>
-              </div>
-
-              <label class="field">
-                <span id="authApiBaseUrlLabel">Auth API</span>
-                <input id="authApiBaseUrlInput" type="text" placeholder="https://aoryn.org/api/auth" />
-              </label>
-
-              <div class="field-grid">
-                <label class="field">
-                  <span id="authEmailLabel">Email</span>
-                  <input id="authEmailInput" type="email" placeholder="you@example.com" />
-                </label>
-
-                <label class="field">
-                  <span id="authDisplayNameLabel">Display name</span>
-                  <input id="authDisplayNameInput" type="text" placeholder="Aoryn user" />
-                </label>
-              </div>
-
-              <label class="field">
-                <span id="authPasswordLabel">Password</span>
-                <input id="authPasswordInput" type="password" placeholder="At least 8 characters" />
-              </label>
-
-              <p class="field-note" id="authFeedbackNote"></p>
-
-              <div class="button-row">
-                <button class="secondary-button" id="authRegisterButton" type="button">Register</button>
-                <button class="secondary-button" id="authLoginButton" type="button">Login</button>
-                <button class="secondary-button" id="authLogoutButton" type="button">Logout</button>
               </div>
             </section>
 

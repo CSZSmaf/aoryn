@@ -85,7 +85,7 @@ Recommended redirect setup:
 
 On the R2 bucket that stores the installer:
 
-- upload the versioned installer, for example `Aoryn-Setup-0.1.5.exe`
+- upload the versioned installer, for example `Aoryn-Setup-0.1.6.exe`
 - upload or overwrite `latest/Aoryn-Setup-latest.exe`
 - keep `AORYN_WINDOWS_INSTALLER_KEY` pointed at the stable latest alias
 - keep `downloads.aoryn.org` pointed at the bucket if you want the authenticated route to fall back to a public installer URL
@@ -108,6 +108,18 @@ AORYN_R2_ACCESS_KEY_ID=<your R2 access key id>
 AORYN_R2_SECRET_ACCESS_KEY=<your R2 secret access key>
 AORYN_R2_PUBLIC_BASE_URL=https://downloads.aoryn.org
 AORYN_R2_LATEST_KEY=latest/Aoryn-Setup-latest.exe
+```
+
+If your network requires a local proxy or VPN client for Cloudflare access, set this once on the publishing machine:
+
+```text
+AORYN_UPLOAD_PROXY=socks5h://127.0.0.1:10808
+```
+
+You can also override it per run:
+
+```bash
+powershell -ExecutionPolicy Bypass -File .\publish_installer.ps1 -ProxyUrl socks5h://127.0.0.1:10808
 ```
 
 Optional, to have the publish step also sync Cloudflare Pages production env vars and retry the current deployment:
@@ -135,7 +147,7 @@ web/dist
 ## 6. Production Release Checklist
 
 1. Push the `main` branch changes that contain the new website and release metadata.
-2. Run `powershell -ExecutionPolicy Bypass -File .\publish_installer.ps1` to build the installer, upload both the versioned object and the stable latest alias, and optionally resync Pages download env vars.
+2. Run `powershell -ExecutionPolicy Bypass -File .\publish_installer.ps1` to build the installer, upload both the versioned object and the stable latest alias, and optionally resync Pages download env vars. If needed, add `-ProxyUrl socks5h://127.0.0.1:10808`.
 3. If R2 bindings work in your Pages project, keep `AORYN_DOWNLOADS`; otherwise keep `AORYN_WINDOWS_INSTALLER_URL` pointed at the latest alias.
 4. Sign in on `https://aoryn.org/download` and verify the protected download flow.
 

@@ -57,8 +57,8 @@ powershell -ExecutionPolicy Bypass -File .\build_release.ps1
 This produces:
 
 ```text
-release/Aoryn-0.1.5-win64/
-release/Aoryn-Setup-0.1.5.exe
+release/Aoryn-0.1.6-win64/
+release/Aoryn-Setup-0.1.6.exe
 ```
 
 ### 2.4 Deploy the Official Website
@@ -91,7 +91,7 @@ web/DEPLOYMENT.md
 web/DEPLOYMENT.zh-CN.md
 ```
 
-Patch `0.1.5` keeps the display-detection diagnostics and manual override workflow, while moving the website and download flow onto the authenticated Pages Functions + R2 release pipeline.
+Patch `0.1.6` keeps the display-detection diagnostics and manual override workflow, while removing the desktop sign-in gate and keeping the website download flow on the authenticated Pages Functions + R2 release pipeline.
 
 The installed app stores user data outside the install directory:
 

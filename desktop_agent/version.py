@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 APP_NAME = "Aoryn"
-APP_VERSION = "0.1.5"
+APP_VERSION = "0.1.6"
 APP_PUBLISHER = "Aoryn"
 APP_ID = "Aoryn.Desktop.Shell"
 APP_RELEASE_ARCH = "win64"

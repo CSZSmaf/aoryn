@@ -105,7 +105,7 @@ export const siteCopy = {
           body: "桌面工作台负责真实执行，账号只负责登录、下载与后续的授权边界。",
           windowLabel: "Aoryn Workspace",
           windowMeta: "Visible runs, local history, protected access",
-          status: "Authenticated access",
+          status: "Desktop ready",
           railLabel: "Workspace",
           railItems: ["Runs", "Chat", "Screenshots", "Diagnostics"],
           focusLabel: "Current focus",
@@ -115,13 +115,13 @@ export const siteCopy = {
           metrics: [
             { label: "Cloud data", value: "Identity only" },
             { label: "Run history", value: "Stays local" },
-            { label: "Desktop mode", value: "Gated" },
+            { label: "Desktop mode", value: "Ready on install" },
           ],
         },
         cta: {
           eyebrow: "Ready",
-          title: "先登录，再解锁安装与桌面工作台。",
-          body: "你不会把任务历史上传到云端，但你需要一个账号来下载并启动产品。",
+          title: "登录后下载安装包，安装后直接进入桌面工作台。",
+          body: "你不会把任务历史上传到云端。账号只用于官网身份验证与下载安装包，桌面端安装后可直接使用。",
           primaryCta: "前往下载页",
           secondaryCta: "登录 / 注册",
         },
@@ -178,7 +178,7 @@ export const siteCopy = {
         hero: {
           eyebrow: "界面",
           title: "把对话、执行与回放合并成一个工作台。",
-          body: "启动后先登录，再进入可见的桌面执行界面，而不是直接暴露一堆脚本细节。",
+          body: "安装后直接进入可见的桌面执行界面，把对话、执行与回放留在同一个工作台里。",
         },
         sections: [
           {
@@ -196,10 +196,10 @@ export const siteCopy = {
         ],
         preview: {
           eyebrow: "Workspace preview",
-          title: "登录后才会解锁的主界面",
-          body: "账号负责身份，会话负责入口，本地文件继续负责你的工作数据。",
+          title: "安装后即可使用的主界面",
+          body: "账号负责官网身份与下载入口，本地应用负责工作流，而设备继续负责你的工作数据。",
           cards: [
-            { label: "Auth", value: "Required on launch" },
+            { label: "Auth", value: "Download only" },
             { label: "History", value: "Local-only" },
             { label: "Diagnostics", value: "Visible in-app" },
           ],
@@ -236,11 +236,11 @@ export const siteCopy = {
         steps: {
           eyebrow: "安装流程",
           title: "下载前后你会看到什么。",
-          body: "下载和启动都改成基于账号的门槛，但执行数据仍在本机。",
+          body: "下载仍然受账号保护，但桌面端安装后会直接进入工作台，执行数据继续留在本机。",
           items: [
             { step: "01", title: "注册并验证邮箱", body: "首次使用前先完成账号创建与邮箱验证。" },
             { step: "02", title: "登录并下载", body: "认证后下载按钮才会解锁，不再暴露公开安装包直链。" },
-            { step: "03", title: "启动后再次登录", body: "桌面应用会先验证本地会话，再解锁工作台。" },
+            { step: "03", title: "安装后直接使用", body: "安装完成后可以直接进入桌面工作台，不再需要额外登录才能开始本地任务。" },
           ],
         },
         faq: {
@@ -437,7 +437,7 @@ export const siteCopy = {
           body: "The desktop workspace handles real execution. The account only handles sign-in, downloads, and future access boundaries.",
           windowLabel: "Aoryn Workspace",
           windowMeta: "Visible runs, local history, protected access",
-          status: "Authenticated access",
+          status: "Desktop ready",
           railLabel: "Workspace",
           railItems: ["Runs", "Chat", "Screenshots", "Diagnostics"],
           focusLabel: "Current focus",
@@ -447,13 +447,13 @@ export const siteCopy = {
           metrics: [
             { label: "Cloud data", value: "Identity only" },
             { label: "Run history", value: "Stays local" },
-            { label: "Desktop mode", value: "Gated" },
+            { label: "Desktop mode", value: "Ready on install" },
           ],
         },
         cta: {
           eyebrow: "Ready",
-          title: "Sign in first, then unlock downloads and the desktop workspace.",
-          body: "You do not upload your task history, but you do need an account to download and launch the product.",
+          title: "Sign in to download, then use the desktop workspace immediately after install.",
+          body: "Your task history is not uploaded to the cloud. The account only gates website identity and installer access, while the desktop app is ready as soon as it is installed.",
           primaryCta: "Go to download",
           secondaryCta: "Login / Register",
         },
@@ -510,7 +510,7 @@ export const siteCopy = {
         hero: {
           eyebrow: "Workspace",
           title: "One workspace for chat, execution, and replay.",
-          body: "Sign in first, then unlock the desktop shell instead of exposing a pile of scripts and hidden logs.",
+          body: "Open the visible desktop shell right after install instead of hiding the workflow behind scripts and buried logs.",
         },
         sections: [
           {
@@ -528,10 +528,10 @@ export const siteCopy = {
         ],
         preview: {
           eyebrow: "Workspace preview",
-          title: "A main interface unlocked only after authentication.",
-          body: "The account owns identity, the local app owns the workflow, and the device still owns the data.",
+          title: "A main interface that is ready right after install.",
+          body: "The account owns website identity and installer access, the local app owns the workflow, and the device still owns the data.",
           cards: [
-            { label: "Auth", value: "Required on launch" },
+            { label: "Auth", value: "Download only" },
             { label: "History", value: "Local-only" },
             { label: "Diagnostics", value: "Visible in-app" },
           ],
@@ -568,11 +568,11 @@ export const siteCopy = {
         steps: {
           eyebrow: "Install flow",
           title: "What happens before and after download.",
-          body: "Downloads and launch are both gated now, while the actual work data remains local.",
+          body: "Downloads stay gated by account access, while the desktop app launches directly into the local workspace.",
           items: [
             { step: "01", title: "Register and verify", body: "Create an account first and complete the email verification step." },
             { step: "02", title: "Sign in and download", body: "The installer button only appears after a valid authenticated session." },
-            { step: "03", title: "Sign in on launch", body: "The desktop app unlocks the workspace only after a valid local session is present." },
+            { step: "03", title: "Launch and use", body: "After installation, the desktop app opens straight into the workspace without another sign-in gate." },
           ],
         },
         faq: {

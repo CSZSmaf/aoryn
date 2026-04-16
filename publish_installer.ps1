@@ -1,10 +1,11 @@
-$ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
-
 param(
     [switch]$SkipBuild,
-    [switch]$SkipPagesSync
+    [switch]$SkipPagesSync,
+    [string]$ProxyUrl
 )
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $projectRoot
@@ -46,6 +47,11 @@ $publishArgs = @(
 if (-not $SkipPagesSync -and $env:AORYN_CF_API_TOKEN) {
     $publishArgs += "--sync-pages-download-settings"
     $publishArgs += "--retry-pages-deployment"
+}
+
+if ($ProxyUrl) {
+    $publishArgs += "--proxy"
+    $publishArgs += $ProxyUrl
 }
 
 python @publishArgs
