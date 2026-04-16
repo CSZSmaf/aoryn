@@ -103,6 +103,10 @@ function trapFocus(container, event) {
   }
 }
 
+function getRevealStyle(index = 0, baseDelay = 0, step = 80) {
+  return { "--reveal-delay": `${baseDelay + index * step}ms` };
+}
+
 function SectionHeading({ eyebrow, title, body }) {
   return (
     <div className="section-heading reveal">
@@ -147,7 +151,7 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
   return (
     <>
       <section className="hero-shell">
-        <div className="hero-copy reveal">
+        <div className="hero-copy reveal" style={getRevealStyle(0, 40, 120)}>
           <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
           <h1>{pageCopy.hero.title}</h1>
           <p>{pageCopy.hero.body}</p>
@@ -170,7 +174,7 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
           </div>
         </div>
 
-        <div className="hero-stage reveal" aria-label={pageCopy.stage.title}>
+        <div className="hero-stage reveal" aria-label={pageCopy.stage.title} style={getRevealStyle(1, 120, 120)}>
           <article className="stage-window">
             <div className="stage-window__topbar">
               <div className="brand brand--stage">
@@ -209,8 +213,8 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
                 </div>
 
                 <div className="metric-row">
-                  {pageCopy.stage.metrics.map((item) => (
-                    <article className="metric-card" key={item.label}>
+                  {pageCopy.stage.metrics.map((item, index) => (
+                    <article className="metric-card" key={item.label} style={getRevealStyle(index, 220, 70)}>
                       <strong>{item.value}</strong>
                       <span>{item.label}</span>
                     </article>
@@ -224,8 +228,8 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
 
       <section className="section-shell section-shell--compact">
         <div className="feature-grid">
-          {cards.map((item) => (
-            <Link className="feature-card reveal" to={item.href} key={item.title}>
+          {cards.map((item, index) => (
+            <Link className="feature-card reveal" to={item.href} key={item.title} style={getRevealStyle(index, 80, 90)}>
               <h3>{item.title}</h3>
               <p>{item.body}</p>
             </Link>
@@ -235,7 +239,7 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
 
       {!authenticated ? (
         <section className="section-shell">
-          <article className="cta-band reveal">
+          <article className="cta-band reveal" style={getRevealStyle(0, 100)}>
             <div>
               <span className="section-heading__eyebrow">{pageCopy.cta.eyebrow}</span>
               <h2>{pageCopy.cta.title}</h2>
@@ -261,7 +265,7 @@ function ProductPage({ copy }) {
 
   return (
     <>
-      <section className="detail-hero detail-hero--single reveal">
+      <section className="detail-hero detail-hero--single reveal" style={getRevealStyle(0, 30)}>
         <div className="detail-hero__copy">
           <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
           <h1>{pageCopy.hero.title}</h1>
@@ -276,8 +280,8 @@ function ProductPage({ copy }) {
           body={pageCopy.pillars.body}
         />
         <div className="detail-grid detail-grid--three">
-          {pageCopy.pillars.items.map((item) => (
-            <article className="detail-card reveal" key={item.title}>
+          {pageCopy.pillars.items.map((item, index) => (
+            <article className="detail-card reveal" key={item.title} style={getRevealStyle(index, 40, 80)}>
               <span className="detail-card__eyebrow">{item.note}</span>
               <h3>{item.title}</h3>
               <p>{item.body}</p>
@@ -293,8 +297,8 @@ function ProductPage({ copy }) {
           body={pageCopy.workflow.body}
         />
         <div className="detail-grid detail-grid--steps">
-          {pageCopy.workflow.items.map((item) => (
-            <article className="detail-card reveal" key={item.title}>
+          {pageCopy.workflow.items.map((item, index) => (
+            <article className="detail-card detail-card--step reveal" key={item.title} style={getRevealStyle(index, 40, 90)}>
               <span className="detail-card__eyebrow">{item.step}</span>
               <h3>{item.title}</h3>
               <p>{item.body}</p>
@@ -316,7 +320,7 @@ function WorkspacePage({ copy, authenticated, locale }) {
 
   return (
     <>
-      <section className="detail-hero detail-hero--single reveal">
+      <section className="detail-hero detail-hero--single reveal" style={getRevealStyle(0, 30)}>
         <div className="detail-hero__copy">
           <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
           <h1>{pageCopy.hero.title}</h1>
@@ -325,15 +329,15 @@ function WorkspacePage({ copy, authenticated, locale }) {
       </section>
 
       <section className="section-shell">
-        <article className="workspace-stage reveal">
+        <article className="workspace-stage reveal" style={getRevealStyle(0, 70)}>
           <div>
             <span className="section-heading__eyebrow">{pageCopy.preview.eyebrow}</span>
             <h2>{pageCopy.preview.title}</h2>
             <p>{pageCopy.preview.body}</p>
           </div>
           <div className="metric-row metric-row--wide">
-            {pageCopy.preview.cards.map((item) => (
-              <article className="metric-card metric-card--soft" key={item.label}>
+            {pageCopy.preview.cards.map((item, index) => (
+              <article className="metric-card metric-card--soft" key={item.label} style={getRevealStyle(index, 150, 80)}>
                 <strong>{item.value}</strong>
                 <span>{item.label}</span>
               </article>
@@ -344,8 +348,8 @@ function WorkspacePage({ copy, authenticated, locale }) {
 
       <section className="section-shell">
         <div className="detail-grid detail-grid--three">
-          {pageCopy.sections.map((item) => (
-            <article className="detail-card reveal" key={item.title}>
+          {pageCopy.sections.map((item, index) => (
+            <article className="detail-card reveal" key={item.title} style={getRevealStyle(index, 40, 80)}>
               <h3>{item.title}</h3>
               <p>{item.body}</p>
             </article>
@@ -373,7 +377,7 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
     <>
       {canDownload ? (
         <section className="section-shell section-shell--download-top">
-          <article className="download-gate reveal is-unlocked">
+          <article className="download-gate reveal is-unlocked" style={getRevealStyle(0, 40)}>
             <div className="download-gate__content">
               <span className="section-heading__eyebrow">{pageCopy.unlocked.eyebrow}</span>
               <h2>{pageCopy.unlocked.title}</h2>
@@ -388,7 +392,7 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
           </article>
         </section>
       ) : (
-        <section className="detail-hero reveal">
+        <section className="detail-hero reveal" style={getRevealStyle(0, 30)}>
           <div className="detail-hero__copy">
             <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
             <h1>{pageCopy.hero.title}</h1>
@@ -413,8 +417,8 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
 
       <section className="section-shell section-shell--compact">
         <div className="download-meta-grid">
-          {packageMeta.map((item) => (
-            <article className="download-meta-card reveal" key={item.label}>
+          {packageMeta.map((item, index) => (
+            <article className="download-meta-card reveal" key={item.label} style={getRevealStyle(index, 50, 70)}>
               <span>{item.label}</span>
               <strong>{item.value}</strong>
             </article>
@@ -431,8 +435,8 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
               body={pageCopy.steps.body}
             />
             <div className="detail-grid detail-grid--three">
-              {pageCopy.steps.items.map((item) => (
-                <article className="detail-card reveal" key={item.title}>
+              {pageCopy.steps.items.map((item, index) => (
+                <article className="detail-card detail-card--step reveal" key={item.title} style={getRevealStyle(index, 40, 80)}>
                   <span className="detail-card__eyebrow">{item.step}</span>
                   <h3>{item.title}</h3>
                   <p>{item.body}</p>
@@ -448,8 +452,8 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
               body={pageCopy.faq.body}
             />
             <div className="faq-list">
-              {pageCopy.faq.items.map((item) => (
-                <details className="faq-item reveal" key={item.question}>
+              {pageCopy.faq.items.map((item, index) => (
+                <details className="faq-item reveal" key={item.question} style={getRevealStyle(index, 40, 70)}>
                   <summary>{item.question}</summary>
                   <p>{item.answer}</p>
                 </details>
@@ -465,7 +469,7 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
 function LegalPage({ pageCopy }) {
   return (
     <>
-      <section className="detail-hero detail-hero--single reveal">
+      <section className="detail-hero detail-hero--single reveal" style={getRevealStyle(0, 30)}>
         <div className="detail-hero__copy">
           <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
           <h1>{pageCopy.hero.title}</h1>
@@ -475,8 +479,8 @@ function LegalPage({ pageCopy }) {
 
       <section className="section-shell">
         <div className="legal-stack">
-          {pageCopy.sections.map((item) => (
-            <article className="legal-card reveal" key={item.title}>
+          {pageCopy.sections.map((item, index) => (
+            <article className="legal-card reveal" key={item.title} style={getRevealStyle(index, 40, 90)}>
               <h2>{item.title}</h2>
               <p>{item.body}</p>
             </article>
