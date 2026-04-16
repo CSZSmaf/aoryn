@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import {
   BrowserRouter,
   Link,
@@ -294,7 +294,7 @@ function ProductPage({ copy }) {
         />
         <div className="detail-grid detail-grid--steps">
           {pageCopy.workflow.items.map((item) => (
-            <article className="detail-card reveal" key={item.title}>
+            <article className="detail-card detail-card--step reveal" key={item.title}>
               <span className="detail-card__eyebrow">{item.step}</span>
               <h3>{item.title}</h3>
               <p>{item.body}</p>
@@ -326,12 +326,12 @@ function WorkspacePage({ copy, authenticated, locale }) {
 
       <section className="section-shell">
         <article className="workspace-stage reveal">
-          <div>
+          <div className="workspace-stage__copy">
             <span className="section-heading__eyebrow">{pageCopy.preview.eyebrow}</span>
             <h2>{pageCopy.preview.title}</h2>
             <p>{pageCopy.preview.body}</p>
           </div>
-          <div className="metric-row metric-row--wide">
+          <div className="workspace-stage__metrics metric-row metric-row--wide">
             {pageCopy.preview.cards.map((item) => (
               <article className="metric-card metric-card--soft" key={item.label}>
                 <strong>{item.value}</strong>
@@ -432,7 +432,7 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
             />
             <div className="detail-grid detail-grid--three">
               {pageCopy.steps.items.map((item) => (
-                <article className="detail-card reveal" key={item.title}>
+                <article className="detail-card detail-card--step reveal" key={item.title}>
                   <span className="detail-card__eyebrow">{item.step}</span>
                   <h3>{item.title}</h3>
                   <p>{item.body}</p>
@@ -508,7 +508,8 @@ function AuthModal({
   return (
     <div className="modal-shell" onMouseDown={(event) => event.target === event.currentTarget && closeModal()}>
       <div className="modal-card auth-modal" ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
-        <div className="modal-card__head">
+        <div className="auth-modal__intro">
+          <div className="modal-card__head">
           <div>
             <span className="section-heading__eyebrow">
               {isRegister ? copy.auth.registerTitle : copy.auth.loginTitle}
@@ -522,7 +523,10 @@ function AuthModal({
 
         <p className="modal-card__body">{copy.auth.dialogBody}</p>
 
-        <div className="auth-tabs" role="tablist" aria-label={copy.auth.dialogTitle}>
+        </div>
+
+        <div className="auth-modal__panel">
+          <div className="auth-tabs" role="tablist" aria-label={copy.auth.dialogTitle}>
           <button
             className={mode === "login" ? "auth-tab auth-tab--active" : "auth-tab"}
             type="button"
@@ -650,6 +654,7 @@ function AuthModal({
           </div>
         </form>
       </div>
+    </div>
     </div>
   );
 }
@@ -1113,3 +1118,4 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
