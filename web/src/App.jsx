@@ -230,6 +230,7 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
         <div className="feature-grid">
           {cards.map((item, index) => (
             <Link className="feature-card reveal" to={item.href} key={item.title} style={getRevealStyle(index, 80, 90)}>
+              <span className="feature-card__index">{String(index + 1).padStart(2, "0")}</span>
               <h3>{item.title}</h3>
               <p>{item.body}</p>
             </Link>
@@ -279,7 +280,7 @@ function ProductPage({ copy }) {
           title={pageCopy.pillars.title}
           body={pageCopy.pillars.body}
         />
-        <div className="detail-grid detail-grid--three">
+        <div className="detail-grid detail-grid--three detail-grid--pillars">
           {pageCopy.pillars.items.map((item, index) => (
             <article className="detail-card reveal" key={item.title} style={getRevealStyle(index, 40, 80)}>
               <span className="detail-card__eyebrow">{item.note}</span>
@@ -296,7 +297,7 @@ function ProductPage({ copy }) {
           title={pageCopy.workflow.title}
           body={pageCopy.workflow.body}
         />
-        <div className="detail-grid detail-grid--steps">
+        <div className="detail-grid detail-grid--steps detail-grid--workflow">
           {pageCopy.workflow.items.map((item, index) => (
             <article className="detail-card detail-card--step reveal" key={item.title} style={getRevealStyle(index, 40, 90)}>
               <span className="detail-card__eyebrow">{item.step}</span>
@@ -330,12 +331,12 @@ function WorkspacePage({ copy, authenticated, locale }) {
 
       <section className="section-shell">
         <article className="workspace-stage reveal" style={getRevealStyle(0, 70)}>
-          <div>
+          <div className="workspace-stage__copy">
             <span className="section-heading__eyebrow">{pageCopy.preview.eyebrow}</span>
             <h2>{pageCopy.preview.title}</h2>
             <p>{pageCopy.preview.body}</p>
           </div>
-          <div className="metric-row metric-row--wide">
+          <div className="metric-row metric-row--wide workspace-stage__metrics">
             {pageCopy.preview.cards.map((item, index) => (
               <article className="metric-card metric-card--soft" key={item.label} style={getRevealStyle(index, 150, 80)}>
                 <strong>{item.value}</strong>
@@ -347,7 +348,7 @@ function WorkspacePage({ copy, authenticated, locale }) {
       </section>
 
       <section className="section-shell">
-        <div className="detail-grid detail-grid--three">
+        <div className="detail-grid detail-grid--three detail-grid--workspace">
           {pageCopy.sections.map((item, index) => (
             <article className="detail-card reveal" key={item.title} style={getRevealStyle(index, 40, 80)}>
               <h3>{item.title}</h3>
@@ -392,7 +393,7 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
           </article>
         </section>
       ) : (
-        <section className="detail-hero reveal" style={getRevealStyle(0, 30)}>
+        <section className="detail-hero detail-hero--download reveal" style={getRevealStyle(0, 30)}>
           <div className="detail-hero__copy">
             <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
             <h1>{pageCopy.hero.title}</h1>
@@ -434,7 +435,7 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
               title={pageCopy.steps.title}
               body={pageCopy.steps.body}
             />
-            <div className="detail-grid detail-grid--three">
+            <div className="detail-grid detail-grid--three detail-grid--download-steps">
               {pageCopy.steps.items.map((item, index) => (
                 <article className="detail-card detail-card--step reveal" key={item.title} style={getRevealStyle(index, 40, 80)}>
                   <span className="detail-card__eyebrow">{item.step}</span>
@@ -508,10 +509,25 @@ function AuthModal({
 }) {
   const fieldCopy = copy.auth.fields;
   const isRegister = mode === "register";
+  const signalChips = copy.pages.home.stage.chips.slice(0, 3);
 
   return (
     <div className="modal-shell" onMouseDown={(event) => event.target === event.currentTarget && closeModal()}>
       <div className="modal-card auth-modal" ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+        <div className="auth-modal__intro">
+          <span className="section-heading__eyebrow">{copy.brandDescriptor}</span>
+          <h2>{isRegister ? copy.auth.registerTitle : copy.auth.loginTitle}</h2>
+          <p>{copy.auth.dialogBody}</p>
+          <div className="auth-modal__signals">
+            {signalChips.map((chip) => (
+              <span className="auth-modal__signal" key={chip}>
+                {chip}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="auth-modal__panel">
         <div className="modal-card__head">
           <div>
             <span className="section-heading__eyebrow">
@@ -653,6 +669,7 @@ function AuthModal({
             </button>
           </div>
         </form>
+        </div>
       </div>
     </div>
   );
@@ -1037,7 +1054,7 @@ function AppFrame() {
         </div>
       ) : null}
 
-      <main className="page-root">
+      <main className={`page-root page-root--${pageKey}`}>
         <Routes>
           <Route
             path="/"
