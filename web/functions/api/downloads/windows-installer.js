@@ -1,12 +1,37 @@
 import { jsonResponse, mergeHeaders, resolveBrowserSession } from "../auth/_shared.js";
 
 const DEFAULT_WINDOWS_INSTALLER_KEY = "Aoryn-Setup-0.1.5.exe";
+const DEFAULT_WINDOWS_INSTALLER_URL = `https://downloads.aoryn.org/${DEFAULT_WINDOWS_INSTALLER_KEY}`;
 
 function guessContentType(fileName) {
   const lower = String(fileName || "").trim().toLowerCase();
   if (lower.endsWith(".exe")) return "application/vnd.microsoft.portable-executable";
   if (lower.endsWith(".zip")) return "application/zip";
   return "application/octet-stream";
+}
+
+function buildFallbackUrl(context, objectKey) {
+  const override = String(context.env.AORYN_WINDOWS_INSTALLER_URL || "").trim();
+  if (override) {
+    return override;
+  }
+
+  const safeKey = encodeURIComponent(String(objectKey || DEFAULT_WINDOWS_INSTALLER_KEY).trim() || DEFAULT_WINDOWS_INSTALLER_KEY);
+  return `https://downloads.aoryn.org/${safeKey}`;
+}
+
+function redirectToInstaller(url, extraHeaders) {
+  const headers = mergeHeaders(
+    {
+      location: url,
+      "cache-control": "private, no-store",
+    },
+    extraHeaders,
+  );
+  return new Response(null, {
+    status: 302,
+    headers,
+  });
 }
 
 export async function onRequestGet(context) {
@@ -21,27 +46,16 @@ export async function onRequestGet(context) {
     );
   }
 
+  const objectKey = String(context.env.AORYN_WINDOWS_INSTALLER_KEY || DEFAULT_WINDOWS_INSTALLER_KEY).trim();
+  const fallbackUrl = buildFallbackUrl(context, objectKey);
   const bucket = context.env.AORYN_DOWNLOADS;
   if (!bucket || typeof bucket.get !== "function") {
-    return jsonResponse(
-      {
-        message: "AORYN_DOWNLOADS is not configured in Cloudflare Pages.",
-      },
-      500,
-      resolved.headers,
-    );
+    return redirectToInstaller(fallbackUrl, resolved.headers);
   }
 
-  const objectKey = String(context.env.AORYN_WINDOWS_INSTALLER_KEY || DEFAULT_WINDOWS_INSTALLER_KEY).trim();
   const object = await bucket.get(objectKey);
   if (!object) {
-    return jsonResponse(
-      {
-        message: `The configured installer was not found: ${objectKey}`,
-      },
-      404,
-      resolved.headers,
-    );
+    return redirectToInstaller(fallbackUrl, resolved.headers);
   }
 
   const headers = new Headers();

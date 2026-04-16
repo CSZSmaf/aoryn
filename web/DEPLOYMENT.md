@@ -5,7 +5,8 @@ This website is deployed as a Cloudflare Pages project backed by:
 - `https://aoryn.org` as the primary production site
 - `https://www.aoryn.org` redirecting to `https://aoryn.org`
 - `GET /api/downloads/windows-installer` as the gated installer route
-- an R2 bucket binding named `AORYN_DOWNLOADS` that stores `Aoryn-Setup-0.1.5.exe`
+- an optional R2 bucket binding named `AORYN_DOWNLOADS` that can stream `Aoryn-Setup-0.1.5.exe`
+- a fallback public installer URL on `downloads.aoryn.org` for Pages environments where R2 bindings cannot be published
 
 ## 1. GitHub
 
@@ -39,14 +40,17 @@ SUPABASE_URL=<your Supabase project URL>
 SUPABASE_ANON_KEY=<your Supabase anon key>
 SUPABASE_SITE_URL=https://aoryn.org
 AORYN_WINDOWS_INSTALLER_KEY=Aoryn-Setup-0.1.5.exe
+AORYN_WINDOWS_INSTALLER_URL=https://downloads.aoryn.org/Aoryn-Setup-0.1.5.exe
 ```
 
-Add an R2 bucket binding:
+Optional: add an R2 bucket binding if your Pages project can publish Functions with R2 successfully:
 
 ```text
 Binding name: AORYN_DOWNLOADS
 Bucket: <the bucket that stores release installers>
 ```
+
+If Cloudflare Pages rejects the R2 binding during deploy, remove the binding and keep `AORYN_WINDOWS_INSTALLER_URL` set. The authenticated download route will then redirect signed-in users to the fallback installer URL instead of streaming from R2 directly.
 
 The frontend does not use `VITE_DOWNLOAD_URL`. The download button always points to the authenticated route:
 
@@ -83,9 +87,9 @@ On the R2 bucket that stores the installer:
 
 - upload `Aoryn-Setup-0.1.5.exe`
 - keep the object key aligned with `AORYN_WINDOWS_INSTALLER_KEY`
-- optionally bind `downloads.aoryn.org` if you want a dedicated file-hosting domain for operations or auditing
+- keep `downloads.aoryn.org` pointed at the bucket if you want the authenticated route to fall back to a public installer URL
 
-The website no longer depends on a public download URL as its main entry point. Public R2 domains are optional operational detail, not the button target shown to users.
+The website button still points to `/api/downloads/windows-installer`. When R2 bindings are healthy, the Function streams from R2. When Pages cannot publish the binding, the Function can fall back to `AORYN_WINDOWS_INSTALLER_URL` after login.
 
 ## 5. Local Build Check
 
@@ -105,10 +109,11 @@ web/dist
 ## 6. Production Release Checklist
 
 1. Push the `main` branch changes that contain the new website and release metadata.
-2. Upload `Aoryn-Setup-0.1.5.exe` to the bound R2 bucket.
+2. Upload `Aoryn-Setup-0.1.5.exe` to the R2 bucket behind `downloads.aoryn.org`.
 3. Confirm `AORYN_WINDOWS_INSTALLER_KEY` matches the uploaded object key.
-4. Trigger a production Pages deployment.
-5. Sign in on `https://aoryn.org/download` and verify the protected download flow.
+4. If R2 bindings work in your Pages project, keep `AORYN_DOWNLOADS`; otherwise remove the binding and keep `AORYN_WINDOWS_INSTALLER_URL` set.
+5. Trigger a production Pages deployment.
+6. Sign in on `https://aoryn.org/download` and verify the protected download flow.
 
 ## 7. Verification Checklist
 
