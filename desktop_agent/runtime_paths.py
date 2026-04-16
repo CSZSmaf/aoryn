@@ -69,6 +69,10 @@ def default_packaged_runtime_preferences_path() -> Path:
     return writable_appdata_config_root() / "runtime-preferences.json"
 
 
+def default_packaged_auth_session_path() -> Path:
+    return writable_appdata_config_root() / "auth-session.json"
+
+
 def default_packaged_run_root() -> Path:
     return writable_local_data_root() / "runs"
 
@@ -109,3 +113,14 @@ def runtime_preferences_path_for(config_path: Path | None) -> Path:
     root = Path(tempfile.gettempdir()) / "desktop-agent-workspace"
     root.mkdir(parents=True, exist_ok=True)
     return root / f"runtime-preferences-{digest}.json"
+
+
+def auth_session_path_for(config_path: Path | None) -> Path:
+    if is_frozen_runtime():
+        return default_packaged_auth_session_path()
+
+    key_source = str(config_path.resolve()) if isinstance(config_path, Path) else "default"
+    digest = hashlib.sha1(key_source.encode("utf-8")).hexdigest()[:10]
+    root = Path(tempfile.gettempdir()) / "desktop-agent-workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / f"auth-session-{digest}.json"

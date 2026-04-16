@@ -1246,6 +1246,35 @@ body[data-ui-mode="developer"] [data-surface="developer"] {
   border-top: none;
 }
 
+.account-status-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 248, 250, 0.96));
+}
+
+.account-status-card__copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.account-status-card__copy strong {
+  font-size: 0.95rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.account-status-card__copy small {
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 .field,
 .toggle-field {
   display: grid;

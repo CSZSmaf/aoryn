@@ -17,6 +17,7 @@ def test_packaged_runtime_uses_appdata_roots(monkeypatch):
         assert runtime_paths.default_packaged_config_path() == roaming / "Aoryn" / "config.yaml"
         assert runtime_paths.default_run_root() == local / "Aoryn" / "runs"
         assert runtime_paths.runtime_preferences_path_for(None) == roaming / "Aoryn" / "runtime-preferences.json"
+        assert runtime_paths.auth_session_path_for(None) == roaming / "Aoryn" / "auth-session.json"
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
 
@@ -77,7 +78,24 @@ def test_packaged_runtime_falls_back_when_appdata_roots_are_not_writable(monkeyp
         assert runtime_paths.default_packaged_runtime_preferences_path() == (
             temp_root / "roaming" / "runtime-preferences.json"
         )
+        assert runtime_paths.default_packaged_auth_session_path() == temp_root / "roaming" / "auth-session.json"
         assert runtime_paths.default_run_root() == temp_root / "local" / "runs"
         assert runtime_paths.default_cache_root() == temp_root / "local" / "cache"
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
+def test_development_auth_session_path_uses_hashed_temp_file(monkeypatch):
+    scratch_root = Path("test_artifacts") / f"runtime_paths_auth_dev_{uuid4().hex}"
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    try:
+        monkeypatch.setattr(runtime_paths.sys, "frozen", False, raising=False)
+        config_path = scratch_root / "config.yaml"
+        config_path.write_text("{}", encoding="utf-8")
+
+        session_path = runtime_paths.auth_session_path_for(config_path)
+
+        assert session_path.name.startswith("auth-session-")
+        assert session_path.suffix == ".json"
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)

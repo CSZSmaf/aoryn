@@ -15,6 +15,6 @@ export const siteConfig = {
       "https://downloads.aoryn.org/Aoryn-Setup-0.1.4.exe",
   },
   registration: {
-    endpoint: import.meta.env.VITE_REGISTER_ENDPOINT || "",
+    endpoint: import.meta.env.VITE_REGISTER_ENDPOINT || "/api/auth/register",
   },
 };

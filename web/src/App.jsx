@@ -857,7 +857,7 @@ function AppFrame() {
       const response = await submitRegistration({
         endpoint: siteConfig.registration.endpoint,
         payload: {
-          name: form.name.trim(),
+          displayName: form.name.trim(),
           email: form.email.trim(),
           password: form.password,
         },

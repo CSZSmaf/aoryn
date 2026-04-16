@@ -312,6 +312,52 @@
               </div>
             </section>
 
+            <section class="settings-section" id="accountSettingsSection">
+              <div class="section-head">
+                <h3 id="accountSettingsTitle">Account</h3>
+              </div>
+
+              <p class="field-note" id="accountSettingsHint"></p>
+
+              <div class="account-status-card">
+                <div class="account-status-card__copy">
+                  <strong id="accountStatusTitle">Signed out</strong>
+                  <small id="accountStatusDetail">Register and sign in with the same account used by the website.</small>
+                </div>
+                <span class="status-pill" id="accountStatusBadge">Signed out</span>
+              </div>
+
+              <label class="field">
+                <span id="authApiBaseUrlLabel">Auth API</span>
+                <input id="authApiBaseUrlInput" type="text" placeholder="https://aoryn.org/api/auth" />
+              </label>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span id="authEmailLabel">Email</span>
+                  <input id="authEmailInput" type="email" placeholder="you@example.com" />
+                </label>
+
+                <label class="field">
+                  <span id="authDisplayNameLabel">Display name</span>
+                  <input id="authDisplayNameInput" type="text" placeholder="Aoryn user" />
+                </label>
+              </div>
+
+              <label class="field">
+                <span id="authPasswordLabel">Password</span>
+                <input id="authPasswordInput" type="password" placeholder="At least 8 characters" />
+              </label>
+
+              <p class="field-note" id="authFeedbackNote"></p>
+
+              <div class="button-row">
+                <button class="secondary-button" id="authRegisterButton" type="button">Register</button>
+                <button class="secondary-button" id="authLoginButton" type="button">Login</button>
+                <button class="secondary-button" id="authLogoutButton" type="button">Logout</button>
+              </div>
+            </section>
+
             <section class="settings-section" id="displaySettingsSection">
               <div class="section-head">
                 <h3 id="displaySettingsTitle">Display &amp; Positioning</h3>

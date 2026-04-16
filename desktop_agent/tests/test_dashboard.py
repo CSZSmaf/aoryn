@@ -595,6 +595,10 @@ def test_dashboard_assets_remove_browser_install_entry_points():
     assert "install-card" not in index_html
     assert 'id="installActionButton"' not in index_html
     assert 'id="displaySettingsSection"' in index_html
+    assert 'id="accountSettingsSection"' in index_html
+    assert 'id="authRegisterButton"' in index_html
+    assert 'id="authLoginButton"' in index_html
+    assert 'id="authLogoutButton"' in index_html
     assert 'id="displayOverrideEnabled"' in index_html
     assert 'id="displayDetectionJsonView"' in index_html
     assert "beforeinstallprompt" not in app_js
@@ -603,6 +607,8 @@ def test_dashboard_assets_remove_browser_install_entry_points():
     assert "getInstallState" not in app_js
     assert '"/api/system/display-detection"' in app_js or "'/api/system/display-detection'" in app_js
     assert "renderDisplayDetection" in app_js
+    assert '"/api/auth/register"' in app_js or "'/api/auth/register'" in app_js
+    assert "renderAccountSettings" in app_js
 
 
 def test_dashboard_runtime_preferences_roundtrip():
@@ -685,6 +691,7 @@ def test_dashboard_system_paths_and_open_path(monkeypatch):
         "run_root": str(temp_root / "runs"),
         "cache_dir": str(temp_root / "cache"),
         "install_dir": str(temp_root / "install"),
+        "auth_session_file": str(temp_root / "auth-session.json"),
     }
 
     server = app.create_server()
@@ -701,6 +708,7 @@ def test_dashboard_system_paths_and_open_path(monkeypatch):
             assert payload["run_root"].endswith("runs")
             assert payload["cache_dir"].endswith("cache")
             assert payload["install_dir"].endswith("install")
+            assert "auth_session_file" in payload
 
         request = urllib.request.Request(
             f"{base_url}/api/system/open-path",
@@ -715,6 +723,103 @@ def test_dashboard_system_paths_and_open_path(monkeypatch):
             assert payload["key"] == "run_root"
             assert payload["path"].endswith("runs")
             assert opened["path"].endswith("runs")
+    finally:
+        server.shutdown()
+        server.server_close()
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_dashboard_auth_routes_roundtrip():
+    temp_root = Path(__file__).resolve().parents[2] / ".pytest-local" / f"aoryn-dashboard-auth-{uuid4().hex}"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    config_path = temp_root / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+
+    app.auth_session_snapshot = lambda: {"authenticated": False, "profile": None}
+    app.auth_me = lambda: {"ok": True, "authenticated": False, "profile": None, "session": {"authenticated": False}}
+    app.auth_register = lambda **kwargs: {
+        "ok": True,
+        "message": "Please check your email to verify the account.",
+        "requires_email_verification": True,
+    }
+    app.auth_login = lambda **kwargs: {
+        "ok": True,
+        "message": "Signed in successfully.",
+        "session": {
+            "authenticated": True,
+            "email": "user@example.com",
+            "display_name": "Aoryn User",
+            "profile": {"email": "user@example.com", "display_name": "Aoryn User"},
+        },
+    }
+    app.auth_logout = lambda **kwargs: {
+        "ok": True,
+        "message": "Signed out successfully.",
+        "session": {"authenticated": False, "profile": None},
+    }
+
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        with urllib.request.urlopen(f"{base_url}/api/auth/session") as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+            assert payload["authenticated"] is False
+
+        with urllib.request.urlopen(f"{base_url}/api/auth/me") as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+            assert payload["ok"] is True
+            assert payload["authenticated"] is False
+
+        register_request = urllib.request.Request(
+            f"{base_url}/api/auth/register",
+            data=json.dumps(
+                {
+                    "email": "user@example.com",
+                    "password": "password123",
+                    "displayName": "Aoryn User",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(register_request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 201
+            assert payload["requires_email_verification"] is True
+
+        login_request = urllib.request.Request(
+            f"{base_url}/api/auth/login",
+            data=json.dumps(
+                {
+                    "email": "user@example.com",
+                    "password": "password123",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(login_request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 202
+            assert payload["session"]["authenticated"] is True
+            assert payload["session"]["email"] == "user@example.com"
+
+        logout_request = urllib.request.Request(
+            f"{base_url}/api/auth/logout",
+            data=json.dumps({}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(logout_request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 202
+            assert payload["session"]["authenticated"] is False
     finally:
         server.shutdown()
         server.server_close()

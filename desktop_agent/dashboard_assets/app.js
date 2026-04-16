@@ -250,6 +250,10 @@ const state = {
   helpContent: null,
   helpLoading: false,
   helpError: "",
+  authSession: null,
+  authBusy: false,
+  authFeedbackTone: "",
+  authFeedbackMessage: "",
   aboutOpen: false,
   aboutRestoreFocus: null,
   onboardingPrompted: false,
@@ -301,6 +305,23 @@ const elements = {
   sendShortcutSelect: document.getElementById("sendShortcutSelect"),
   maxStepsInput: document.getElementById("maxStepsInput"),
   pauseInput: document.getElementById("pauseInput"),
+  accountSettingsTitle: document.getElementById("accountSettingsTitle"),
+  accountSettingsHint: document.getElementById("accountSettingsHint"),
+  accountStatusTitle: document.getElementById("accountStatusTitle"),
+  accountStatusDetail: document.getElementById("accountStatusDetail"),
+  accountStatusBadge: document.getElementById("accountStatusBadge"),
+  authApiBaseUrlInput: document.getElementById("authApiBaseUrlInput"),
+  authEmailInput: document.getElementById("authEmailInput"),
+  authDisplayNameInput: document.getElementById("authDisplayNameInput"),
+  authPasswordInput: document.getElementById("authPasswordInput"),
+  authFeedbackNote: document.getElementById("authFeedbackNote"),
+  authRegisterButton: document.getElementById("authRegisterButton"),
+  authLoginButton: document.getElementById("authLoginButton"),
+  authLogoutButton: document.getElementById("authLogoutButton"),
+  authApiBaseUrlLabel: document.getElementById("authApiBaseUrlLabel"),
+  authEmailLabel: document.getElementById("authEmailLabel"),
+  authDisplayNameLabel: document.getElementById("authDisplayNameLabel"),
+  authPasswordLabel: document.getElementById("authPasswordLabel"),
   displaySettingsTitle: document.getElementById("displaySettingsTitle"),
   displaySettingsHint: document.getElementById("displaySettingsHint"),
   displayDetectionSummaryGrid: document.getElementById("displayDetectionSummaryGrid"),
@@ -421,6 +442,17 @@ function bindEvents() {
   elements.closeHelpButton?.addEventListener("click", closeHelpCenter);
   elements.languageSelect?.addEventListener("change", (event) => setLocale(event.target.value));
   elements.sendShortcutSelect?.addEventListener("change", (event) => setSendShortcutMode(event.target.value));
+  elements.authRegisterButton?.addEventListener("click", handleAuthRegister);
+  elements.authLoginButton?.addEventListener("click", handleAuthLogin);
+  elements.authLogoutButton?.addEventListener("click", handleAuthLogout);
+  elements.authApiBaseUrlInput?.addEventListener("blur", persistAuthPreferences);
+  elements.authEmailInput?.addEventListener("blur", persistAuthPreferences);
+  elements.authDisplayNameInput?.addEventListener("blur", persistAuthPreferences);
+  elements.authPasswordInput?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    handleAuthLogin();
+  });
   elements.displayOverrideEnabled?.addEventListener("change", handleDisplayOverrideToggle);
   elements.displayResetButton?.addEventListener("click", resetDisplayOverrides);
   elements.taskForm?.addEventListener("submit", handleSubmit);
@@ -496,6 +528,7 @@ async function refreshOverview(options = {}) {
   state.usingCachedSnapshot = false;
   state.meta = payload.meta || null;
   state.runtimePreferences = payload.runtime_preferences || state.runtimePreferences;
+  state.authSession = payload.auth_session || state.authSession;
   syncChatLaunchState(state.meta);
   state.activeJob = payload.active_job || null;
   state.jobs = payload.jobs || [];
@@ -535,8 +568,18 @@ function hydrateDefaults() {
 
   if (firstHydration) {
     const defaults = state.meta.defaults || {};
+    const uiPreferences = getUiPreferences();
     elements.maxStepsInput.value = defaults.max_steps ?? "";
     elements.pauseInput.value = defaults.pause_after_action ?? "";
+    if (elements.authApiBaseUrlInput) {
+      elements.authApiBaseUrlInput.value = uiPreferences.auth_api_base_url || "";
+    }
+    if (elements.authEmailInput) {
+      elements.authEmailInput.value = uiPreferences.auth_email || "";
+    }
+    if (elements.authDisplayNameInput) {
+      elements.authDisplayNameInput.value = uiPreferences.auth_display_name || "";
+    }
     elements.modelBaseUrl.value = defaults.model_base_url ?? "";
     elements.modelName.value = defaults.model_name ?? "";
     elements.modelApiKey.value = defaults.model_api_key ?? "";
@@ -3433,6 +3476,7 @@ function renderSettingsProfile() {
   if (elements.configBadge) {
     elements.configBadge.textContent = "";
   }
+  renderAccountSettings();
 }
 
 function renderOnboardingGuide() {
@@ -3644,6 +3688,242 @@ async function handleAboutPanelClick(event) {
 
   if (event.target.closest("[data-copy-diagnostics]")) {
     await copyTextToClipboard(buildAboutDiagnosticsSummary());
+  }
+}
+
+function getAccountUiPreferences() {
+  const preferences = getUiPreferences();
+  return {
+    auth_api_base_url: String(preferences.auth_api_base_url || "").trim() || "https://aoryn.org/api/auth",
+    auth_email: String(preferences.auth_email || "").trim(),
+    auth_display_name: String(preferences.auth_display_name || "").trim(),
+  };
+}
+
+function setAuthFeedback(tone, message) {
+  state.authFeedbackTone = tone || "";
+  state.authFeedbackMessage = String(message || "").trim();
+}
+
+function readAuthFormValues() {
+  return {
+    apiBaseUrl: (elements.authApiBaseUrlInput?.value || "").trim(),
+    email: (elements.authEmailInput?.value || "").trim(),
+    displayName: (elements.authDisplayNameInput?.value || "").trim(),
+    password: elements.authPasswordInput?.value || "",
+  };
+}
+
+async function persistAuthPreferences() {
+  const { apiBaseUrl, email, displayName } = readAuthFormValues();
+  await updateUiPreferences({
+    auth_api_base_url: apiBaseUrl || "https://aoryn.org/api/auth",
+    auth_email: email,
+    auth_display_name: displayName,
+  });
+}
+
+async function loadAuthSession({ silent = false } = {}) {
+  const payload = await fetchJson("/api/auth/session");
+  if (payload) {
+    state.authSession = payload;
+  } else if (!state.authSession) {
+    state.authSession = null;
+  }
+  if (!silent) {
+    renderAll();
+  }
+  return state.authSession;
+}
+
+function renderAccountSettings() {
+  const isEnglish = state.locale === "en-US";
+  const session = state.authSession || {};
+  const authenticated = Boolean(session.authenticated);
+  const profile = session.profile || {};
+  const email = String(session.email || profile.email || "").trim();
+  const displayName = String(session.display_name || profile.display_name || "").trim();
+
+  if (elements.accountSettingsTitle) {
+    elements.accountSettingsTitle.textContent = isEnglish ? "Account" : "账号";
+  }
+  if (elements.accountSettingsHint) {
+    elements.accountSettingsHint.textContent = isEnglish
+      ? "Only identity and the basic profile are stored in the cloud. Tasks, history, screenshots, and config stay on this device."
+      : "云端只保存身份与基础资料。任务、历史、截图和配置继续留在这台设备。";
+  }
+  if (elements.authApiBaseUrlLabel) {
+    elements.authApiBaseUrlLabel.textContent = isEnglish ? "Auth API" : "认证接口";
+  }
+  if (elements.authEmailLabel) {
+    elements.authEmailLabel.textContent = isEnglish ? "Email" : "邮箱";
+  }
+  if (elements.authDisplayNameLabel) {
+    elements.authDisplayNameLabel.textContent = isEnglish ? "Display name" : "显示名称";
+  }
+  if (elements.authPasswordLabel) {
+    elements.authPasswordLabel.textContent = isEnglish ? "Password" : "密码";
+  }
+  if (elements.authRegisterButton) {
+    elements.authRegisterButton.textContent = isEnglish ? "Register" : "注册";
+    elements.authRegisterButton.disabled = state.authBusy;
+  }
+  if (elements.authLoginButton) {
+    elements.authLoginButton.textContent = isEnglish ? "Login" : "登录";
+    elements.authLoginButton.disabled = state.authBusy;
+  }
+  if (elements.authLogoutButton) {
+    elements.authLogoutButton.textContent = isEnglish ? "Logout" : "退出登录";
+    elements.authLogoutButton.disabled = state.authBusy || !authenticated;
+  }
+  if (elements.accountStatusTitle) {
+    elements.accountStatusTitle.textContent = state.authBusy
+      ? isEnglish
+        ? "Syncing account..."
+        : "正在处理账号…"
+      : authenticated
+      ? displayName || email || (isEnglish ? "Signed in" : "已登录")
+      : isEnglish
+      ? "Signed out"
+      : "未登录";
+  }
+  if (elements.accountStatusDetail) {
+    elements.accountStatusDetail.textContent = authenticated
+      ? email || (isEnglish ? "Session stored locally on this device." : "会话已安全保存在本机。")
+      : isEnglish
+      ? "Register or sign in with the same account used by the website."
+      : "使用与官网相同的账号注册或登录。";
+  }
+  if (elements.accountStatusBadge) {
+    elements.accountStatusBadge.className = `status-pill ${state.authBusy ? "warn" : authenticated ? "ok" : ""}`.trim();
+    elements.accountStatusBadge.textContent = state.authBusy
+      ? isEnglish
+        ? "Working"
+        : "处理中"
+      : authenticated
+      ? isEnglish
+        ? "Signed in"
+        : "已登录"
+      : isEnglish
+      ? "Signed out"
+      : "未登录";
+  }
+  if (elements.authFeedbackNote) {
+    elements.authFeedbackNote.textContent = state.authFeedbackMessage;
+    if (state.authFeedbackTone) {
+      elements.authFeedbackNote.dataset.tone = state.authFeedbackTone;
+    } else {
+      delete elements.authFeedbackNote.dataset.tone;
+    }
+  }
+}
+
+async function handleAuthRegister() {
+  const { apiBaseUrl, email, displayName, password } = readAuthFormValues();
+  if (!email) {
+    setAuthFeedback("bad", tr("请输入邮箱。", "Please enter an email address."));
+    renderAll();
+    return;
+  }
+  if (password.length < 8) {
+    setAuthFeedback("bad", tr("密码至少需要 8 个字符。", "Password must be at least 8 characters long."));
+    renderAll();
+    return;
+  }
+
+  state.authBusy = true;
+  setAuthFeedback("", "");
+  renderAll();
+  try {
+    const response = await postJson("/api/auth/register", {
+      apiBaseUrl,
+      email,
+      password,
+      displayName,
+    });
+    if (!response.ok) {
+      throw new Error(response.payload?.error || response.payload?.message || tr("注册失败。", "Registration failed."));
+    }
+    await persistAuthPreferences();
+    if (elements.authPasswordInput) {
+      elements.authPasswordInput.value = "";
+    }
+    setAuthFeedback(
+      "ok",
+      response.payload?.message || tr("请检查邮箱并完成验证。", "Please check your email and complete the verification.")
+    );
+    await loadAuthSession({ silent: true });
+  } catch (error) {
+    setAuthFeedback("bad", error instanceof Error ? error.message : tr("注册失败。", "Registration failed."));
+  } finally {
+    state.authBusy = false;
+    renderAll();
+  }
+}
+
+async function handleAuthLogin() {
+  const { apiBaseUrl, email, displayName, password } = readAuthFormValues();
+  if (!email) {
+    setAuthFeedback("bad", tr("请输入邮箱。", "Please enter an email address."));
+    renderAll();
+    return;
+  }
+  if (!password) {
+    setAuthFeedback("bad", tr("请输入密码。", "Please enter your password."));
+    renderAll();
+    return;
+  }
+
+  state.authBusy = true;
+  setAuthFeedback("", "");
+  renderAll();
+  try {
+    const response = await postJson("/api/auth/login", {
+      apiBaseUrl,
+      email,
+      password,
+    });
+    if (!response.ok) {
+      throw new Error(response.payload?.error || response.payload?.message || tr("登录失败。", "Login failed."));
+    }
+    state.authSession = response.payload?.session || state.authSession;
+    if (elements.authPasswordInput) {
+      elements.authPasswordInput.value = "";
+    }
+    const profile = state.authSession?.profile || {};
+    if (elements.authDisplayNameInput && !elements.authDisplayNameInput.value.trim()) {
+      elements.authDisplayNameInput.value = String(profile.display_name || displayName || "").trim();
+    }
+    await persistAuthPreferences();
+    setAuthFeedback("ok", response.payload?.message || tr("登录成功。", "Signed in successfully."));
+  } catch (error) {
+    setAuthFeedback("bad", error instanceof Error ? error.message : tr("登录失败。", "Login failed."));
+  } finally {
+    state.authBusy = false;
+    renderAll();
+  }
+}
+
+async function handleAuthLogout() {
+  const { apiBaseUrl } = readAuthFormValues();
+  state.authBusy = true;
+  setAuthFeedback("", "");
+  renderAll();
+  try {
+    const response = await postJson("/api/auth/logout", { apiBaseUrl });
+    if (!response.ok) {
+      throw new Error(response.payload?.error || response.payload?.message || tr("退出失败。", "Sign out failed."));
+    }
+    state.authSession = response.payload?.session || null;
+    if (elements.authPasswordInput) {
+      elements.authPasswordInput.value = "";
+    }
+    setAuthFeedback("ok", response.payload?.message || tr("已退出登录。", "Signed out successfully."));
+  } catch (error) {
+    setAuthFeedback("bad", error instanceof Error ? error.message : tr("退出失败。", "Sign out failed."));
+  } finally {
+    state.authBusy = false;
+    renderAll();
   }
 }
 
