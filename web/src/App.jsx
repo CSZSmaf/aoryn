@@ -178,7 +178,7 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
           <article className="stage-window">
             <div className="stage-window__topbar">
               <div className="brand brand--stage">
-                <img src="/aoryn-logo-web.png" alt="" />
+                <img src="/aoryn-logo-web-transparent.png" alt="" />
                 <div>
                   <strong>{pageCopy.stage.windowLabel}</strong>
                   <span>{pageCopy.stage.windowMeta}</span>
@@ -952,7 +952,7 @@ function AppFrame() {
 
       <header className="topbar">
         <Link className="brand" to="/" aria-label={siteConfig.siteName}>
-          <img src="/aoryn-logo-web.png" alt="" />
+          <img src="/aoryn-logo-web-transparent.png" alt="" />
           <div>
             <strong>{siteConfig.siteName}</strong>
             <span>{copy.brandDescriptor}</span>
