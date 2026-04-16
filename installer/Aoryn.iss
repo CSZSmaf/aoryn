@@ -84,6 +84,7 @@ var
   ExistingInstallVersion: string;
   ExistingInstallDir: string;
   ExistingInstallComparison: Integer;
+  ExistingInstallUninstallCommand: string;
 
 function NormalizeDirName(const DirName: string): string;
 begin
@@ -106,6 +107,11 @@ end;
 function UninstallRegistryKey(): string;
 begin
   Result := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppId}_is1';
+end;
+
+function UpgradeUninstallKeepUserDataSwitch(): string;
+begin
+  Result := '/KEEPUSERDATA';
 end;
 
 function DefaultInstallDir(): string;
@@ -213,6 +219,118 @@ begin
   Result := Result or (InstalledVersionValue <> '');
 end;
 
+function TryReadUninstallCommandFromRoot(
+  const RootKey: Integer;
+  var UninstallCommandValue: string
+): Boolean;
+var
+  KeyPath: string;
+begin
+  UninstallCommandValue := '';
+  KeyPath := UninstallRegistryKey();
+
+  Result := RegQueryStringValue(RootKey, KeyPath, 'UninstallString', UninstallCommandValue);
+  if (not Result) or (Trim(UninstallCommandValue) = '') then
+    Result := RegQueryStringValue(RootKey, KeyPath, 'QuietUninstallString', UninstallCommandValue);
+
+  if Result then
+    UninstallCommandValue := Trim(UninstallCommandValue);
+end;
+
+function TryReadExistingUninstallCommand(var UninstallCommandValue: string): Boolean;
+begin
+  Result :=
+    TryReadUninstallCommandFromRoot(HKCU, UninstallCommandValue) or
+    TryReadUninstallCommandFromRoot(HKLM, UninstallCommandValue);
+end;
+
+function ExtractCommandExecutable(const CommandLine: string): string;
+var
+  Parsed: string;
+  EndPos: Integer;
+begin
+  Parsed := Trim(CommandLine);
+  if Parsed = '' then
+  begin
+    Result := '';
+    exit;
+  end;
+
+  if Copy(Parsed, 1, 1) = '"' then
+  begin
+    Delete(Parsed, 1, 1);
+    EndPos := Pos('"', Parsed);
+    if EndPos > 0 then
+      Result := Copy(Parsed, 1, EndPos - 1)
+    else
+      Result := Parsed;
+  end
+  else
+  begin
+    EndPos := Pos(' ', Parsed);
+    if EndPos > 0 then
+      Result := Copy(Parsed, 1, EndPos - 1)
+    else
+      Result := Parsed;
+  end;
+end;
+
+function ExtractCommandParameters(const CommandLine: string): string;
+var
+  Parsed: string;
+  EndPos: Integer;
+begin
+  Parsed := Trim(CommandLine);
+  if Parsed = '' then
+  begin
+    Result := '';
+    exit;
+  end;
+
+  if Copy(Parsed, 1, 1) = '"' then
+  begin
+    Delete(Parsed, 1, 1);
+    EndPos := Pos('"', Parsed);
+    if EndPos > 0 then
+      Result := Trim(Copy(Parsed, EndPos + 1, Length(Parsed)))
+    else
+      Result := '';
+  end
+  else
+  begin
+    EndPos := Pos(' ', Parsed);
+    if EndPos > 0 then
+      Result := Trim(Copy(Parsed, EndPos + 1, Length(Parsed)))
+    else
+      Result := '';
+  end;
+end;
+
+function AppendCommandArgument(const ExistingValue: string; const NextValue: string): string;
+begin
+  if ExistingValue = '' then
+    Result := NextValue
+  else if NextValue = '' then
+    Result := ExistingValue
+  else
+    Result := ExistingValue + ' ' + NextValue;
+end;
+
+function ExistingInstallUninstallParams(): string;
+var
+  UpperParams: string;
+begin
+  Result := ExtractCommandParameters(ExistingInstallUninstallCommand);
+  UpperParams := Uppercase(Result);
+
+  if (Pos('/SILENT', UpperParams) = 0) and (Pos('/VERYSILENT', UpperParams) = 0) then
+    Result := AppendCommandArgument(Result, '/SILENT');
+  if Pos('/NORESTART', UpperParams) = 0 then
+    Result := AppendCommandArgument(Result, '/NORESTART');
+  if Pos(Uppercase(UpgradeUninstallKeepUserDataSwitch()), UpperParams) = 0 then
+    Result := AppendCommandArgument(Result, UpgradeUninstallKeepUserDataSwitch());
+end;
+
 function TryReadDefaultInstallVersion(
   var InstalledVersionValue: string;
   var InstallDirValue: string
@@ -245,6 +363,7 @@ begin
   ExistingInstallVersion := '';
   ExistingInstallDir := '';
   ExistingInstallComparison := 0;
+  ExistingInstallUninstallCommand := '';
 
   if TryReadInstallerMetadata(ExistingInstallVersion, ExistingInstallDir) or
      TryReadExistingInstallFromRoot(HKCU, ExistingInstallVersion, ExistingInstallDir) or
@@ -252,6 +371,7 @@ begin
      TryReadDefaultInstallVersion(ExistingInstallVersion, ExistingInstallDir) then
   begin
     ExistingInstallDetected := True;
+    TryReadExistingUninstallCommand(ExistingInstallUninstallCommand);
     if ExistingInstallVersion <> '' then
       ExistingInstallComparison := CompareVersionText(ExistingInstallVersion, '{#AppVersion}')
     else
@@ -269,21 +389,21 @@ begin
     WizardForm.WelcomeLabel1.Caption := 'Update {#AppName}';
     WizardForm.WelcomeLabel2.Caption :=
       '{#AppName} ' + InstalledVersionLabel() + ' is already installed.'#13#10 +
-      'Setup will update it to version {#AppVersion} and keep your existing user data.';
+      'Setup will uninstall version ' + InstalledVersionLabel() + ', install version {#AppVersion}, and keep your existing user data.';
   end
   else if ExistingInstallComparison = 0 then
   begin
     WizardForm.WelcomeLabel1.Caption := 'Refresh {#AppName}';
     WizardForm.WelcomeLabel2.Caption :=
       '{#AppName} {#AppVersion} is already installed.'#13#10 +
-      'Setup will repair the current installation in place and keep your existing user data.';
+      'Setup will reinstall version {#AppVersion} in place after removing the current copy and will keep your existing user data.';
   end
   else
   begin
     WizardForm.WelcomeLabel1.Caption := 'Replace {#AppName}';
     WizardForm.WelcomeLabel2.Caption :=
       'A newer {#AppName} ' + InstalledVersionLabel() + ' is already installed.'#13#10 +
-      'Continuing will replace it with version {#AppVersion} in the selected folder.';
+      'Continuing will uninstall version ' + InstalledVersionLabel() + ' and replace it with version {#AppVersion}. Your existing user data will be kept.';
   end;
 end;
 
@@ -340,7 +460,7 @@ begin
         ExistingInstallNotice := ExistingInstallNotice + ' in ' + ExistingInstallDir;
       ExistingInstallNotice :=
         ExistingInstallNotice + '.'#13#10 +
-        'Keep this folder to update the existing installation in place. Choose a different folder only if you intentionally want a separate copy.'#13#10;
+        'Keep this folder to replace the existing installation. To move {#AppName} to a different folder, uninstall it first and then run Setup again.'#13#10;
     end;
 
     DirDataNoticeLabel.Caption :=
@@ -392,23 +512,35 @@ begin
         MB_OK
       );
       Result := False;
+      exit;
+    end;
+
+    if ExistingInstallDetected and (ExistingInstallDir <> '') and
+       (CompareText(NormalizeDirName(WizardDirValue), NormalizeDirName(ExistingInstallDir)) <> 0) then
+    begin
+      MsgBox(
+        '{#AppName} ' + InstalledVersionLabel() + ' is already installed in:'#13#10 +
+        ExistingInstallDir + #13#10#13#10 +
+        'This setup upgrades the existing installation and does not create a second copy.'#13#10 +
+        'To move {#AppName} to a different folder, uninstall it first and then run Setup again.',
+        mbError,
+        MB_OK
+      );
+      WizardForm.DirEdit.Text := ExistingInstallDir;
+      Result := False;
+      exit;
     end;
   end;
 
-  if Result and (CurPageID = wpReady) and ExistingInstallDetected and (ExistingInstallDir <> '') then
+  if Result and (CurPageID = wpReady) and (ExistingInstallComparison > 0) then
   begin
-    if CompareText(NormalizeDirName(WizardDirValue), NormalizeDirName(ExistingInstallDir)) <> 0 then
-    begin
-      Result :=
-        MsgBox(
-          '{#AppName} ' + InstalledVersionLabel() + ' is already installed in:'#13#10 +
-          ExistingInstallDir + #13#10#13#10 +
-          'Installing to a different folder will create a separate copy instead of updating the existing installation.'#13#10 +
-          'Do you want to continue with a separate copy?',
-          mbConfirmation,
-          MB_YESNO
-        ) = IDYES;
-    end;
+    Result :=
+      MsgBox(
+        'A newer {#AppName} ' + InstalledVersionLabel() + ' is already installed.'#13#10#13#10 +
+        'Do you want Setup to uninstall it and replace it with version {#AppVersion}?',
+        mbConfirmation,
+        MB_YESNO
+      ) = IDYES;
   end;
 end;
 
@@ -417,11 +549,80 @@ begin
   Result := RemoveUserDataOnUninstall;
 end;
 
+function HasKeepUserDataSwitch(): Boolean;
+var
+  CommandTail: string;
+begin
+  CommandTail := Uppercase(GetCmdTail());
+  Result :=
+    (Pos('/KEEPUSERDATA', CommandTail) > 0) or
+    (Pos('-KEEPUSERDATA', CommandTail) > 0);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): string;
+var
+  UninstallExecutablePath: string;
+  UninstallResultCode: Integer;
+  UninstallParams: string;
+begin
+  NeedsRestart := False;
+  Result := '';
+
+  if not ExistingInstallDetected then
+    exit;
+
+  if ExistingInstallUninstallCommand = '' then
+  begin
+    Result :=
+      '{#AppName} ' + InstalledVersionLabel() + ' is already installed, but Setup could not find its uninstaller.'#13#10#13#10 +
+      'Please uninstall the existing version manually, then run this installer again.';
+    exit;
+  end;
+
+  UninstallExecutablePath := ExtractCommandExecutable(ExistingInstallUninstallCommand);
+  if (UninstallExecutablePath = '') or (not FileExists(UninstallExecutablePath)) then
+  begin
+    Result :=
+      '{#AppName} ' + InstalledVersionLabel() + ' is already installed, but Setup could not open its uninstaller.'#13#10#13#10 +
+      'Please uninstall the existing version manually, then run this installer again.';
+    exit;
+  end;
+
+  UninstallParams := ExistingInstallUninstallParams();
+  if not Exec(
+    UninstallExecutablePath,
+    UninstallParams,
+    ExtractFileDir(UninstallExecutablePath),
+    SW_SHOW,
+    ewWaitUntilTerminated,
+    UninstallResultCode
+  ) then
+  begin
+    Result :=
+      'Setup could not start the existing {#AppName} uninstaller.'#13#10#13#10 +
+      'Please uninstall the existing version manually, then run this installer again.';
+    exit;
+  end;
+
+  if UninstallResultCode <> 0 then
+  begin
+    Result :=
+      'The existing {#AppName} uninstall did not complete successfully.'#13#10#13#10 +
+      'Please uninstall the existing version manually, then run this installer again.';
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if (CurUninstallStep = usUninstall) and (not UninstallPromptShown) then
   begin
     UninstallPromptShown := True;
+    if HasKeepUserDataSwitch() then
+    begin
+      RemoveUserDataOnUninstall := False;
+      exit;
+    end;
+
     RemoveUserDataOnUninstall :=
       MsgBox(
         'Do you also want to remove Aoryn user data?'#13#10#13#10 +
