@@ -12,6 +12,7 @@ const ACTIVE_CHAT_SESSION_STORAGE_KEY = "desktop-agent-workspace.active-chat-ses
 const ACTIVE_CHAT_SESSION_SESSION_KEY = "desktop-agent-workspace.session-active-chat-session";
 const CHAT_LAUNCH_SESSION_KEY = "desktop-agent-workspace.session-chat-launch-id";
 const CUSTOM_SELECT_IDS = ["languageSelect", "sendShortcutSelect", "modelProvider", "structuredOutput", "availableModels", "browserDomBackend", "browserChannel"];
+const DISPLAY_DEVICE_NAME_PATTERN = /DISPLAY(\d+)/i;
 
 const COPY = {
   "zh-CN": {
@@ -466,6 +467,16 @@ function bindEvents() {
     elements.browserChannel,
     elements.browserExecutablePath,
     elements.browserHeadless,
+  ]
+    .filter(Boolean)
+    .forEach((element) => {
+      element.addEventListener("change", scheduleRuntimePreferencesSync);
+      if (["INPUT", "TEXTAREA"].includes(element.tagName)) {
+        element.addEventListener("input", scheduleRuntimePreferencesSync);
+      }
+    });
+
+  [
     elements.displayMonitorSelect,
     elements.displayDpiScaleInput,
     elements.displayWorkAreaLeftInput,
@@ -475,9 +486,9 @@ function bindEvents() {
   ]
     .filter(Boolean)
     .forEach((element) => {
-      element.addEventListener("change", scheduleRuntimePreferencesSync);
+      element.addEventListener("change", handleDisplayOverrideDraftChange);
       if (["INPUT", "TEXTAREA"].includes(element.tagName)) {
-        element.addEventListener("input", scheduleRuntimePreferencesSync);
+        element.addEventListener("input", handleDisplayOverrideDraftChange);
       }
     });
 }
@@ -1324,6 +1335,79 @@ function updateDisplayOverrideVisibility() {
   }
 }
 
+function ensureRuntimePreferencesState() {
+  if (!state.runtimePreferences || typeof state.runtimePreferences !== "object") {
+    state.runtimePreferences = {
+      config_overrides: {},
+      ui_preferences: {},
+      updated_at: null,
+    };
+  }
+  if (!state.runtimePreferences.config_overrides || typeof state.runtimePreferences.config_overrides !== "object") {
+    state.runtimePreferences.config_overrides = {};
+  }
+  if (!state.runtimePreferences.ui_preferences || typeof state.runtimePreferences.ui_preferences !== "object") {
+    state.runtimePreferences.ui_preferences = {};
+  }
+  return state.runtimePreferences;
+}
+
+function persistRuntimePreferencesLocally() {
+  const snapshot = ensureRuntimePreferencesState();
+  snapshot.config_overrides = buildConfigOverrides();
+  snapshot.updated_at = Date.now() / 1000;
+  state.runtimePreferences = snapshot;
+}
+
+function seedDisplayOverrideDraftFromSnapshot(snapshot = state.displayDetection?.effective) {
+  if (!elements.displayOverrideEnabled?.checked || !snapshot) return;
+
+  const currentMonitor = snapshot.current_monitor;
+  const workArea = currentMonitor?.work_area;
+  const currentDpiScale = Number(snapshot.dpi_scale || 0);
+
+  if (elements.displayMonitorSelect && !elements.displayMonitorSelect.value && currentMonitor?.device_name) {
+    elements.displayMonitorSelect.value = currentMonitor.device_name;
+  }
+  if (
+    elements.displayDpiScaleInput &&
+    !String(elements.displayDpiScaleInput.value || "").trim() &&
+    Number.isFinite(currentDpiScale) &&
+    currentDpiScale > 0
+  ) {
+    elements.displayDpiScaleInput.value = currentDpiScale.toFixed(2).replace(/\.00$/, "");
+  }
+
+  const workAreaInputs = [
+    elements.displayWorkAreaLeftInput,
+    elements.displayWorkAreaTopInput,
+    elements.displayWorkAreaWidthInput,
+    elements.displayWorkAreaHeightInput,
+  ];
+  const hasAnyWorkAreaValue = workAreaInputs.some((element) => String(element?.value || "").trim());
+  if (!hasAnyWorkAreaValue && workArea) {
+    if (elements.displayWorkAreaLeftInput) elements.displayWorkAreaLeftInput.value = String(workArea.left ?? 0);
+    if (elements.displayWorkAreaTopInput) elements.displayWorkAreaTopInput.value = String(workArea.top ?? 0);
+    if (elements.displayWorkAreaWidthInput) {
+      elements.displayWorkAreaWidthInput.value = String(Math.max(0, Number(workArea.right || 0) - Number(workArea.left || 0)));
+    }
+    if (elements.displayWorkAreaHeightInput) {
+      elements.displayWorkAreaHeightInput.value = String(Math.max(0, Number(workArea.bottom || 0) - Number(workArea.top || 0)));
+    }
+  }
+}
+
+function normalizeMonitorDeviceName(deviceName) {
+  const normalized = normalizeText(deviceName || "");
+  return normalized.replace(/^\\\\\.\\/, "");
+}
+
+function handleDisplayOverrideDraftChange() {
+  persistRuntimePreferencesLocally();
+  scheduleRuntimePreferencesSync();
+  scheduleDisplayDetection();
+}
+
 function buildDisplayMonitorOptions() {
   const monitors = Array.isArray(state.displayDetection?.detected?.monitors) ? state.displayDetection.detected.monitors : [];
   return [
@@ -1447,6 +1531,102 @@ function resetDisplayOverrides() {
   if (elements.displayWorkAreaWidthInput) elements.displayWorkAreaWidthInput.value = "";
   if (elements.displayWorkAreaHeightInput) elements.displayWorkAreaHeightInput.value = "";
   updateDisplayOverrideVisibility();
+  scheduleRuntimePreferencesSync();
+  scheduleDisplayDetection();
+  renderAll();
+}
+
+function formatMonitorLabel(monitor, { includePrimary = false } = {}) {
+  const rawDeviceName = typeof monitor === "string" ? monitor : monitor?.device_name;
+  const normalizedDeviceName = normalizeMonitorDeviceName(rawDeviceName);
+  const match = normalizedDeviceName.match(DISPLAY_DEVICE_NAME_PATTERN);
+  let label = normalizedDeviceName || tr("\u672a\u77e5\u663e\u793a\u5668", "Unknown monitor");
+
+  if (match) {
+    label = tr(`\u663e\u793a\u5668 ${match[1]}`, `Display ${match[1]}`);
+  }
+  if (includePrimary && typeof monitor === "object" && monitor?.is_primary) {
+    label += tr(" \u00b7 \u4e3b\u663e\u793a\u5668", " \u00b7 Primary");
+  }
+  return label;
+}
+
+function formatMonitorSummary(monitor) {
+  if (!monitor) return tr("\u672a\u68c0\u6d4b\u5230", "Unavailable");
+  return `${formatMonitorLabel(monitor, { includePrimary: true })} \u00b7 ${formatWorkArea(monitor.work_area)}`;
+}
+
+function buildDisplayMonitorOptions() {
+  const monitors = Array.isArray(state.displayDetection?.detected?.monitors) ? state.displayDetection.detected.monitors : [];
+  return [
+    { value: "", label: tr("\u81ea\u52a8", "Auto") },
+    ...monitors.map((monitor) => ({
+      value: monitor.device_name || "",
+      label: `${formatMonitorLabel(monitor, { includePrimary: true })} \u00b7 ${formatWorkArea(monitor.work_area)}`,
+    })),
+  ];
+}
+
+function buildDisplaySummaryCards(snapshot) {
+  const effective = snapshot?.effective || {};
+  const currentMonitor = effective.current_monitor;
+  const taskbar = effective.taskbar;
+  const checkedAt = snapshot?.checked_at ? formatTime(snapshot.checked_at) : tr("\u521a\u521a", "Just now");
+  const cards = [
+    { label: tr("\u5f53\u524d\u663e\u793a\u5668", "Current monitor"), value: formatMonitorSummary(currentMonitor) },
+    { label: tr("\u5de5\u4f5c\u533a", "Work area"), value: formatWorkArea(currentMonitor?.work_area) },
+    { label: tr("\u865a\u62df\u684c\u9762", "Virtual bounds"), value: formatWorkArea(effective.virtual_bounds) },
+    { label: "DPI / Scale", value: formatScale(effective.dpi_scale) },
+    { label: tr("\u4efb\u52a1\u680f", "Taskbar"), value: formatTaskbar(taskbar) },
+    { label: tr("\u68c0\u6d4b\u65f6\u95f4", "Checked"), value: checkedAt },
+  ];
+
+  return cards
+    .map(
+      (item) => `
+        <article class="display-detection-card">
+          <strong>${escapeHtml(item.label)}</strong>
+          <span>${escapeHtml(item.value)}</span>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderDisplayCompareCard(label, environment) {
+  const monitor = environment?.current_monitor;
+  return `
+    <article class="display-compare-card">
+      <strong>${escapeHtml(label)}</strong>
+      <span>${escapeHtml(formatMonitorSummary(monitor))}</span>
+      <span>${escapeHtml(`${tr("\u865a\u62df\u684c\u9762", "Virtual bounds")}: ${formatWorkArea(environment?.virtual_bounds)}`)}</span>
+      <span>${escapeHtml(`DPI / Scale: ${formatScale(environment?.dpi_scale)}`)}</span>
+      <span>${escapeHtml(`${tr("\u4efb\u52a1\u680f", "Taskbar")}: ${formatTaskbar(environment?.taskbar)}`)}</span>
+    </article>
+  `;
+}
+
+function handleDisplayOverrideToggle() {
+  if (elements.displayOverrideEnabled?.checked) {
+    seedDisplayOverrideDraftFromSnapshot();
+  }
+  updateDisplayOverrideVisibility();
+  persistRuntimePreferencesLocally();
+  scheduleRuntimePreferencesSync();
+  scheduleDisplayDetection();
+  renderAll();
+}
+
+function resetDisplayOverrides() {
+  if (elements.displayOverrideEnabled) elements.displayOverrideEnabled.checked = false;
+  if (elements.displayMonitorSelect) elements.displayMonitorSelect.value = "";
+  if (elements.displayDpiScaleInput) elements.displayDpiScaleInput.value = "";
+  if (elements.displayWorkAreaLeftInput) elements.displayWorkAreaLeftInput.value = "";
+  if (elements.displayWorkAreaTopInput) elements.displayWorkAreaTopInput.value = "";
+  if (elements.displayWorkAreaWidthInput) elements.displayWorkAreaWidthInput.value = "";
+  if (elements.displayWorkAreaHeightInput) elements.displayWorkAreaHeightInput.value = "";
+  updateDisplayOverrideVisibility();
+  persistRuntimePreferencesLocally();
   scheduleRuntimePreferencesSync();
   scheduleDisplayDetection();
   renderAll();
