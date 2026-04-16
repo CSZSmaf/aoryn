@@ -113,8 +113,36 @@ function SectionHeading({ eyebrow, title, body }) {
   );
 }
 
-function HomePage({ copy, authenticated, openAuthModal }) {
+function HomePage({ copy, authenticated, openAuthModal, locale }) {
   const pageCopy = copy.pages.home;
+  const isZh = locale === "zh-CN";
+  const heroPrimaryLabel = authenticated
+    ? (isZh ? "下载桌面版" : "Download desktop app")
+    : pageCopy.hero.primaryCta;
+  const heroSecondaryLabel = authenticated
+    ? (isZh ? "查看界面" : "View workspace")
+    : pageCopy.hero.secondaryCta;
+  const stageBody = authenticated
+    ? (isZh
+      ? "桌面工作台负责真实执行，云端只保留最少身份信息与版本分发边界。"
+      : "The desktop workspace handles real execution while the cloud keeps only minimal identity and release access boundaries.")
+    : pageCopy.stage.body;
+  const stageStatus = authenticated
+    ? (isZh ? "工作台已就绪" : "Workspace ready")
+    : pageCopy.stage.status;
+  const cards = authenticated
+    ? pageCopy.cards.map((item, index) =>
+      index === 2
+        ? {
+            ...item,
+            title: isZh ? "桌面版现已可下载" : "Desktop installer ready",
+            body: isZh
+              ? "继续下载安装包，或查看工作台与安装说明。"
+              : "Continue to the installer or review the workspace and install flow.",
+          }
+        : item,
+    )
+    : pageCopy.cards;
 
   return (
     <>
@@ -125,15 +153,17 @@ function HomePage({ copy, authenticated, openAuthModal }) {
           <p>{pageCopy.hero.body}</p>
           <div className="button-row">
             <Link className="primary-button" to="/download">
-              {pageCopy.hero.primaryCta}
+              {heroPrimaryLabel}
             </Link>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => openAuthModal(authenticated ? "login" : "register")}
-            >
-              {pageCopy.hero.secondaryCta}
-            </button>
+            {authenticated ? (
+              <Link className="secondary-button" to="/workspace">
+                {heroSecondaryLabel}
+              </Link>
+            ) : (
+              <button className="secondary-button" type="button" onClick={() => openAuthModal("register")}>
+                {heroSecondaryLabel}
+              </button>
+            )}
             <Link className="text-link" to="/product">
               {pageCopy.hero.tertiaryCta}
             </Link>
@@ -150,7 +180,7 @@ function HomePage({ copy, authenticated, openAuthModal }) {
                   <span>{pageCopy.stage.windowMeta}</span>
                 </div>
               </div>
-              <span className="status-pill">{pageCopy.stage.status}</span>
+              <span className="status-pill">{stageStatus}</span>
             </div>
 
             <div className="stage-window__body">
@@ -175,7 +205,7 @@ function HomePage({ copy, authenticated, openAuthModal }) {
                 <div className="stage-window__focus">
                   <span>{pageCopy.stage.focusLabel}</span>
                   <strong>{pageCopy.stage.focusTitle}</strong>
-                  <p>{pageCopy.stage.focusBody}</p>
+                  <p>{stageBody}</p>
                 </div>
 
                 <div className="metric-row">
@@ -194,7 +224,7 @@ function HomePage({ copy, authenticated, openAuthModal }) {
 
       <section className="section-shell section-shell--compact">
         <div className="feature-grid">
-          {pageCopy.cards.map((item) => (
+          {cards.map((item) => (
             <Link className="feature-card reveal" to={item.href} key={item.title}>
               <h3>{item.title}</h3>
               <p>{item.body}</p>
@@ -203,23 +233,25 @@ function HomePage({ copy, authenticated, openAuthModal }) {
         </div>
       </section>
 
-      <section className="section-shell">
-        <article className="cta-band reveal">
-          <div>
-            <span className="section-heading__eyebrow">{pageCopy.cta.eyebrow}</span>
-            <h2>{pageCopy.cta.title}</h2>
-            <p>{pageCopy.cta.body}</p>
-          </div>
-          <div className="button-row">
-            <Link className="primary-button" to="/download">
-              {pageCopy.cta.primaryCta}
-            </Link>
-            <button className="secondary-button" type="button" onClick={() => openAuthModal("login")}>
-              {pageCopy.cta.secondaryCta}
-            </button>
-          </div>
-        </article>
-      </section>
+      {!authenticated ? (
+        <section className="section-shell">
+          <article className="cta-band reveal">
+            <div>
+              <span className="section-heading__eyebrow">{pageCopy.cta.eyebrow}</span>
+              <h2>{pageCopy.cta.title}</h2>
+              <p>{pageCopy.cta.body}</p>
+            </div>
+            <div className="button-row">
+              <Link className="primary-button" to="/download">
+                {pageCopy.cta.primaryCta}
+              </Link>
+              <button className="secondary-button" type="button" onClick={() => openAuthModal("login")}>
+                {pageCopy.cta.secondaryCta}
+              </button>
+            </div>
+          </article>
+        </section>
+      ) : null}
     </>
   );
 }
@@ -274,8 +306,13 @@ function ProductPage({ copy }) {
   );
 }
 
-function WorkspacePage({ copy }) {
+function WorkspacePage({ copy, authenticated, locale }) {
   const pageCopy = copy.pages.workspace;
+  const heroBody = authenticated
+    ? (locale === "zh-CN"
+      ? "进入可见的桌面执行界面，把对话、执行与回放整理进同一个工作台。"
+      : "Open the visible desktop workspace and keep chat, execution, and replay inside one surface.")
+    : pageCopy.hero.body;
 
   return (
     <>
@@ -283,7 +320,7 @@ function WorkspacePage({ copy }) {
         <div className="detail-hero__copy">
           <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
           <h1>{pageCopy.hero.title}</h1>
-          <p>{pageCopy.hero.body}</p>
+          <p>{heroBody}</p>
         </div>
       </section>
 
@@ -319,9 +356,12 @@ function WorkspacePage({ copy }) {
   );
 }
 
-function DownloadPage({ copy, authState, authReady, openAuthModal }) {
+function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
   const pageCopy = copy.pages.download;
   const canDownload = authReady && authState.authenticated;
+  const unlockedBody = locale === "zh-CN"
+    ? "桌面安装包现已可用。任务、截图、历史与配置仍保留在本地设备，不会上传到云端。"
+    : "The desktop installer is ready. Tasks, screenshots, history, and config stay on your device and are not uploaded to the cloud.";
   const packageMeta = [
     { label: pageCopy.packageMeta.version, value: siteConfig.release.version },
     { label: pageCopy.packageMeta.platform, value: siteConfig.release.platform },
@@ -337,7 +377,7 @@ function DownloadPage({ copy, authState, authReady, openAuthModal }) {
             <div className="download-gate__content">
               <span className="section-heading__eyebrow">{pageCopy.unlocked.eyebrow}</span>
               <h2>{pageCopy.unlocked.title}</h2>
-              <p>{pageCopy.unlocked.body}</p>
+              <p>{unlockedBody}</p>
             </div>
 
             <div className="button-row">
@@ -382,38 +422,42 @@ function DownloadPage({ copy, authState, authReady, openAuthModal }) {
         </div>
       </section>
 
-      <section className="section-shell">
-        <SectionHeading
-          eyebrow={pageCopy.steps.eyebrow}
-          title={pageCopy.steps.title}
-          body={pageCopy.steps.body}
-        />
-        <div className="detail-grid detail-grid--three">
-          {pageCopy.steps.items.map((item) => (
-            <article className="detail-card reveal" key={item.title}>
-              <span className="detail-card__eyebrow">{item.step}</span>
-              <h3>{item.title}</h3>
-              <p>{item.body}</p>
-            </article>
-          ))}
-        </div>
-      </section>
+      {!canDownload ? (
+        <>
+          <section className="section-shell">
+            <SectionHeading
+              eyebrow={pageCopy.steps.eyebrow}
+              title={pageCopy.steps.title}
+              body={pageCopy.steps.body}
+            />
+            <div className="detail-grid detail-grid--three">
+              {pageCopy.steps.items.map((item) => (
+                <article className="detail-card reveal" key={item.title}>
+                  <span className="detail-card__eyebrow">{item.step}</span>
+                  <h3>{item.title}</h3>
+                  <p>{item.body}</p>
+                </article>
+              ))}
+            </div>
+          </section>
 
-      <section className="section-shell">
-        <SectionHeading
-          eyebrow={pageCopy.faq.eyebrow}
-          title={pageCopy.faq.title}
-          body={pageCopy.faq.body}
-        />
-        <div className="faq-list">
-          {pageCopy.faq.items.map((item) => (
-            <details className="faq-item reveal" key={item.question}>
-              <summary>{item.question}</summary>
-              <p>{item.answer}</p>
-            </details>
-          ))}
-        </div>
-      </section>
+          <section className="section-shell">
+            <SectionHeading
+              eyebrow={pageCopy.faq.eyebrow}
+              title={pageCopy.faq.title}
+              body={pageCopy.faq.body}
+            />
+            <div className="faq-list">
+              {pageCopy.faq.items.map((item) => (
+                <details className="faq-item reveal" key={item.question}>
+                  <summary>{item.question}</summary>
+                  <p>{item.answer}</p>
+                </details>
+              ))}
+            </div>
+          </section>
+        </>
+      ) : null}
     </>
   );
 }
@@ -993,10 +1037,17 @@ function AppFrame() {
         <Routes>
           <Route
             path="/"
-            element={<HomePage copy={copy} authenticated={authState.authenticated} openAuthModal={openAuthModal} />}
+            element={
+              <HomePage
+                copy={copy}
+                authenticated={authState.authenticated}
+                openAuthModal={openAuthModal}
+                locale={locale}
+              />
+            }
           />
           <Route path="/product" element={<ProductPage copy={copy} />} />
-          <Route path="/workspace" element={<WorkspacePage copy={copy} />} />
+          <Route path="/workspace" element={<WorkspacePage copy={copy} authenticated={authState.authenticated} locale={locale} />} />
           <Route
             path="/download"
             element={
@@ -1005,6 +1056,7 @@ function AppFrame() {
                 authState={authState}
                 authReady={!authState.loading}
                 openAuthModal={openAuthModal}
+                locale={locale}
               />
             }
           />
