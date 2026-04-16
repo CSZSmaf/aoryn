@@ -764,8 +764,8 @@ function AppFrame() {
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const fadeDelay = reducedMotion ? 140 : 1440;
-    const removeDelay = reducedMotion ? 640 : 2000;
+    const fadeDelay = reducedMotion ? 360 : 2280;
+    const removeDelay = reducedMotion ? 1040 : 3120;
 
     const fadeTimer = window.setTimeout(() => {
       setIsIntroFading(true);
