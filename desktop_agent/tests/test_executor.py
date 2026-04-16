@@ -147,7 +147,10 @@ def test_open_app_if_needed_reuses_existing_window(monkeypatch):
         ],
     )
 
-    monkeypatch.setattr("desktop_agent.executor.capture_desktop_environment", lambda: environment)
+    monkeypatch.setattr(
+        "desktop_agent.executor.capture_effective_desktop_environment",
+        lambda config=None: environment,
+    )
     monkeypatch.setattr("desktop_agent.executor.find_window", lambda env, query: env.visible_windows[0])
     monkeypatch.setattr("desktop_agent.executor.focus_window", lambda handle: events.append(("focus", handle)) or True)
     monkeypatch.setattr(
@@ -181,7 +184,10 @@ def test_browser_open_attempts_to_dismiss_known_blockers(monkeypatch):
         ],
     )
 
-    monkeypatch.setattr("desktop_agent.executor.capture_desktop_environment", lambda: environment)
+    monkeypatch.setattr(
+        "desktop_agent.executor.capture_effective_desktop_environment",
+        lambda config=None: environment,
+    )
     monkeypatch.setattr(
         "desktop_agent.executor.find_window",
         lambda env, query: next((item for item in env.visible_windows if query.lower() in item.title.lower()), None),
@@ -232,7 +238,10 @@ def test_relative_click_targets_window_rect(monkeypatch):
         def click(self, x, y, clicks=1, button="left"):
             events.append(("click", (x, y, clicks, button)))
 
-    monkeypatch.setattr("desktop_agent.executor.capture_desktop_environment", lambda: environment)
+    monkeypatch.setattr(
+        "desktop_agent.executor.capture_effective_desktop_environment",
+        lambda config=None: environment,
+    )
     monkeypatch.setattr(
         "desktop_agent.executor.find_window",
         lambda env, query: next((item for item in env.visible_windows if query.lower() in item.title.lower()), None),

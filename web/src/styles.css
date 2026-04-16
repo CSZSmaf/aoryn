@@ -974,6 +974,46 @@ img {
   margin: 1rem 0 1.15rem;
 }
 
+.auth-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem;
+  margin-bottom: 1.2rem;
+  border-radius: 999px;
+  background: rgba(17, 17, 17, 0.05);
+  border: 1px solid var(--border-soft);
+}
+
+.auth-tab {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 5.2rem;
+  min-height: 2.6rem;
+  padding: 0 1rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.auth-tab--active {
+  background: rgba(255, 255, 255, 0.96);
+  color: #111111;
+  box-shadow: 0 10px 24px rgba(33, 31, 29, 0.08);
+}
+
+.auth-tab:focus-visible {
+  outline: 2px solid rgba(98, 150, 230, 0.35);
+  outline-offset: 2px;
+}
+
 .register-benefits {
   display: flex;
   flex-wrap: wrap;

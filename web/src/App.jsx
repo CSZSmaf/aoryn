@@ -318,6 +318,12 @@ function WorkspacePage({ copy }) {
 function DownloadPage({ copy, authState, authReady, openAuthModal }) {
   const pageCopy = copy.pages.download;
   const canDownload = authReady && authState.authenticated;
+  const packageMeta = [
+    { label: pageCopy.packageMeta.version, value: siteConfig.release.version },
+    { label: pageCopy.packageMeta.platform, value: siteConfig.release.platform },
+    { label: pageCopy.packageMeta.size, value: siteConfig.release.fileSize },
+    { label: pageCopy.packageMeta.format, value: siteConfig.release.packageType },
+  ];
 
   return (
     <>
@@ -353,7 +359,7 @@ function DownloadPage({ copy, authState, authReady, openAuthModal }) {
 
       <section className="section-shell section-shell--compact">
         <div className="download-meta-grid">
-          {pageCopy.packageMeta.map((item) => (
+          {packageMeta.map((item) => (
             <article className="download-meta-card reveal" key={item.label}>
               <span>{item.label}</span>
               <strong>{item.value}</strong>
@@ -773,28 +779,40 @@ function AppFrame() {
 
     try {
       if (authMode === "register") {
+        const registerEmail = form.email.trim();
         const payload = await registerAccount(siteConfig.auth.registerEndpoint, {
           displayName: form.name.trim(),
-          email: form.email.trim(),
+          email: registerEmail,
           password: form.password,
         });
-        setForm(INITIAL_AUTH_FORM);
+        setAuthMode("login");
+        setForm({
+          ...INITIAL_AUTH_FORM,
+          email: registerEmail,
+        });
         setErrors({});
         setSubmitFeedback({
           tone: "success",
           message: payload.message || copy.auth.messages.registerSuccess,
         });
+        window.requestAnimationFrame(() => {
+          fieldRefs.current.password?.focus?.();
+        });
       } else {
-        const payload = await loginAccount(siteConfig.auth.loginEndpoint, {
+        await loginAccount(siteConfig.auth.loginEndpoint, {
           email: form.email.trim(),
           password: form.password,
         });
+        const payload = await loadCurrentSession(siteConfig.auth.meEndpoint);
         setAuthState({
           loading: false,
-          authenticated: true,
+          authenticated: Boolean(payload.authenticated),
           user: payload.user || null,
           profile: payload.profile || null,
         });
+        if (!payload.authenticated) {
+          throw new Error(copy.auth.messages.networkError);
+        }
         setForm(INITIAL_AUTH_FORM);
         setErrors({});
         setSubmitFeedback({

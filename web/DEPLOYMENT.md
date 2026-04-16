@@ -1,10 +1,11 @@
 # Aoryn Website Deployment
 
-This website is designed for:
+This website is deployed as a Cloudflare Pages project backed by:
 
 - `https://aoryn.org` as the primary production site
 - `https://www.aoryn.org` redirecting to `https://aoryn.org`
-- `https://downloads.aoryn.org/Aoryn-Setup-0.1.4.exe` as the Windows installer URL
+- `GET /api/downloads/windows-installer` as the gated installer route
+- an R2 bucket binding named `AORYN_DOWNLOADS` that stores `Aoryn-Setup-0.1.5.exe`
 
 ## 1. GitHub
 
@@ -31,14 +32,27 @@ Build command: npm run build
 Build output directory: dist
 ```
 
-Add these environment variables in Pages:
+Set these Pages environment variables:
 
 ```text
-VITE_DOWNLOAD_URL=https://downloads.aoryn.org/Aoryn-Setup-0.1.4.exe
-VITE_REGISTER_ENDPOINT=
+SUPABASE_URL=<your Supabase project URL>
+SUPABASE_ANON_KEY=<your Supabase anon key>
+SUPABASE_SITE_URL=https://aoryn.org
+AORYN_WINDOWS_INSTALLER_KEY=Aoryn-Setup-0.1.5.exe
 ```
 
-The registration endpoint can stay empty until the backend is ready.
+Add an R2 bucket binding:
+
+```text
+Binding name: AORYN_DOWNLOADS
+Bucket: <the bucket that stores release installers>
+```
+
+The frontend does not use `VITE_DOWNLOAD_URL`. The download button always points to the authenticated route:
+
+```text
+/api/downloads/windows-installer
+```
 
 ## 3. Custom Domains
 
@@ -63,19 +77,15 @@ Recommended redirect setup:
 - Status code: `301`
 - Enable: preserve query string, subpath matching, preserve path suffix
 
-## 4. R2 Download Domain
+## 4. R2 Release Object
 
 On the R2 bucket that stores the installer:
 
-- enable the public/custom domain setting
-- bind `downloads.aoryn.org`
-- keep the installer object path as:
+- upload `Aoryn-Setup-0.1.5.exe`
+- keep the object key aligned with `AORYN_WINDOWS_INSTALLER_KEY`
+- optionally bind `downloads.aoryn.org` if you want a dedicated file-hosting domain for operations or auditing
 
-```text
-/Aoryn-Setup-0.1.4.exe
-```
-
-After the custom download domain becomes active, trigger a new Pages deployment so the website uses the production download hostname.
+The website no longer depends on a public download URL as its main entry point. Public R2 domains are optional operational detail, not the button target shown to users.
 
 ## 5. Local Build Check
 
@@ -92,17 +102,26 @@ The build output should be written to:
 web/dist
 ```
 
-## 6. Verification Checklist
+## 6. Production Release Checklist
+
+1. Push the `main` branch changes that contain the new website and release metadata.
+2. Upload `Aoryn-Setup-0.1.5.exe` to the bound R2 bucket.
+3. Confirm `AORYN_WINDOWS_INSTALLER_KEY` matches the uploaded object key.
+4. Trigger a production Pages deployment.
+5. Sign in on `https://aoryn.org/download` and verify the protected download flow.
+
+## 7. Verification Checklist
 
 - GitHub shows the `main` branch code
 - Cloudflare Pages build succeeds
 - the `*.pages.dev` preview works
 - `https://aoryn.org` loads the site
 - `https://www.aoryn.org` redirects to `https://aoryn.org`
-- `https://downloads.aoryn.org/Aoryn-Setup-0.1.4.exe` downloads the installer
-- the website download button points to `downloads.aoryn.org`
+- unauthenticated requests to `https://aoryn.org/api/downloads/windows-installer` return `401`
+- authenticated requests download `Aoryn-Setup-0.1.5.exe`
+- the website download button points to `/api/downloads/windows-installer`
 
-## 7. References
+## 8. References
 
 - Cloudflare Pages Git integration:
   `https://developers.cloudflare.com/pages/get-started/git-integration/`

@@ -57,8 +57,8 @@ powershell -ExecutionPolicy Bypass -File .\build_release.ps1
 This produces:
 
 ```text
-release/Aoryn-0.1.4-win64/
-release/Aoryn-Setup-0.1.4.exe
+release/Aoryn-0.1.5-win64/
+release/Aoryn-Setup-0.1.5.exe
 ```
 
 ### 2.4 Deploy the Official Website
@@ -81,7 +81,8 @@ Recommended production URLs:
 
 - `https://aoryn.org` for the main site
 - `https://www.aoryn.org` redirecting to `https://aoryn.org`
-- `https://downloads.aoryn.org/Aoryn-Setup-0.1.4.exe` for the Windows installer
+- `https://aoryn.org/download` for the gated download page
+- `https://aoryn.org/api/downloads/windows-installer` for the authenticated installer route
 
 Deployment details are documented in:
 
@@ -90,7 +91,7 @@ web/DEPLOYMENT.md
 web/DEPLOYMENT.zh-CN.md
 ```
 
-Patch `0.1.4` adds visible display-detection diagnostics plus manual runtime overrides for monitor, DPI scale, and work-area correction, while keeping automatic Windows detection as the default.
+Patch `0.1.5` keeps the display-detection diagnostics and manual override workflow, while moving the website and download flow onto the authenticated Pages Functions + R2 release pipeline.
 
 The installed app stores user data outside the install directory:
 

@@ -227,12 +227,12 @@ export const siteCopy = {
           body: "登录只用于验证身份与下载权限，任务、截图、历史与配置不会被上传到云端。",
           primaryCta: "下载 Windows 安装包",
         },
-        packageMeta: [
-          { label: "版本", value: "0.1.4" },
-          { label: "平台", value: "Windows 10 / 11" },
-          { label: "体积", value: "191.63 MB" },
-          { label: "格式", value: "EXE Installer" },
-        ],
+        packageMeta: {
+          version: "版本",
+          platform: "平台",
+          size: "体积",
+          format: "格式",
+        },
         steps: {
           eyebrow: "安装流程",
           title: "下载前后你会看到什么。",
@@ -559,12 +559,12 @@ export const siteCopy = {
           body: "Sign-in only controls identity and download access. Tasks, screenshots, history, and config are still not uploaded to the cloud.",
           primaryCta: "Download Windows installer",
         },
-        packageMeta: [
-          { label: "Version", value: "0.1.4" },
-          { label: "Platform", value: "Windows 10 / 11" },
-          { label: "Size", value: "191.63 MB" },
-          { label: "Format", value: "EXE Installer" },
-        ],
+        packageMeta: {
+          version: "Version",
+          platform: "Platform",
+          size: "Size",
+          format: "Format",
+        },
         steps: {
           eyebrow: "Install flow",
           title: "What happens before and after download.",

@@ -1,6 +1,6 @@
 import { jsonResponse, mergeHeaders, resolveBrowserSession } from "../auth/_shared.js";
 
-const DEFAULT_WINDOWS_INSTALLER_KEY = "Aoryn-Setup-0.1.4.exe";
+const DEFAULT_WINDOWS_INSTALLER_KEY = "Aoryn-Setup-0.1.5.exe";
 
 function guessContentType(fileName) {
   const lower = String(fileName || "").trim().toLowerCase();

@@ -3192,6 +3192,10 @@ body[data-ui-mode="developer"] [data-surface="developer"] {
 
 .auth-gate-tab {
   appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 104px;
   height: 40px;
   padding: 0 18px;
@@ -3199,7 +3203,10 @@ body[data-ui-mode="developer"] [data-surface="developer"] {
   border-radius: 999px;
   background: transparent;
   color: var(--ink-soft);
+  font-size: 0.95rem;
   font-weight: 600;
+  line-height: 1;
+  box-shadow: none;
   cursor: pointer;
   transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
 }

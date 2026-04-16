@@ -3,17 +3,14 @@ export const siteConfig = {
   domain: "aoryn.org",
   localeStorageKey: "aoryn-site.locale",
   release: {
-    version: "0.1.4",
+    version: "0.1.5",
     channel: "Windows Installer",
-    fileName: "Aoryn-Setup-0.1.4.exe",
-    fileSize: "191.63 MB",
+    fileName: "Aoryn-Setup-0.1.5.exe",
+    fileSize: "191.71 MB",
     platform: "Windows 10 / 11",
-    packageType: "EXE",
-    hosting: "Cloudflare R2 via downloads.aoryn.org",
+    packageType: "EXE Installer",
+    hosting: "Cloudflare Pages Functions + R2",
     protectedDownloadPath: "/api/downloads/windows-installer",
-    downloadUrl:
-      import.meta.env.VITE_DOWNLOAD_URL ||
-      "https://downloads.aoryn.org/Aoryn-Setup-0.1.4.exe",
   },
   auth: {
     registerEndpoint: "/api/auth/register",
