@@ -34,6 +34,8 @@ const ROUTE_TO_PAGE_KEY = {
   "/privacy": "privacy",
 };
 
+const INTRO_LETTERS = ["A", "O", "R", "Y", "N"];
+
 function getPreferredLocale() {
   if (typeof window === "undefined") return "zh-CN";
   const stored = window.localStorage.getItem(siteConfig.localeStorageKey);
@@ -105,6 +107,29 @@ function trapFocus(container, event) {
 
 function getRevealStyle(index = 0, baseDelay = 0, step = 80) {
   return { "--reveal-delay": `${baseDelay + index * step}ms` };
+}
+
+function IntroSplash({ fading }) {
+  return (
+    <div className={fading ? "intro-splash intro-splash--fading" : "intro-splash"} aria-hidden="true">
+      <div className="intro-splash__halo intro-splash__halo--left" />
+      <div className="intro-splash__halo intro-splash__halo--right" />
+      <div className="intro-splash__stage">
+        <div className="intro-splash__word" aria-label="Aoryn">
+          {INTRO_LETTERS.map((letter, index) => (
+            <span
+              className="intro-splash__letter"
+              data-letter={letter}
+              key={letter}
+              style={{ "--intro-index": index }}
+            >
+              {letter}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function SectionHeading({ eyebrow, title, body }) {
@@ -677,6 +702,8 @@ function AuthModal({
 
 function AppFrame() {
   const [locale, setLocale] = useState(getPreferredLocale);
+  const [isIntroActive, setIsIntroActive] = useState(true);
+  const [isIntroFading, setIsIntroFading] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState("login");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -733,6 +760,27 @@ function AppFrame() {
   }, []);
 
   useEffect(() => {
+    const reducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const fadeDelay = reducedMotion ? 140 : 1440;
+    const removeDelay = reducedMotion ? 640 : 2000;
+
+    const fadeTimer = window.setTimeout(() => {
+      setIsIntroFading(true);
+    }, fadeDelay);
+    const removeTimer = window.setTimeout(() => {
+      setIsIntroActive(false);
+    }, removeDelay);
+
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(removeTimer);
+    };
+  }, []);
+
+  useEffect(() => {
     document.documentElement.lang = locale;
     document.title = pageCopy.meta.title;
     window.localStorage.setItem(siteConfig.localeStorageKey, locale);
@@ -784,7 +832,7 @@ function AppFrame() {
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
-    if (isAuthOpen || isMenuOpen) {
+    if (isIntroActive || isAuthOpen || isMenuOpen) {
       document.body.style.overflow = "hidden";
     }
 
@@ -800,7 +848,7 @@ function AppFrame() {
       }
     };
 
-    if (isAuthOpen || isMenuOpen) {
+    if (isIntroActive || isAuthOpen || isMenuOpen) {
       window.addEventListener("keydown", handleKeyDown);
     }
 
@@ -814,7 +862,7 @@ function AppFrame() {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isAuthOpen, isMenuOpen]);
+  }, [isAuthOpen, isIntroActive, isMenuOpen]);
 
   function toggleLocale() {
     setLocale((current) => (current === "zh-CN" ? "en-US" : "zh-CN"));
@@ -944,11 +992,19 @@ function AppFrame() {
   const accountLabel =
     String(authState.profile?.display_name || authState.user?.email || "").trim() ||
     copy.auth.signedOut;
+  const siteShellClassName = [
+    "site-shell",
+    isIntroActive ? "site-shell--intro" : "",
+    isIntroActive && isIntroFading ? "site-shell--intro-fading" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <div className="site-shell">
+    <div className={siteShellClassName}>
       <div className="site-shell__glow site-shell__glow--left" />
       <div className="site-shell__glow site-shell__glow--right" />
+      {isIntroActive ? <IntroSplash fading={isIntroFading} /> : null}
 
       <header className="topbar">
         <Link className="brand" to="/" aria-label={siteConfig.siteName}>
