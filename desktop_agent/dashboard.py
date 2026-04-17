@@ -789,13 +789,14 @@ class DashboardApp:
 
                 if path == "/api/tasks":
                     try:
+                        resolved_overrides = app._resolve_request_config_overrides(body.get("config_overrides"))
                         job = app.queue.submit(
                             task=str(body.get("task", "")),
                             planner_mode="auto",
                             dry_run=False,
                             max_steps=_optional_int(body.get("max_steps")),
                             pause_after_action=_optional_float(body.get("pause_after_action")),
-                            config_overrides=_clean_config_overrides(body.get("config_overrides")),
+                            config_overrides=resolved_overrides,
                         )
                     except ValueError as exc:
                         return self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
@@ -828,9 +829,10 @@ class DashboardApp:
 
                 if path == "/api/chat":
                     try:
+                        resolved_overrides = app._resolve_request_config_overrides(body.get("config_overrides"))
                         payload = app.chat_reply(
                             messages=body.get("messages"),
-                            config_overrides=_clean_config_overrides(body.get("config_overrides")),
+                            config_overrides=resolved_overrides,
                             session_meta=body.get("session_meta"),
                             recovery_context=body.get("recovery_context"),
                         )
@@ -841,10 +843,11 @@ class DashboardApp:
                     return self._send_json(payload)
 
                 if path == "/api/chat/stream":
+                    resolved_overrides = app._resolve_request_config_overrides(body.get("config_overrides"))
                     return self._send_event_stream(
                         app.chat_reply_stream(
                             messages=body.get("messages"),
-                            config_overrides=_clean_config_overrides(body.get("config_overrides")),
+                            config_overrides=resolved_overrides,
                             session_meta=body.get("session_meta"),
                             recovery_context=body.get("recovery_context"),
                         )
@@ -852,15 +855,18 @@ class DashboardApp:
 
                 if path == "/api/provider/models":
                     try:
-                        snapshot = app.provider_models(_clean_config_overrides(body.get("config_overrides")))
+                        snapshot = app.provider_models(
+                            app._resolve_request_config_overrides(body.get("config_overrides"))
+                        )
                     except ProviderToolError as exc:
                         return self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                     return self._send_json(snapshot)
 
                 if path == "/api/provider/load-model":
                     try:
+                        resolved_overrides = app._resolve_request_config_overrides(body.get("config_overrides"))
                         payload = app.provider_load_model(
-                            config_overrides=_clean_config_overrides(body.get("config_overrides")),
+                            config_overrides=resolved_overrides,
                             model_id=str(body.get("model_id", "")).strip(),
                             unload_first=bool(body.get("unload_first")),
                         )
@@ -1387,6 +1393,11 @@ class DashboardApp:
         runtime_snapshot = self.runtime_preferences.snapshot()
         return _clean_config_overrides(runtime_snapshot.get("config_overrides"))
 
+    def _resolve_request_config_overrides(self, raw_overrides: Any | None = None) -> dict[str, Any]:
+        merged = self._runtime_config_overrides()
+        merged.update(_clean_config_overrides(raw_overrides))
+        return _clean_config_overrides(merged)
+
     def open_diagnostic_path(self, key: str) -> dict[str, Any]:
         diagnostics = self.system_paths()
         path_map = {
@@ -1411,11 +1422,12 @@ class DashboardApp:
         session_meta: Any | None = None,
         recovery_context: Any | None = None,
     ) -> dict[str, Any]:
+        resolved_overrides = self._resolve_request_config_overrides(config_overrides)
         parsed_recovery_context = self._coerce_recovery_context(recovery_context)
         if parsed_recovery_context:
             return self._chat_reply_with_temporary_text_model(
                 messages=messages,
-                config_overrides=config_overrides,
+                config_overrides=resolved_overrides,
                 session_meta=session_meta,
                 recovery_context=parsed_recovery_context,
             )
@@ -1428,8 +1440,8 @@ class DashboardApp:
         locale = normalize_help_locale(session_payload.get("locale"))
         latest_user_message = _extract_latest_user_message(clean_messages)
         math_mode = looks_like_math_request(latest_user_message)
-        config = load_agent_config(self.config_path, config_overrides=config_overrides)
-        model_name = self._resolve_chat_model(config_overrides=config_overrides)
+        config = load_agent_config(self.config_path, config_overrides=resolved_overrides)
+        model_name = self._resolve_chat_model(config_overrides=resolved_overrides)
         compatibility_mode = (
             config.model_provider == "lmstudio_local" and _is_vision_model_name(model_name)
         )
@@ -1476,7 +1488,7 @@ class DashboardApp:
                 self._raise_math_formula_unstable_error(
                     locale=locale,
                     clean_messages=clean_messages,
-                    config_overrides=config_overrides,
+                    config_overrides=resolved_overrides,
                     current_model_name=model_name,
                     detail=_truncate_chat_provider_detail(detail, limit=180),
                 )
@@ -1494,7 +1506,7 @@ class DashboardApp:
             self._raise_math_formula_unstable_error(
                 locale=locale,
                 clean_messages=clean_messages,
-                config_overrides=config_overrides,
+                config_overrides=resolved_overrides,
                 current_model_name=model_name,
             )
         if _looks_like_placeholder_chat_output(assistant_message):
@@ -1510,7 +1522,8 @@ class DashboardApp:
         }
 
     def provider_models(self, config_overrides: dict[str, Any]) -> dict[str, Any]:
-        config = load_agent_config(self.config_path, config_overrides=config_overrides)
+        resolved_overrides = self._resolve_request_config_overrides(config_overrides)
+        config = load_agent_config(self.config_path, config_overrides=resolved_overrides)
         snapshot = fetch_provider_snapshot(
             provider=config.model_provider,
             base_url=config.model_base_url,
@@ -1521,7 +1534,7 @@ class DashboardApp:
         preferred_chat_compatibility_mode = False
         try:
             preferred_chat_model, preferred_chat_compatibility_mode = self._resolve_chat_model_selection(
-                config_overrides=config_overrides,
+                config_overrides=resolved_overrides,
                 snapshot=snapshot,
             )
         except ProviderToolError:
@@ -1547,7 +1560,8 @@ class DashboardApp:
         model_id: str,
         unload_first: bool = False,
     ) -> dict[str, Any]:
-        config = load_agent_config(self.config_path, config_overrides=config_overrides)
+        resolved_overrides = self._resolve_request_config_overrides(config_overrides)
+        config = load_agent_config(self.config_path, config_overrides=resolved_overrides)
         if config.model_provider != "lmstudio_local":
             raise ProviderToolError("Model loading is only supported for the LM Studio local provider.")
         timeout = min(float(config.model_request_timeout), 20.0)
@@ -1610,7 +1624,8 @@ class DashboardApp:
         config_overrides: dict[str, Any],
         current_model_name: str,
     ) -> str | None:
-        config = load_agent_config(self.config_path, config_overrides=config_overrides)
+        resolved_overrides = self._resolve_request_config_overrides(config_overrides)
+        config = load_agent_config(self.config_path, config_overrides=resolved_overrides)
         snapshot = fetch_provider_snapshot(
             provider=config.model_provider,
             base_url=config.model_base_url,
@@ -1698,14 +1713,15 @@ class DashboardApp:
         session_meta: Any | None,
         recovery_context: dict[str, str],
     ) -> dict[str, Any]:
+        resolved_overrides = self._resolve_request_config_overrides(config_overrides)
         suggested_text_model = recovery_context["suggested_text_model"]
         restore_to_model = recovery_context["restore_to_model"]
-        retry_overrides = dict(config_overrides or {})
+        retry_overrides = dict(resolved_overrides)
         retry_overrides["model_name"] = suggested_text_model
 
         with self.model_switch_lock:
             self.provider_load_model(
-                config_overrides=config_overrides,
+                config_overrides=resolved_overrides,
                 model_id=suggested_text_model,
                 unload_first=True,
             )
@@ -1719,7 +1735,7 @@ class DashboardApp:
             finally:
                 if restore_to_model and restore_to_model != suggested_text_model:
                     self.provider_load_model(
-                        config_overrides=config_overrides,
+                        config_overrides=resolved_overrides,
                         model_id=restore_to_model,
                         unload_first=True,
                     )
@@ -1730,7 +1746,8 @@ class DashboardApp:
         config_overrides: dict[str, Any],
         snapshot: Any | None = None,
     ) -> tuple[str, bool]:
-        config = load_agent_config(self.config_path, config_overrides=config_overrides)
+        resolved_overrides = self._resolve_request_config_overrides(config_overrides)
+        config = load_agent_config(self.config_path, config_overrides=resolved_overrides)
         configured_model = (config.model_name or "").strip()
         if configured_model and configured_model.lower() not in {"auto", "first"}:
             return (
@@ -1856,6 +1873,7 @@ def _dashboard_chat_reply_stream(
     session_meta: Any | None = None,
     recovery_context: Any | None = None,
 ):
+    resolved_overrides = self._resolve_request_config_overrides(config_overrides)
     clean_messages = sanitize_chat_messages(messages)
     if not clean_messages:
         yield "error", {"error": "At least one chat message is required."}
@@ -1867,13 +1885,13 @@ def _dashboard_chat_reply_stream(
     math_mode = looks_like_math_request(latest_user_message)
     yield "start", {"session_meta": session_payload or None}
 
-    config = load_agent_config(self.config_path, config_overrides=config_overrides)
+    config = load_agent_config(self.config_path, config_overrides=resolved_overrides)
     parsed_recovery_context = self._coerce_recovery_context(recovery_context)
     if config.model_provider == "lmstudio_local" and parsed_recovery_context:
         try:
             payload = self.chat_reply(
                 messages=clean_messages,
-                config_overrides=config_overrides,
+                config_overrides=resolved_overrides,
                 session_meta=session_payload,
                 recovery_context=parsed_recovery_context,
             )
@@ -1900,7 +1918,7 @@ def _dashboard_chat_reply_stream(
         return
 
     try:
-        model_name = self._resolve_chat_model(config_overrides=config_overrides)
+        model_name = self._resolve_chat_model(config_overrides=resolved_overrides)
         compatibility_mode = (
             config.model_provider == "lmstudio_local" and _is_vision_model_name(model_name)
         )
@@ -1949,7 +1967,7 @@ def _dashboard_chat_reply_stream(
                 self._raise_math_formula_unstable_error(
                     locale=locale,
                     clean_messages=clean_messages,
-                    config_overrides=config_overrides,
+                    config_overrides=resolved_overrides,
                     current_model_name=model_name,
                     detail=_truncate_chat_provider_detail(detail, limit=180),
                 )
@@ -1979,7 +1997,7 @@ def _dashboard_chat_reply_stream(
                     self._raise_math_formula_unstable_error(
                         locale=locale,
                         clean_messages=clean_messages,
-                        config_overrides=config_overrides,
+                        config_overrides=resolved_overrides,
                         current_model_name=model_name,
                     )
                 except ProviderToolError as exc:
@@ -2038,7 +2056,7 @@ def _dashboard_chat_reply_stream(
                 self._raise_math_formula_unstable_error(
                     locale=locale,
                     clean_messages=clean_messages,
-                    config_overrides=config_overrides,
+                    config_overrides=resolved_overrides,
                     current_model_name=model_name,
                 )
             except ProviderToolError as exc:

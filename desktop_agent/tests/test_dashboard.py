@@ -682,6 +682,166 @@ def test_dashboard_runtime_preferences_roundtrip():
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_dashboard_provider_models_uses_runtime_preferences_when_request_overrides_are_empty(monkeypatch):
+    temp_root = Path(__file__).resolve().parents[2] / ".pytest-local" / f"aoryn-dashboard-provider-runtime-{uuid4().hex}"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    config_path = temp_root / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    app.runtime_preferences.update(
+        config_overrides={
+            "model_provider": "openai_compatible",
+            "model_base_url": "https://runtime.example.com/v1",
+            "model_api_key": "runtime-secret",
+            "model_name": "runtime-model",
+        }
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_provider_snapshot",
+        lambda **kwargs: captured.update(kwargs)
+        or ProviderSnapshot(
+            ok=True,
+            provider="openai_compatible",
+            api_base="https://runtime.example.com/v1",
+            root_base="https://runtime.example.com",
+            loaded_models=[],
+            catalog_models=[],
+            error=None,
+        ),
+    )
+    monkeypatch.setattr(DashboardApp, "_resolve_chat_model_selection", lambda self, **kwargs: ("runtime-model", False))
+
+    try:
+        payload = app.provider_models({})
+        assert payload["provider"] == "openai_compatible"
+        assert captured == {
+            "provider": "openai_compatible",
+            "base_url": "https://runtime.example.com/v1",
+            "api_key": "runtime-secret",
+            "timeout": 15.0,
+        }
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_dashboard_chat_reply_uses_runtime_preferences_when_request_overrides_are_empty(monkeypatch):
+    temp_root = Path(__file__).resolve().parents[2] / ".pytest-local" / f"aoryn-dashboard-chat-runtime-{uuid4().hex}"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    config_path = temp_root / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    app.runtime_preferences.update(
+        config_overrides={
+            "model_provider": "openai_compatible",
+            "model_base_url": "https://runtime.example.com/v1",
+            "model_api_key": "runtime-secret",
+            "model_name": "runtime-model",
+        }
+    )
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "runtime reply"}}]}
+
+    class _FakeRequests:
+        class RequestException(Exception):
+            pass
+
+        @staticmethod
+        def post(url, **kwargs):
+            captured["url"] = url
+            captured.update(kwargs)
+            return _FakeResponse()
+
+    monkeypatch.setitem(sys.modules, "requests", _FakeRequests)
+    monkeypatch.setattr(DashboardApp, "_resolve_chat_model", lambda self, **kwargs: "runtime-model")
+    monkeypatch.setattr(dashboard, "build_chat_system_prompt", lambda **kwargs: "runtime-system")
+
+    try:
+        payload = app.chat_reply(
+            messages=[{"role": "user", "content": "hello"}],
+            config_overrides={},
+            session_meta={"locale": "en-US"},
+        )
+        assert payload["assistant_message"] == "runtime reply"
+        assert captured["url"] == "https://runtime.example.com/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer runtime-secret"
+        assert captured["json"]["model"] == "runtime-model"
+        assert captured["json"]["messages"][0] == {"role": "system", "content": "runtime-system"}
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_dashboard_task_route_merges_runtime_preferences_with_request_overrides(monkeypatch):
+    temp_root = Path(__file__).resolve().parents[2] / ".pytest-local" / f"aoryn-dashboard-task-runtime-{uuid4().hex}"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    config_path = temp_root / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    app.runtime_preferences.update(
+        config_overrides={
+            "model_provider": "openai_compatible",
+            "model_base_url": "https://runtime.example.com/v1",
+            "model_api_key": "runtime-secret",
+        }
+    )
+    captured: dict[str, object] = {}
+
+    def _submit(**kwargs):
+        captured.update(kwargs)
+        return DashboardJob(
+            job_id="job-runtime",
+            task=kwargs["task"],
+            planner_mode=kwargs.get("planner_mode") or "auto",
+            dry_run=bool(kwargs.get("dry_run")),
+            max_steps=kwargs.get("max_steps"),
+            pause_after_action=kwargs.get("pause_after_action"),
+            config_overrides=dict(kwargs.get("config_overrides") or {}),
+        )
+
+    monkeypatch.setattr(app.queue, "submit", _submit)
+
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "visit openai.com and click login",
+                    "config_overrides": {
+                        "model_base_url": " https://override.example.com/v1 ",
+                    },
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 202
+            assert payload["id"] == "job-runtime"
+
+        assert captured["config_overrides"] == {
+            "model_provider": "openai_compatible",
+            "model_base_url": "https://override.example.com/v1",
+            "model_api_key": "runtime-secret",
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_dashboard_system_paths_and_open_path(monkeypatch):
     temp_root = Path(__file__).resolve().parents[2] / ".pytest-local" / f"aoryn-dashboard-paths-{uuid4().hex}"
     temp_root.mkdir(parents=True, exist_ok=True)

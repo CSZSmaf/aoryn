@@ -87,17 +87,26 @@ function snapshot(value) {
 }
 
 
-function buildOverviewPayload({ runs = [], chatLaunchId = "boot-1" } = {}) {
+function buildOverviewPayload({
+  runs = [],
+  chatLaunchId = "boot-1",
+  defaults = {},
+  runtimePreferences = {},
+  modelProviders = [],
+  structuredOutputModes = [],
+  browserDomBackends = [],
+  browserChannels = [],
+} = {}) {
   return {
     meta: {
       chat_launch_id: chatLaunchId,
-      defaults: {},
-      model_providers: [],
-      structured_output_modes: [],
-      browser_dom_backends: [],
-      browser_channels: [],
+      defaults,
+      model_providers: modelProviders,
+      structured_output_modes: structuredOutputModes,
+      browser_dom_backends: browserDomBackends,
+      browser_channels: browserChannels,
     },
-    runtime_preferences: {},
+    runtime_preferences: runtimePreferences,
     active_job: null,
     jobs: [],
     runs,
@@ -189,6 +198,16 @@ globalThis.__appTest = {
   buildSidebarHistoryItems,
   syncChatLaunchState,
   loadPersistedHistorySelection,
+  originals: {
+    hydrateDefaults,
+    restoreOverviewSnapshot,
+    renderAvailableModels,
+    updateProviderActionButtons,
+    updateProviderStatusHints,
+    scheduleProviderInspection,
+    buildConfigOverrides,
+    fillSelect,
+  },
 };`,
     context,
     { filename: appPath }
@@ -446,4 +465,218 @@ fetchJson = async (url) => {
 
   const chatHtml = context.document.getElementById("chatStream").innerHTML;
   assert.match(chatHtml, /chat-welcome/);
+});
+
+
+await runTest("hydrates provider settings from runtime preferences before meta defaults", async () => {
+  const context = createHarness();
+  const overview = buildOverviewPayload({
+    defaults: {
+      model_provider: "lmstudio_local",
+      model_base_url: "http://127.0.0.1:1234/v1",
+      model_name: "auto",
+      model_auto_discover: true,
+      model_structured_output: "auto",
+      browser_dom_backend: "playwright",
+      browser_channel: "msedge",
+      browser_headless: false,
+    },
+    runtimePreferences: {
+      config_overrides: {
+        model_provider: "openai_compatible",
+        model_base_url: "https://api.runtime.example/v1",
+        model_name: "gpt-runtime",
+        model_auto_discover: false,
+        model_structured_output: "json_object",
+        browser_dom_backend: "playwright",
+        browser_channel: "chrome",
+        browser_headless: true,
+      },
+      ui_preferences: {},
+      updated_at: 123,
+    },
+    modelProviders: [
+      { value: "lmstudio_local", label: "Local LM Studio", supports_model_refresh: true, supports_model_load: true, portal_url: "http://127.0.0.1:1234", docs_url: "" },
+      { value: "openai_compatible", label: "OpenAI-Compatible API", supports_model_refresh: true, supports_model_load: false, portal_url: "", docs_url: "" },
+    ],
+    structuredOutputModes: [
+      { value: "auto", label: "Auto" },
+      { value: "json_object", label: "JSON Object" },
+    ],
+    browserDomBackends: [{ value: "playwright", label: "Playwright" }],
+    browserChannels: [
+      { value: "", label: "System default" },
+      { value: "msedge", label: "Microsoft Edge" },
+      { value: "chrome", label: "Google Chrome" },
+    ],
+  });
+  vm.runInContext(
+    `
+fillSelect = globalThis.__appTest.originals.fillSelect;
+hydrateDefaults = globalThis.__appTest.originals.hydrateDefaults;
+updateProviderActionButtons = globalThis.__appTest.originals.updateProviderActionButtons;
+renderAvailableModels = globalThis.__appTest.originals.renderAvailableModels;
+`,
+    context
+  );
+
+  context.__appTest.state.locale = "en-US";
+  context.__appTest.state.meta = snapshot(overview.meta);
+  context.__appTest.state.runtimePreferences = snapshot(overview.runtime_preferences);
+  context.__appTest.state.hydrated = false;
+
+  context.__appTest.originals.hydrateDefaults();
+
+  assert.equal(context.document.getElementById("modelProvider").value, "openai_compatible");
+  assert.equal(context.document.getElementById("modelBaseUrl").value, "https://api.runtime.example/v1");
+  assert.equal(context.document.getElementById("modelName").value, "gpt-runtime");
+  assert.equal(context.document.getElementById("modelAutoDiscover").checked, false);
+  assert.equal(context.document.getElementById("structuredOutput").value, "json_object");
+  assert.equal(context.document.getElementById("browserChannel").value, "chrome");
+  assert.equal(context.document.getElementById("browserHeadless").checked, true);
+
+  const overrides = snapshot(context.__appTest.originals.buildConfigOverrides());
+  assert.equal(overrides.model_provider, "openai_compatible");
+  assert.equal(overrides.model_base_url, "https://api.runtime.example/v1");
+  assert.equal(overrides.model_name, "gpt-runtime");
+});
+
+
+await runTest("cached overview restore also restores runtime provider preferences", async () => {
+  const overview = buildOverviewPayload({
+    defaults: {
+      model_provider: "lmstudio_local",
+      model_base_url: "http://127.0.0.1:1234/v1",
+      model_name: "auto",
+      model_auto_discover: true,
+      browser_dom_backend: "playwright",
+      browser_channel: "msedge",
+    },
+    runtimePreferences: {
+      config_overrides: {
+        model_provider: "openai_compatible",
+        model_base_url: "https://cached.example/v1",
+        model_name: "cached-model",
+        model_auto_discover: false,
+      },
+      ui_preferences: { onboarding_completed: true },
+      updated_at: 456,
+    },
+    modelProviders: [
+      { value: "lmstudio_local", label: "Local LM Studio", supports_model_refresh: true, supports_model_load: true, portal_url: "http://127.0.0.1:1234", docs_url: "" },
+      { value: "openai_compatible", label: "OpenAI-Compatible API", supports_model_refresh: true, supports_model_load: false, portal_url: "", docs_url: "" },
+    ],
+  });
+  const context = createHarness({
+    localStorageSeed: {
+      "desktop-agent-workspace.overview-cache": JSON.stringify(overview),
+    },
+  });
+  vm.runInContext(
+    `
+fillSelect = globalThis.__appTest.originals.fillSelect;
+hydrateDefaults = globalThis.__appTest.originals.hydrateDefaults;
+updateProviderActionButtons = globalThis.__appTest.originals.updateProviderActionButtons;
+renderAvailableModels = globalThis.__appTest.originals.renderAvailableModels;
+`,
+    context
+  );
+
+  context.__appTest.state.locale = "en-US";
+  const restored = context.__appTest.originals.restoreOverviewSnapshot();
+
+  assert.equal(restored, true);
+  assert.equal(context.__appTest.state.runtimePreferences.config_overrides.model_provider, "openai_compatible");
+  assert.equal(context.document.getElementById("modelProvider").value, "openai_compatible");
+  assert.equal(context.document.getElementById("modelBaseUrl").value, "https://cached.example/v1");
+  assert.equal(context.document.getElementById("modelName").value, "cached-model");
+});
+
+
+await runTest("provider actions stay disabled and skip inspection before config hydration", async () => {
+  const context = createHarness();
+  vm.runInContext(
+    `
+renderAvailableModels = globalThis.__appTest.originals.renderAvailableModels;
+updateProviderActionButtons = globalThis.__appTest.originals.updateProviderActionButtons;
+scheduleProviderInspection = globalThis.__appTest.originals.scheduleProviderInspection;
+globalThis.__providerPostCount = 0;
+postJson = async () => {
+  globalThis.__providerPostCount += 1;
+  return { ok: true, payload: {} };
+};
+`,
+    context
+  );
+
+  context.__appTest.state.locale = "en-US";
+  context.__appTest.state.meta = snapshot(
+    buildOverviewPayload({
+      modelProviders: [
+        {
+          value: "lmstudio_local",
+          label: "Local LM Studio",
+          supports_model_refresh: true,
+          supports_model_load: true,
+          portal_url: "http://127.0.0.1:1234",
+          docs_url: "https://example.com/docs",
+        },
+      ],
+    }).meta
+  );
+  context.__appTest.state.hydrated = false;
+  context.document.getElementById("modelProvider").value = "lmstudio_local";
+
+  context.__appTest.originals.scheduleProviderInspection({ immediate: true, force: true, message: "Loading provider" });
+
+  assert.equal(context.__providerPostCount, 0);
+  assert.match(context.document.getElementById("availableModels").innerHTML, /Loading configuration/);
+  assert.equal(context.document.getElementById("testProviderButton").disabled, true);
+  assert.equal(context.document.getElementById("refreshModelsButton").disabled, true);
+  assert.equal(context.document.getElementById("refreshCatalogButton").disabled, true);
+  assert.equal(context.document.getElementById("openProviderPortalButton").disabled, true);
+});
+
+
+await runTest("provider error placeholder shows the real error instead of a fake empty state", async () => {
+  const context = createHarness();
+  vm.runInContext(
+    `
+renderAvailableModels = globalThis.__appTest.originals.renderAvailableModels;
+updateProviderActionButtons = globalThis.__appTest.originals.updateProviderActionButtons;
+`,
+    context
+  );
+
+  context.__appTest.state.locale = "en-US";
+  context.__appTest.state.hydrated = true;
+  context.__appTest.state.meta = snapshot(
+    buildOverviewPayload({
+      modelProviders: [
+        {
+          value: "lmstudio_local",
+          label: "Local LM Studio",
+          supports_model_refresh: true,
+          supports_model_load: true,
+          portal_url: "",
+          docs_url: "",
+        },
+      ],
+      defaults: { model_provider: "lmstudio_local" },
+    }).meta
+  );
+  context.document.getElementById("modelProvider").value = "lmstudio_local";
+
+  context.__appTest.originals.renderAvailableModels({
+    ok: false,
+    provider: "lmstudio_local",
+    error: "Provider inspection failed hard.",
+    catalog_models: [],
+    loaded_models: [],
+  });
+
+  const html = context.document.getElementById("availableModels").innerHTML;
+  assert.match(html, /Provider inspection failed hard\./);
+  assert.equal(html.includes("No models available"), false);
+  assert.equal(context.document.getElementById("availableModels").disabled, true);
 });

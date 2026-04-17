@@ -398,8 +398,12 @@ function initializeState() {
   state.chatSessions = loadChatSessions();
   state.historySelection = loadPersistedHistorySelection();
   state.selectedChatSessionId = detectInitialChatSessionId(state.chatSessions);
+  ensureRuntimePreferencesState();
   fillLanguageOptions();
   fillSendShortcutOptions();
+  renderAvailableModels(null);
+  updateProviderStatusHints();
+  updateProviderActionButtons();
 }
 
 function initializeEnhancedControls() {
@@ -514,6 +518,7 @@ async function refreshOverview(options = {}) {
   state.usingCachedSnapshot = false;
   state.meta = payload.meta || null;
   state.runtimePreferences = payload.runtime_preferences || state.runtimePreferences;
+  ensureRuntimePreferencesState();
   syncChatLaunchState(state.meta);
   state.activeJob = payload.active_job || null;
   state.jobs = payload.jobs || [];
@@ -566,16 +571,32 @@ function markActiveJobStopping() {
 function hydrateDefaults() {
   if (!state.meta) return;
   const firstHydration = !state.hydrated;
+  const defaults = getEffectiveConfigDefaults();
 
   fillLanguageOptions();
   fillSendShortcutOptions();
-  fillSelect(elements.modelProvider, state.meta.model_providers || [], elements.modelProvider.value || state.meta.defaults?.model_provider);
-  fillSelect(elements.structuredOutput, state.meta.structured_output_modes || [], elements.structuredOutput.value || state.meta.defaults?.model_structured_output);
-  fillSelect(elements.browserDomBackend, state.meta.browser_dom_backends || [], elements.browserDomBackend.value || state.meta.defaults?.browser_dom_backend);
-  fillSelect(elements.browserChannel, localizeBrowserChannels(state.meta.browser_channels || []), elements.browserChannel.value || state.meta.defaults?.browser_channel || "");
+  fillSelect(
+    elements.modelProvider,
+    state.meta.model_providers || [],
+    (firstHydration ? defaults.model_provider : elements.modelProvider.value) || defaults.model_provider
+  );
+  fillSelect(
+    elements.structuredOutput,
+    state.meta.structured_output_modes || [],
+    (firstHydration ? defaults.model_structured_output : elements.structuredOutput.value) || defaults.model_structured_output
+  );
+  fillSelect(
+    elements.browserDomBackend,
+    state.meta.browser_dom_backends || [],
+    (firstHydration ? defaults.browser_dom_backend : elements.browserDomBackend.value) || defaults.browser_dom_backend
+  );
+  fillSelect(
+    elements.browserChannel,
+    localizeBrowserChannels(state.meta.browser_channels || []),
+    (firstHydration ? defaults.browser_channel : elements.browserChannel.value) || defaults.browser_channel || ""
+  );
 
   if (firstHydration) {
-    const defaults = state.meta.defaults || {};
     elements.maxStepsInput.value = defaults.max_steps ?? "";
     elements.pauseInput.value = defaults.pause_after_action ?? "";
     elements.modelBaseUrl.value = defaults.model_base_url ?? "";
@@ -689,6 +710,7 @@ function renderAll() {
   renderHelpCenter();
   renderInspector();
   renderProviderCatalogNote();
+  updateProviderActionButtons();
   syncCustomSelects();
 }
 
@@ -1382,6 +1404,25 @@ function ensureRuntimePreferencesState() {
   return state.runtimePreferences;
 }
 
+function getRuntimeConfigOverrides() {
+  return ensureRuntimePreferencesState().config_overrides || {};
+}
+
+function getEffectiveConfigDefaults() {
+  return {
+    ...(state.meta?.defaults || {}),
+    ...getRuntimeConfigOverrides(),
+  };
+}
+
+function isConfigHydrated() {
+  return Boolean(state.hydrated);
+}
+
+function getConfigLoadingMessage() {
+  return tr("正在加载配置...", "Loading configuration...");
+}
+
 function persistRuntimePreferencesLocally() {
   const snapshot = ensureRuntimePreferencesState();
   snapshot.config_overrides = buildConfigOverrides();
@@ -1668,7 +1709,9 @@ function renderProviderCatalogNote() {
   let note = "";
   let tone = "";
 
-  if (!profile?.supports_model_refresh) {
+  if (!isConfigHydrated()) {
+    note = getConfigLoadingMessage();
+  } else if (!profile?.supports_model_refresh) {
     note = "";
   } else if (state.providerInspectionBusy) {
     note = tr("正在读取模型目录...", "Loading available models...");
@@ -2564,6 +2607,10 @@ function handleProviderChange(options = {}) {
 }
 
 function updateProviderStatusHints() {
+  if (!isConfigHydrated()) {
+    state.providerStatusMessage = getConfigLoadingMessage();
+    return;
+  }
   const profile = findProviderProfile(elements.modelProvider.value);
   const localized = localizeProviderProfile(profile);
 
@@ -2589,19 +2636,31 @@ function updateProviderStatusHints() {
 }
 
 function updateProviderActionButtons() {
+  const configReady = isConfigHydrated();
   const profile = findProviderProfile(elements.modelProvider.value);
-  const hasSelection = Boolean(elements.availableModels.value);
-  elements.refreshModelsButton.disabled = !Boolean(profile?.supports_model_refresh);
+  const hasSelection = configReady && Boolean(elements.availableModels.value);
+  const canRefresh = configReady && Boolean(profile?.supports_model_refresh);
+  elements.testProviderButton.disabled = !canRefresh || state.providerInspectionBusy;
+  elements.refreshModelsButton.disabled = !canRefresh || state.providerInspectionBusy;
   if (elements.refreshCatalogButton) {
-    elements.refreshCatalogButton.disabled = !Boolean(profile?.supports_model_refresh) || state.providerInspectionBusy;
+    elements.refreshCatalogButton.disabled = !canRefresh || state.providerInspectionBusy;
   }
   elements.applyModelButton.disabled = !hasSelection;
   elements.loadLmStudioModelButton.disabled = !Boolean(profile?.supports_model_load && hasSelection);
-  elements.openProviderPortalButton.disabled = !Boolean(profile?.portal_url);
-  elements.openProviderDocsButton.disabled = !Boolean(profile?.docs_url);
+  elements.openProviderPortalButton.disabled = !configReady || !Boolean(profile?.portal_url);
+  elements.openProviderDocsButton.disabled = !configReady || !Boolean(profile?.docs_url);
 }
 
 async function inspectProvider(message, options = {}) {
+  if (!isConfigHydrated()) {
+    state.providerInspectionBusy = false;
+    state.providerSnapshot = null;
+    state.providerInspectionSignature = "";
+    renderAvailableModels(null);
+    updateProviderStatusHints();
+    renderAll();
+    return;
+  }
   const signature = options.signature || getProviderInspectionSignature();
   const token = ++state.providerInspectionToken;
   state.providerInspectionBusy = true;
@@ -2633,11 +2692,17 @@ async function inspectProvider(message, options = {}) {
 function renderAvailableModels(snapshot) {
   const items = Array.isArray(snapshot?.catalog_models) ? snapshot.catalog_models : [];
   if (!items.length) {
-    const emptyLabel = state.providerInspectionBusy
+    let emptyLabel = state.providerInspectionBusy
       ? tr("正在读取模型...", "Loading models...")
       : tr("暂无可用模型", "No models available");
+    if (!isConfigHydrated()) {
+      emptyLabel = getConfigLoadingMessage();
+    } else if (snapshot && snapshot.ok === false && snapshot.error && !state.providerInspectionBusy) {
+      emptyLabel = snapshot.error;
+    }
     elements.availableModels.innerHTML = `<option value="">${escapeHtml(emptyLabel)}</option>`;
     elements.availableModels.value = "";
+    elements.availableModels.disabled = true;
     syncCustomSelect(elements.availableModels);
     updateProviderActionButtons();
     return;
@@ -2683,6 +2748,7 @@ function renderAvailableModels(snapshot) {
     matchedPreferred?.id ||
     matchedLoaded?.id ||
     rankedItems[0].id;
+  elements.availableModels.disabled = false;
   syncCustomSelect(elements.availableModels);
   updateProviderActionButtons();
 }
@@ -2767,6 +2833,16 @@ function getProviderInspectionSignature() {
 }
 
 function scheduleProviderInspection({ immediate = false, force = false, message } = {}) {
+  if (!isConfigHydrated() || !state.meta) {
+    state.providerSnapshot = null;
+    state.providerInspectionBusy = false;
+    state.providerInspectionSignature = "";
+    renderAvailableModels(null);
+    updateProviderStatusHints();
+    updateProviderActionButtons();
+    renderAll();
+    return;
+  }
   const profile = findProviderProfile(elements.modelProvider.value);
   if (!profile?.supports_model_refresh) {
     state.providerSnapshot = null;
@@ -2900,7 +2976,18 @@ async function syncRuntimePreferences() {
 }
 
 function findProviderProfile(value = elements.modelProvider.value) {
-  return (state.meta?.model_providers || []).find((item) => item.value === value) || null;
+  const profile = (state.meta?.model_providers || []).find((item) => item.value === value) || null;
+  if (!profile) return null;
+  const defaults = getEffectiveConfigDefaults();
+  if (defaults.model_provider !== profile.value) {
+    return profile;
+  }
+  return {
+    ...profile,
+    base_url: defaults.model_base_url || profile.base_url,
+    auto_discover:
+      typeof defaults.model_auto_discover === "boolean" ? defaults.model_auto_discover : profile.auto_discover,
+  };
 }
 
 function buildStarterSuggestions() {
@@ -3402,6 +3489,8 @@ function restoreOverviewSnapshot() {
     if (!raw) return false;
     const snapshot = JSON.parse(raw);
     state.meta = snapshot.meta || null;
+    state.runtimePreferences = snapshot.runtime_preferences || state.runtimePreferences;
+    ensureRuntimePreferencesState();
     state.activeJob = snapshot.active_job || null;
     state.jobs = snapshot.jobs || [];
     state.runs = snapshot.runs || [];
@@ -4680,6 +4769,11 @@ async function handleSubmit(event) {
   event.preventDefault();
   const text = elements.taskInput.value.trim();
 
+  if (!isConfigHydrated()) {
+    elements.submitHint.textContent = getConfigLoadingMessage();
+    return;
+  }
+
   if (!text) {
     elements.submitHint.textContent = tr("先输入内容", "Enter something first");
     return;
@@ -5616,22 +5710,23 @@ function renderNormalAssistantPendingMessage(draft = state.chatStreamDraft) {
 }
 
 function renderComposerState(context) {
+  const configReady = isConfigHydrated();
   if (state.uiMode === "chat") {
     const chatStopLabel = state.chatStopRequested ? tr("停止中", "Stopping") : t("chat.stop");
     elements.taskInput.disabled = Boolean(state.chatPending);
-    elements.submitButton.disabled = Boolean(state.chatPending);
+    elements.submitButton.disabled = Boolean(state.chatPending) || !configReady;
     elements.submitButton.hidden = Boolean(state.chatPending);
     elements.stopButton.hidden = !state.chatPending;
     elements.stopButton.disabled = !state.chatPending || Boolean(state.chatStopRequested);
     elements.stopButton.setAttribute("aria-label", chatStopLabel);
     elements.stopButton.setAttribute("title", chatStopLabel);
-    elements.submitHint.textContent = "";
+    elements.submitHint.textContent = configReady ? "" : getConfigLoadingMessage();
     return;
   }
 
   const isRunning = Boolean(state.activeJob);
   elements.taskInput.disabled = isRunning;
-  elements.submitButton.disabled = isRunning;
+  elements.submitButton.disabled = isRunning || !configReady;
   elements.submitButton.hidden = isRunning;
   elements.stopButton.disabled = !isRunning || Boolean(state.activeJob?.cancel_requested);
   elements.stopButton.hidden = !isRunning;
@@ -5646,6 +5741,11 @@ function renderComposerState(context) {
 
   if (state.pendingTask) {
     elements.submitHint.textContent = tr("\u4efb\u52a1\u5df2\u53d1\u9001", "Queued");
+    return;
+  }
+
+  if (!configReady) {
+    elements.submitHint.textContent = getConfigLoadingMessage();
     return;
   }
 
