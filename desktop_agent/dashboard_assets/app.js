@@ -3143,6 +3143,10 @@ function buildRecordState(record) {
   return { label: tr("执行中", "Running"), tone: "ok" };
 }
 
+function renderRunState(record) {
+  return buildRecordState(record).label;
+}
+
 function needsHumanVerification(record) {
   return Boolean(record?.requires_human || record?.interruption_kind || record?.interruption_reason);
 }
@@ -3428,6 +3432,11 @@ function formatTime(value) {
     minute: "2-digit",
     second: "2-digit",
   }).format(new Date(Number(value) * 1000));
+}
+
+function formatTimestamp(value) {
+  if (!Number.isFinite(Number(value))) return "--";
+  return formatShortTime(value);
 }
 
 function truncate(value, max = 80) {

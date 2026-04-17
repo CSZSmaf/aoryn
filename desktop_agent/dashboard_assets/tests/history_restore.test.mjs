@@ -194,10 +194,12 @@ globalThis.__appTest = {
   initializeState,
   initializeApp,
   renderAll,
+  renderAboutPanel,
   refreshOverview,
   buildSidebarHistoryItems,
   syncChatLaunchState,
   loadPersistedHistorySelection,
+  formatTimestamp,
   originals: {
     hydrateDefaults,
     restoreOverviewSnapshot,
@@ -207,6 +209,7 @@ globalThis.__appTest = {
     scheduleProviderInspection,
     buildConfigOverrides,
     fillSelect,
+    renderAboutPanel,
   },
 };`,
     context,
@@ -679,4 +682,37 @@ updateProviderActionButtons = globalThis.__appTest.originals.updateProviderActio
   assert.match(html, /Provider inspection failed hard\./);
   assert.equal(html.includes("No models available"), false);
   assert.equal(context.document.getElementById("availableModels").disabled, true);
+});
+
+
+await runTest("about panel renders recent runs without throwing when timestamps are present", async () => {
+  const context = createHarness();
+  context.__appTest.state.locale = "en-US";
+  context.__appTest.state.meta = snapshot(
+    buildOverviewPayload({
+      defaults: { model_provider: "lmstudio_local" },
+    }).meta
+  );
+  context.__appTest.state.runs = [
+    {
+      id: "run-1",
+      task: "visit openai",
+      created_at: 1711000000,
+      started_at: 1711000000,
+      finished_at: 1711000060,
+      completed: true,
+      cancelled: false,
+      requires_human: false,
+      error: null,
+      cancel_reason: null,
+      interruption_reason: null,
+    },
+  ];
+
+  assert.equal(typeof context.__appTest.formatTimestamp, "function");
+  context.__appTest.renderAboutPanel();
+
+  const aboutHtml = context.document.getElementById("aboutContent").innerHTML;
+  assert.match(aboutHtml, /visit openai/);
+  assert.equal(aboutHtml.includes("formatTimestamp"), false);
 });

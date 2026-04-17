@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 APP_NAME = "Aoryn"
-APP_VERSION = "0.1.11"
+APP_VERSION = "0.1.12"
 APP_PUBLISHER = "Aoryn"
 APP_ID = "Aoryn.Desktop.Shell"
 APP_RELEASE_ARCH = "win64"
-APP_ASSET_REVISION = 11
+APP_ASSET_REVISION = 12
 APP_ASSET_VERSION = f"app-v{APP_VERSION.replace('.', '-')}-r{APP_ASSET_REVISION}"
 
 
