@@ -121,6 +121,9 @@ function createHarness({ localStorageSeed = {}, sessionStorageSeed = {}, overvie
     querySelectorAll() {
       return [];
     },
+    querySelector() {
+      return null;
+    },
     addEventListener() {},
   };
 
@@ -180,6 +183,8 @@ function createHarness({ localStorageSeed = {}, sessionStorageSeed = {}, overvie
 globalThis.__appTest = {
   state,
   initializeState,
+  initializeApp,
+  renderAll,
   refreshOverview,
   buildSidebarHistoryItems,
   syncChatLaunchState,
@@ -410,4 +415,35 @@ await runTest("mixed history items keep stable sorting while active state follow
   assert.deepEqual(snapshot(items.map((item) => item.id)), ["chat-1", "run-1", "run-2"]);
   assert.equal(items[0].active, false);
   assert.equal(items[1].active, true);
+});
+
+
+await runTest("initial render clears skeleton placeholders before overview resolves", async () => {
+  const context = createHarness();
+  vm.runInContext(
+    `
+initializeEnhancedControls = () => {};
+renderAll = globalThis.__appTest.renderAll;
+fetchJson = async (url) => {
+  if (url === "/api/overview") {
+    return new Promise(() => {});
+  }
+  if (url === "/api/system/display-detection") {
+    return globalThis.__displayDetectionPayload;
+  }
+  return null;
+};
+`,
+    context
+  );
+
+  const initPromise = context.__appTest.initializeApp();
+  assert.equal(typeof initPromise?.then, "function");
+
+  const sidebarHtml = context.document.getElementById("sidebarRunList").innerHTML;
+  assert.match(sidebarHtml, /empty-state/);
+  assert.equal(sidebarHtml.includes("sidebar-skeleton"), false);
+
+  const chatHtml = context.document.getElementById("chatStream").innerHTML;
+  assert.match(chatHtml, /chat-welcome/);
 });

@@ -370,16 +370,22 @@ const elements = {
   lightboxCloseButton: document.getElementById("lightboxCloseButton"),
 };
 
-document.addEventListener("DOMContentLoaded", async () => {
+async function initializeApp() {
   initializeState();
   initializeEnhancedControls();
-  applyShellState();
-  applyStaticCopy();
   bindEvents();
+  renderAll();
   await refreshOverview({ initial: true });
+  if (state.pollingHandle) {
+    window.clearInterval(state.pollingHandle);
+  }
   state.pollingHandle = window.setInterval(() => {
-    refreshOverview({ background: true });
+    void refreshOverview({ background: true });
   }, 2500);
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  void initializeApp();
 });
 
 function initializeState() {
