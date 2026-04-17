@@ -5104,7 +5104,7 @@ body {
   --glass-blur: none;
   --sidebar-open: 260px;
   --sidebar-collapsed: 84px;
-  --content-max: 760px;
+  --content-max: 1120px;
 }
 
 html,

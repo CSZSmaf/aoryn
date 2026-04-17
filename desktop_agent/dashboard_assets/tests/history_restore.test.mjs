@@ -87,6 +87,23 @@ function snapshot(value) {
 }
 
 
+function getLastCssBlock(source, selector, needle = null) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`${escapedSelector}\\s*\\{([\\s\\S]*?)\\}`, "g");
+  const matches = [...source.matchAll(pattern)].map((match) => match[1]);
+
+  const block =
+    needle == null
+      ? matches.at(-1)
+      : matches.findLast((entry) =>
+          needle instanceof RegExp ? needle.test(entry) : entry.includes(needle),
+        );
+
+  assert.ok(block, `Expected CSS block for ${selector}`);
+  return block ?? "";
+}
+
+
 function buildOverviewPayload({
   runs = [],
   chatLaunchId = "boot-1",
@@ -830,18 +847,30 @@ await runTest("dashboard brand assets and layout tokens stay on the fallback whi
   const stylesSource = fs.readFileSync(path.resolve(import.meta.dirname, "../styles.css"), "utf8");
   const dashboardLogoSvg = path.resolve(import.meta.dirname, "../icons/logo-mark.svg");
   const webLogoSvg = path.resolve(import.meta.dirname, "../../../web/public/logo-mark.svg");
+  const finalRootBlock = getLastCssBlock(stylesSource, ":root");
+  const finalChatScrollBlock = getLastCssBlock(stylesSource, ".chat-scroll", /justify-content:\s*center;/);
+  const finalChatStreamBlock = getLastCssBlock(stylesSource, ".chat-stream");
+  const finalChatWelcomeBlock = getLastCssBlock(stylesSource, ".chat-welcome");
+  const finalComposerWrapBlock = getLastCssBlock(stylesSource, ".composer-wrap", /align-items:\s*center;/);
+  const finalComposerSuggestionsBlock = getLastCssBlock(stylesSource, ".composer-suggestions");
+  const finalComposerBlock = getLastCssBlock(stylesSource, ".composer");
 
   assert.match(indexSource, /brand-mark__image" src="\/assets\/icons\/logo-mark\.png\?v=__APP_ASSET_VERSION__/);
   assert.equal(indexSource.includes("logo-mark.svg"), false);
-  assert.match(stylesSource, /--sidebar-open:\s*260px;/);
-  assert.match(stylesSource, /--sidebar-collapsed:\s*84px;/);
-  assert.match(stylesSource, /--content-max:\s*1120px;/);
+  assert.match(finalRootBlock, /--sidebar-open:\s*260px;/);
+  assert.match(finalRootBlock, /--sidebar-collapsed:\s*84px;/);
+  assert.match(finalRootBlock, /--content-max:\s*1120px;/);
+  assert.equal(stylesSource.includes("--content-max: 760px;"), false);
   assert.equal(stylesSource.includes("--content-max: 968px;"), false);
-  assert.match(stylesSource, /\.chat-stream\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
-  assert.match(stylesSource, /\.composer-suggestions\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
-  assert.match(stylesSource, /\.composer\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
-  assert.match(stylesSource, /\.chat-welcome\s*\{[\s\S]*?text-align:\s*center;/);
-  assert.match(stylesSource, /\.composer-wrap\s*\{[\s\S]*?align-items:\s*center;/);
+  assert.match(finalChatScrollBlock, /display:\s*flex;/);
+  assert.match(finalChatScrollBlock, /justify-content:\s*center;/);
+  assert.match(finalChatStreamBlock, /width:\s*min\(100%, var\(--content-max\)\);/);
+  assert.match(finalChatWelcomeBlock, /width:\s*min\(100%, var\(--content-max\)\);/);
+  assert.match(finalChatWelcomeBlock, /text-align:\s*center;/);
+  assert.match(finalComposerWrapBlock, /width:\s*100%;/);
+  assert.match(finalComposerWrapBlock, /align-items:\s*center;/);
+  assert.match(finalComposerSuggestionsBlock, /width:\s*min\(100%, var\(--content-max\)\);/);
+  assert.match(finalComposerBlock, /width:\s*min\(100%, var\(--content-max\)\);/);
   assert.equal(fs.existsSync(dashboardLogoSvg), false);
   assert.equal(fs.existsSync(webLogoSvg), false);
 });
