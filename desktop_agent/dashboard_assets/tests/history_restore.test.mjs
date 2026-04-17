@@ -835,11 +835,13 @@ await runTest("dashboard brand assets and layout tokens stay on the fallback whi
   assert.equal(indexSource.includes("logo-mark.svg"), false);
   assert.match(stylesSource, /--sidebar-open:\s*260px;/);
   assert.match(stylesSource, /--sidebar-collapsed:\s*84px;/);
-  assert.match(stylesSource, /--content-max:\s*760px;/);
+  assert.match(stylesSource, /--content-max:\s*1120px;/);
   assert.equal(stylesSource.includes("--content-max: 968px;"), false);
   assert.match(stylesSource, /\.chat-stream\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
   assert.match(stylesSource, /\.composer-suggestions\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
   assert.match(stylesSource, /\.composer\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
+  assert.match(stylesSource, /\.chat-welcome\s*\{[\s\S]*?text-align:\s*center;/);
+  assert.match(stylesSource, /\.composer-wrap\s*\{[\s\S]*?align-items:\s*center;/);
   assert.equal(fs.existsSync(dashboardLogoSvg), false);
   assert.equal(fs.existsSync(webLogoSvg), false);
 });

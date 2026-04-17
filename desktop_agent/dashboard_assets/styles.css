@@ -22,7 +22,7 @@
   --text-secondary: var(--ink-soft);
   --sidebar-open: 260px;
   --sidebar-collapsed: 84px;
-  --content-max: 760px;
+  --content-max: 1120px;
 }
 
 * {
@@ -3573,7 +3573,7 @@ body {
   --glass-blur: blur(18px);
   --sidebar-open: 260px;
   --sidebar-collapsed: 84px;
-  --content-max: 760px;
+  --content-max: 1120px;
 }
 
 html,
@@ -5331,11 +5331,16 @@ body {
 }
 
 .chat-scroll {
-  padding: 20px 24px 12px;
+  display: flex;
+  justify-content: center;
+  padding: 28px 32px 18px;
 }
 
 .chat-stream {
   width: min(100%, var(--content-max));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   margin: 0 auto;
   gap: 18px;
 }
@@ -5343,11 +5348,12 @@ body {
 .chat-welcome {
   display: grid;
   gap: 12px;
+  width: min(100%, var(--content-max));
   justify-items: center;
   text-align: center;
   max-width: none;
   margin: 0 auto;
-  padding: 72px 0 18px;
+  padding: 88px 0 24px;
 }
 
 .chat-welcome .brand-wordmark,
@@ -5359,10 +5365,11 @@ body {
   font-size: clamp(2rem, 4vw, 3rem);
   font-weight: 600;
   letter-spacing: -0.03em;
+  text-align: center;
 }
 
 .chat-welcome p:last-child {
-  max-width: 420px;
+  max-width: 560px;
   margin: 0;
   text-align: center;
 }
@@ -5478,15 +5485,19 @@ body {
 }
 
 .composer-wrap {
-  width: auto;
-  margin: 0;
-  padding: 12px 24px 18px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0 auto;
+  padding: 8px 32px 28px;
   background: var(--surface);
 }
 
 .composer-suggestions {
   width: min(100%, var(--content-max));
   margin: 0 auto 10px;
+  justify-content: center;
   gap: 8px;
 }
 
@@ -5499,6 +5510,7 @@ body {
 
 .composer {
   width: min(100%, var(--content-max));
+  max-width: var(--content-max);
   margin: 0 auto;
   padding: 0;
   border-radius: 28px;
@@ -5597,5 +5609,13 @@ body {
 
   .mode-switch__button-label {
     display: none;
+  }
+
+  .chat-scroll {
+    padding-inline: 20px;
+  }
+
+  .composer-wrap {
+    padding-inline: 20px;
   }
 }
