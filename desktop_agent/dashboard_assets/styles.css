@@ -3382,22 +3382,32 @@ body {
 }
 
 .topbar {
-  padding: 14px 24px 10px;
+  padding: 12px 28px 8px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.72) 100%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.16) 100%);
 }
 
 .surface {
-  padding: 0 16px 16px;
+  padding: 0 24px 18px;
 }
 
 .chat-welcome {
-  border: 1px solid rgba(22, 33, 29, 0.08);
-  border-radius: 30px;
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(244, 248, 244, 0.96)),
-    radial-gradient(circle at top right, rgba(15, 143, 115, 0.08), transparent 38%);
-  box-shadow: var(--shadow-soft);
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 88px 0 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-welcome h2 {
+  letter-spacing: -0.05em;
+}
+
+.chat-welcome p:last-child {
+  max-width: 360px;
+  color: rgba(22, 33, 29, 0.72);
 }
 
 .assistant-card,
@@ -3415,22 +3425,24 @@ body {
 }
 
 .composer-wrap {
-  padding: 16px 24px 24px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(247, 250, 246, 0.88) 38%, rgba(247, 250, 246, 0.96) 100%);
+  padding: 10px 24px 26px;
+  background: transparent;
 }
 
 .composer {
-  padding: 14px 16px 12px;
-  border-color: rgba(22, 33, 29, 0.08);
-  background: rgba(255, 255, 255, 0.84);
-  box-shadow: 0 24px 44px rgba(22, 33, 29, 0.1);
+  width: min(100%, 820px);
+  padding: 0 0 8px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .composer textarea {
   border: none;
   background: transparent;
-  padding: 10px 2px 8px;
+  padding: 12px 0 10px;
+  font-size: 1rem;
 }
 
 .composer textarea:focus {
@@ -3440,16 +3452,56 @@ body {
 .composer-toolbar {
   margin-top: 6px;
   padding-top: 12px;
-  border-top: 1px solid rgba(22, 33, 29, 0.08);
+  border-top: 1px solid rgba(22, 33, 29, 0.12);
 }
 
 .composer-icon-button.secondary-button {
+  border: none;
   background: rgba(22, 33, 29, 0.05);
+  box-shadow: none;
 }
 
 .composer-icon-button.primary-button {
   background: linear-gradient(135deg, #13362f 0%, #0f8f73 100%);
   box-shadow: 0 10px 22px rgba(15, 143, 115, 0.2);
+}
+
+.mode-switch,
+.settings-button,
+.connection-chip {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.mode-switch {
+  gap: 6px;
+  padding: 0;
+}
+
+.mode-switch__button,
+.settings-button {
+  width: 32px;
+  height: 32px;
+}
+
+.mode-switch__button.active {
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 6px 14px rgba(22, 33, 29, 0.08);
+}
+
+.connection-chip--status {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+}
+
+.connection-chip__dot {
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 5px rgba(15, 143, 115, 0.08);
 }
 
 .developer-panel {
