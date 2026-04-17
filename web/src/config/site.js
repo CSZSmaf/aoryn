@@ -3,10 +3,10 @@ export const siteConfig = {
   domain: "aoryn.org",
   localeStorageKey: "aoryn-site.locale",
   release: {
-    version: "0.1.7",
+    version: "0.1.8",
     channel: "Windows Installer",
-    fileName: "Aoryn-Setup-0.1.7.exe",
-    fileSize: "197.13 MB",
+    fileName: "Aoryn-Setup-0.1.8.exe",
+    fileSize: "197.14 MB",
     platform: "Windows 10 / 11",
     packageType: "EXE Installer",
     hosting: "Cloudflare Pages Functions + R2",
