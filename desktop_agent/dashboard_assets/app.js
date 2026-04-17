@@ -399,11 +399,65 @@ function initializeState() {
   state.historySelection = loadPersistedHistorySelection();
   state.selectedChatSessionId = detectInitialChatSessionId(state.chatSessions);
   ensureRuntimePreferencesState();
+  ensureModeSwitchStructure();
   fillLanguageOptions();
   fillSendShortcutOptions();
   renderAvailableModels(null);
   updateProviderStatusHints();
   updateProviderActionButtons();
+}
+
+function ensureModeSwitchStructure() {
+  if (!elements.uiModeTabs) {
+    return;
+  }
+
+  const chatActive = state.uiMode === "chat";
+  const agentActive = state.uiMode === "agent";
+  elements.uiModeTabs.innerHTML = `
+    <button
+      class="mode-switch__button${chatActive ? " active" : ""}"
+      data-ui-mode="chat"
+      type="button"
+      role="tab"
+      aria-selected="${chatActive}"
+      aria-label="Chat"
+      title="Chat"
+    >
+      <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M5.5 6.5A3.5 3.5 0 0 1 9 3h6a3.5 3.5 0 0 1 3.5 3.5v4A3.5 3.5 0 0 1 15 14h-2.4l-3.3 2.7c-.55.45-1.3.06-1.3-.64V14H9a3.5 3.5 0 0 1-3.5-3.5z"
+          fill="none"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="1.8"
+        />
+      </svg>
+      <span class="mode-switch__button-label">Chat</span>
+    </button>
+    <button
+      class="mode-switch__button${agentActive ? " active" : ""}"
+      data-ui-mode="agent"
+      type="button"
+      role="tab"
+      aria-selected="${agentActive}"
+      aria-label="Agent"
+      title="Agent"
+    >
+      <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="m9 8-4 4 4 4m6-8 4 4-4 4M12 4v16"
+          fill="none"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="1.8"
+        />
+      </svg>
+      <span class="mode-switch__button-label">Agent</span>
+    </button>
+  `;
 }
 
 function initializeEnhancedControls() {
@@ -5163,10 +5217,12 @@ function applyStaticCopy() {
   elements.refreshCatalogButton?.setAttribute("aria-label", t("developer.refreshModels"));
   elements.refreshCatalogButton?.setAttribute("title", t("developer.refreshModels"));
 
+  ensureModeSwitchStructure();
   elements.uiModeTabs?.querySelectorAll("[data-ui-mode]").forEach((button) => {
     const label = button.dataset.uiMode === "agent" ? "Agent" : tr("普通对话", "Chat");
     button.setAttribute("aria-label", label);
     button.setAttribute("title", label);
+    button.setAttribute("aria-selected", String(button.dataset.uiMode === state.uiMode));
     button.classList.toggle("active", button.dataset.uiMode === state.uiMode);
   });
 
@@ -5605,7 +5661,7 @@ function formatChatPendingElapsed(startedAt) {
 function renderAssistantAvatar() {
   return `
     <div class="assistant-avatar" aria-hidden="true">
-      <img class="assistant-avatar__image" src="/assets/icons/logo-mark.svg?v=${APP_ASSET_VERSION}" alt="" />
+      <img class="assistant-avatar__image" src="/assets/icons/logo-mark.png?v=${APP_ASSET_VERSION}" alt="" />
     </div>
   `;
 }

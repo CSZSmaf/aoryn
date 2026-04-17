@@ -817,26 +817,46 @@ await runTest("chat and agent renderers both use the refreshed card shell", asyn
 
   assert.match(chatHtml, /assistant-shell/);
   assert.match(chatHtml, /assistant-card--chat/);
-  assert.match(chatHtml, /logo-mark\.svg/);
+  assert.match(chatHtml, /logo-mark\.png/);
   assert.match(agentHtml, /assistant-shell/);
   assert.match(agentHtml, /assistant-card--run/);
   assert.match(agentHtml, /assistant-run__hero/);
-  assert.match(agentHtml, /logo-mark\.svg/);
+  assert.match(agentHtml, /logo-mark\.png/);
 });
 
 
 await runTest("dashboard brand assets and layout tokens stay on the corrected shell", async () => {
   const indexSource = fs.readFileSync(path.resolve(import.meta.dirname, "../index.html"), "utf8");
   const stylesSource = fs.readFileSync(path.resolve(import.meta.dirname, "../styles.css"), "utf8");
+  const dashboardLogoSvg = path.resolve(import.meta.dirname, "../icons/logo-mark.svg");
+  const webLogoSvg = path.resolve(import.meta.dirname, "../../../web/public/logo-mark.svg");
 
-  assert.match(indexSource, /brand-mark__image" src="\/assets\/icons\/logo-mark\.svg\?v=__APP_ASSET_VERSION__/);
+  assert.match(indexSource, /brand-mark__image" src="\/assets\/icons\/logo-mark\.png\?v=__APP_ASSET_VERSION__/);
+  assert.equal(indexSource.includes("logo-mark.svg"), false);
   assert.match(stylesSource, /--sidebar-open:\s*272px;/);
   assert.match(stylesSource, /--sidebar-collapsed:\s*88px;/);
-  assert.match(stylesSource, /--content-max:\s*880px;/);
+  assert.match(stylesSource, /--content-max:\s*1080px;/);
   assert.equal(stylesSource.includes("--content-max: 968px;"), false);
   assert.match(stylesSource, /\.chat-stream\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
   assert.match(stylesSource, /\.composer-suggestions\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
   assert.match(stylesSource, /\.composer\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
+  assert.equal(fs.existsSync(dashboardLogoSvg), false);
+  assert.equal(fs.existsSync(webLogoSvg), false);
+});
+
+
+await runTest("mode switch is rebuilt as a single segmented control", async () => {
+  const context = createHarness();
+  context.__appTest.initializeState();
+
+  const modeTabs = context.document.getElementById("uiModeTabs");
+  assert.match(modeTabs.innerHTML, /mode-switch__button-label">Chat</);
+  assert.match(modeTabs.innerHTML, /mode-switch__button-label">Agent</);
+  assert.match(modeTabs.innerHTML, /role="tab"/);
+
+  const indexSource = fs.readFileSync(path.resolve(import.meta.dirname, "../index.html"), "utf8");
+  assert.match(indexSource, /<div class="mode-switch" id="uiModeTabs" role="tablist" aria-label="Mode switch">/);
+  assert.match(indexSource, /<\/div>\s*<button class="settings-button" id="settingsButton"/);
 });
 
 
