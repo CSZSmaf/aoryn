@@ -5718,6 +5718,839 @@ function renderNormalAssistantPendingMessage(draft = state.chatStreamDraft) {
   return renderAssistantMessageShell(content ? streamingMarkup : waitingMarkup, { timerLabel });
 }
 
+function formatRunDurationWindow(startedAt, finishedAt) {
+  const start = Number(startedAt);
+  const end = Number.isFinite(Number(finishedAt)) ? Number(finishedAt) : Date.now() / 1000;
+  if (!Number.isFinite(start)) return "--";
+  const elapsedSeconds = Math.max(0, Math.round(end - start));
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+
+  if (hours > 0) return state.locale === "zh-CN" ? `${hours}小时 ${minutes}分` : `${hours}h ${minutes}m`;
+  if (minutes > 0) return state.locale === "zh-CN" ? `${minutes}分 ${seconds}秒` : `${minutes}m ${seconds}s`;
+  return state.locale === "zh-CN" ? `${seconds}秒` : `${seconds}s`;
+}
+
+function renderAgentRunSection({
+  label = "",
+  title = "",
+  description = "",
+  action = "",
+  body = "",
+  modifier = "",
+} = {}) {
+  if (!title && !description && !body) return "";
+  const modifierClass = modifier ? ` assistant-run__section--${modifier}` : "";
+  return `
+    <section class="assistant-run__section${modifierClass}">
+      <div class="assistant-run__section-head">
+        <div>
+          ${label ? `<span class="assistant-run__section-label">${escapeHtml(label)}</span>` : ""}
+          ${title ? `<h4>${escapeHtml(title)}</h4>` : ""}
+          ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+        </div>
+        ${action}
+      </div>
+      ${body}
+    </section>
+  `;
+}
+
+function renderAgentRunHero({ src = "", alt = "", caption = "", supporting = "", runId = "", task = "" } = {}) {
+  if (!src) return "";
+  const zoomButton = `
+    <button class="secondary-button" type="button" data-lightbox-src="${escapeHtml(src)}" data-lightbox-caption="${escapeHtml(
+      caption || task || tr("最新截图", "Latest screenshot")
+    )}">
+      ${escapeHtml(tr("放大", "Zoom"))}
+    </button>
+  `;
+  const detailButton = runId
+    ? `
+        <button class="secondary-button" type="button" data-open-inspector="${escapeHtml(runId)}">
+          ${escapeHtml(tr("详情", "Details"))}
+        </button>
+      `
+    : "";
+  return `
+    <figure class="assistant-run__hero">
+      <div class="assistant-run__hero-media">
+        <img src="${escapeHtml(src)}" alt="${escapeHtml(alt || caption || task || tr("运行截图", "Run screenshot"))}" />
+      </div>
+      <figcaption class="assistant-run__hero-caption">
+        <div class="assistant-run__hero-copy">
+          <span class="assistant-run__section-label">${escapeHtml(tr("最新画面", "Latest view"))}</span>
+          <strong>${escapeHtml(caption || tr("捕获状态", "Captured state"))}</strong>
+          ${supporting ? `<p>${escapeHtml(supporting)}</p>` : ""}
+        </div>
+        <div class="assistant-run__hero-actions">
+          ${zoomButton}
+          ${detailButton}
+        </div>
+      </figcaption>
+    </figure>
+  `;
+}
+
+function renderAgentRunActionPreview(actions = []) {
+  if (!actions.length) return "";
+  return renderAgentRunSection({
+    label: tr("轨迹", "Trace"),
+    title: tr("最近动作", "Recent actions"),
+    description: tr("这里会显示本轮执行里最新的一小段动作轨迹。", "A short preview of the latest executed steps."),
+    modifier: "actions",
+    body: `<div class="assistant-run__action-row">${actions.map(renderActionPill).join("")}</div>`,
+  });
+}
+
+function renderAgentRunStepPreview(details, steps = []) {
+  if (!steps.length) return "";
+  const timelineButton = details?.id
+    ? `
+        <button class="secondary-button" type="button" data-open-inspector="${escapeHtml(details.id)}">
+          ${escapeHtml(tr("时间线", "Timeline"))}
+        </button>
+      `
+    : "";
+  return renderAgentRunSection({
+    label: tr("流程", "Flow"),
+    title: tr("步骤预览", "Step preview"),
+    description: tr("保留最近的重要里程碑，剩余内容可在详情里继续查看。", "The freshest milestones from this run."),
+    action: timelineButton,
+    modifier: "timeline",
+    body: `
+      <ol class="assistant-run__step-list">
+        ${steps
+          .map(
+            (step, index) => `
+              <li class="assistant-run__step-item">
+                <span class="assistant-run__step-index">${escapeHtml(String(index + 1))}</span>
+                <div class="assistant-run__step-copy">
+                  <strong>${escapeHtml(step.plan?.status_summary || step.task || tr("无摘要", "No summary"))}</strong>
+                  <span>${escapeHtml(formatShortTime(step.captured_at))}</span>
+                </div>
+              </li>
+            `
+          )
+          .join("")}
+      </ol>
+    `,
+  });
+}
+
+function renderAgentRunFollowUps(items = []) {
+  if (!items.length) return "";
+  return renderAgentRunSection({
+    label: tr("下一步", "Next"),
+    title: tr("继续推进", "Continue from here"),
+    description: tr("给你一组更顺手的后续操作入口。", "Suggested follow-up prompts to keep momentum."),
+    modifier: "followups",
+    body: `
+      <div class="assistant-run__followups">
+        ${items
+          .map(
+            (item) => `
+              <article class="assistant-run__followup-card">
+                <span class="assistant-run__followup-label">${escapeHtml(item.title)}</span>
+                <p>${escapeHtml(item.description)}</p>
+                <button class="secondary-button" type="button" data-prefill-task="${escapeHtml(item.task)}">
+                  ${escapeHtml(item.actionLabel)}
+                </button>
+              </article>
+            `
+          )
+          .join("")}
+      </div>
+    `,
+  });
+}
+
+function renderAgentRunDock(buttons = []) {
+  const content = buttons.filter(Boolean).join("");
+  if (!content) return "";
+  return `<div class="assistant-run__dock">${content}</div>`;
+}
+
+function renderAgentRunCard({
+  eyebrow = "",
+  title = "",
+  summary = "",
+  stateLabel = "",
+  stateTone = "",
+  metrics = [],
+  chips = [],
+  hero = "",
+  trace = "",
+  timeline = "",
+  followUps = "",
+  dock = "",
+  variant = "",
+} = {}) {
+  const metricsMarkup = metrics.filter(Boolean).join("");
+  const chipsMarkup = chips.filter(Boolean).join("");
+  const variantClass = variant ? ` assistant-card--run-${variant}` : "";
+  return renderAssistantMessageShell(`
+    <article class="assistant-card assistant-card--run${variantClass}">
+      <div class="assistant-run__header">
+        <div class="assistant-run__eyebrow">
+          ${eyebrow ? `<span class="assistant-run__eyebrow-label">${escapeHtml(eyebrow)}</span>` : ""}
+          ${stateLabel ? `<span class="status-pill ${stateTone}">${escapeHtml(stateLabel)}</span>` : ""}
+        </div>
+        <div class="assistant-run__headline">
+          <h3>${escapeHtml(title || tr("未命名任务", "Untitled task"))}</h3>
+          ${summary ? `<p>${escapeHtml(summary)}</p>` : ""}
+        </div>
+      </div>
+      ${metricsMarkup ? `<div class="assistant-run__metrics">${metricsMarkup}</div>` : ""}
+      ${chipsMarkup ? `<div class="assistant-run__chips">${chipsMarkup}</div>` : ""}
+      ${hero}
+      ${trace}
+      ${timeline}
+      ${followUps}
+      ${dock}
+    </article>
+  `);
+}
+
+function renderPendingMessage(task) {
+  const statusCard = renderAgentRunSection({
+    label: tr("状态", "Status"),
+    title: tr("已排队，随时准备开始", "Queued and ready"),
+    description: tr("Aoryn 已经收下这个任务，正在等待第一条实时进度。", "Aoryn has accepted this task and is waiting for the first live execution update."),
+    modifier: "status",
+    body: `
+      <div class="assistant-run__callout">
+        <span class="assistant-run__live-dot" aria-hidden="true"></span>
+        <div>
+          <strong>${escapeHtml(tr("任务已进入队列", "Task in queue"))}</strong>
+          <p>${escapeHtml(tr("一旦真正开始点击或输入，这里会切换成实时执行卡片。", "The card will switch into live execution as soon as the run starts."))}</p>
+        </div>
+      </div>
+    `,
+  });
+
+  return renderAgentRunCard({
+    eyebrow: tr("Agent 任务", "Agent task"),
+    title: cleanRunTitle(task),
+    summary: tr("我们已经准备好上下文，马上就会开始第一步。", "We are staging the run and waiting for the first action."),
+    stateLabel: tr("排队中", "Queued"),
+    stateTone: "warn",
+    metrics: [
+      renderMetricCard(tr("模式", "Mode"), tr("桌面 Agent", "Desktop agent")),
+      renderMetricCard(tr("下一项", "Next"), tr("第一步动作", "First step")),
+    ],
+    chips: [`<span class="metric-pill">${escapeHtml(truncate(task, 56))}</span>`],
+    timeline: statusCard,
+    variant: "queued",
+  });
+}
+
+function renderLoadingMessage() {
+  const loadingSection = renderAgentRunSection({
+    label: tr("工作区", "Workspace"),
+    title: tr("正在恢复当前线程", "Rebuilding the current thread"),
+    description: tr("Aoryn 正在把时间线、截图和继续操作合并回同一个界面。", "Aoryn is restoring the selected run so the latest media, steps, and controls can appear together."),
+    modifier: "status",
+    body: `
+      <div class="assistant-run__callout">
+        <span class="assistant-run__live-dot assistant-run__live-dot--soft" aria-hidden="true"></span>
+        <div>
+          <strong>${escapeHtml(tr("正在准备新界面", "Preparing the premium view"))}</strong>
+          <p>${escapeHtml(tr("通常只需要一小会儿。", "This usually only takes a moment."))}</p>
+        </div>
+      </div>
+    `,
+  });
+
+  return renderAgentRunCard({
+    eyebrow: tr("工作区", "Workspace"),
+    title: tr("正在载入运行详情", "Loading run details"),
+    summary: tr("我们会把最新时间线、截图和操作入口收拢到一张主卡里。", "Pulling the latest timeline, screenshots, and follow-up actions into one surface."),
+    stateLabel: tr("加载中", "Loading"),
+    metrics: [renderMetricCard(tr("视图", "View"), tr("统一结果卡", "Unified card"))],
+    timeline: loadingSection,
+    variant: "loading",
+  });
+}
+
+function renderRunningMessage(active) {
+  const progress = active.result || {};
+  const previewUrl =
+    progress.run_id && progress.latest_screenshot
+      ? buildArtifactUrl(progress.run_id, progress.latest_screenshot)
+      : null;
+  const latestSummary = normalizeText(progress.latest_summary) || tr("等待下一步。", "Waiting for the next step.");
+  const latestActions = (progress.latest_actions || []).slice(0, 4);
+  const jobState = active.cancel_requested
+    ? { label: tr("停止中", "Stopping"), tone: "warn" }
+    : { label: tr("执行中", "Running"), tone: "ok" };
+
+  const liveStateSection = renderAgentRunSection({
+    label: tr("实时", "Live"),
+    title: tr("任务仍在推进", "Run is actively progressing"),
+    description: tr("卡片会持续刷新最新截图和最近动作，让状态更集中。", "The card refreshes with the latest captured view and recent execution trace."),
+    modifier: "status",
+    body: `
+      <div class="assistant-run__callout">
+        <span class="assistant-run__live-dot" aria-hidden="true"></span>
+        <div>
+          <strong>${escapeHtml(tr("正在实时执行", "Streaming execution"))}</strong>
+          <p>${escapeHtml(tr("Aoryn 仍在替你点击、输入并观察桌面。", "Aoryn is still clicking, typing, and observing the desktop for you."))}</p>
+        </div>
+      </div>
+    `,
+  });
+
+  return renderAgentRunCard({
+    eyebrow: tr("Agent 运行", "Agent run"),
+    title: cleanRunTitle(active.task || latestSummary),
+    summary: latestSummary,
+    stateLabel: jobState.label,
+    stateTone: jobState.tone,
+    metrics: [
+      renderMetricCard(tr("开始", "Started"), formatShortTime(active.started_at || progress.started_at)),
+      renderMetricCard(tr("时长", "Duration"), formatRunDurationWindow(active.started_at || progress.started_at)),
+      renderMetricCard(tr("步骤", "Steps"), String(progress.steps ?? 0)),
+    ],
+    chips: [
+      renderExecutionModeChip(progress.dry_run ?? active.dry_run),
+      renderHumanVerificationChip(progress),
+    ],
+    hero: renderAgentRunHero({
+      src: previewUrl,
+      alt: tr("最新截图", "Latest screenshot"),
+      caption: latestSummary,
+      supporting: tr("这是当前运行捕获到的最新画面。", "Latest captured frame from the active run."),
+      runId: progress.run_id,
+      task: active.task || "",
+    }),
+    trace: renderAgentRunActionPreview(latestActions),
+    timeline: liveStateSection,
+    dock: renderAgentRunDock([
+      progress.run_id
+        ? `<button class="secondary-button" type="button" data-open-inspector="${escapeHtml(progress.run_id)}">${escapeHtml(
+            tr("详情", "Details")
+          )}</button>`
+        : "",
+      `<button class="primary-button" type="button" data-stop-active-task="true">${escapeHtml(
+        active.cancel_requested ? tr("停止中", "Stopping") : tr("停止", "Stop")
+      )}</button>`,
+    ]),
+    variant: active.cancel_requested ? "stopping" : "live",
+  });
+}
+
+function renderCompletedConversation(details) {
+  const screenshots = collectRunScreenshots(details);
+  const steps = (details.timeline || []).slice(-4).reverse();
+  const followUps = buildFollowUpSuggestions(details);
+  const heroShot = screenshots[0] || null;
+  const actions = collectLatestActions(details).slice(0, 4);
+  const stateInfo = buildRecordState(details);
+
+  return [
+    renderAgentRunCard({
+      eyebrow: tr("运行结果", "Run result"),
+      title: cleanRunTitle(details.task),
+      summary: runSummary(details),
+      stateLabel: stateInfo.label,
+      stateTone: stateInfo.tone,
+      metrics: [
+        renderMetricCard(tr("开始", "Started"), formatShortTime(details.started_at)),
+        renderMetricCard(tr("结束", "Finished"), formatShortTime(details.finished_at)),
+        renderMetricCard(tr("时长", "Duration"), formatRunDurationWindow(details.started_at, details.finished_at)),
+        renderMetricCard(tr("步骤", "Steps"), String(details.steps ?? 0)),
+      ],
+      chips: [renderExecutionModeChip(details.dry_run), renderHumanVerificationChip(details)],
+      hero: heroShot
+        ? renderAgentRunHero({
+            src: heroShot.src,
+            alt: heroShot.alt,
+            caption: heroShot.summary || heroShot.caption,
+            supporting: tr("这是这次任务里最近一次抓到的画面。", "Most recent screenshot captured during this run."),
+            runId: details.id,
+            task: details.task || "",
+          })
+        : "",
+      trace: renderAgentRunActionPreview(actions),
+      timeline: renderAgentRunStepPreview(details, steps),
+      followUps: renderAgentRunFollowUps(followUps),
+      dock: renderAgentRunDock([
+        `<button class="secondary-button" type="button" data-open-inspector="${escapeHtml(details.id)}">${escapeHtml(
+          tr("详情", "Details")
+        )}</button>`,
+        `<button class="secondary-button" type="button" data-prefill-task="${escapeHtml(details.task || "")}">${escapeHtml(
+          tr("继续", "Continue")
+        )}</button>`,
+      ]),
+      variant: "complete",
+    }),
+  ];
+}
+
+function renderUserMessage(task) {
+  return `
+    <div class="message message--user">
+      <article class="message-bubble message-bubble--user">
+        <span class="message-bubble__label">${escapeHtml(tr("任务", "Task"))}</span>
+        <p>${escapeHtml(cleanRunTitle(task))}</p>
+      </article>
+    </div>
+  `;
+}
+
+function renderPanelEmptyState({
+  eyebrow = "",
+  title = "",
+  description = "",
+  tone = "",
+} = {}) {
+  const toneClass = tone ? ` panel-empty-state--${tone}` : "";
+  return `
+    <article class="panel-empty-state${toneClass}">
+      ${eyebrow ? `<span class="panel-empty-state__eyebrow">${escapeHtml(eyebrow)}</span>` : ""}
+      ${title ? `<h3>${escapeHtml(title)}</h3>` : ""}
+      ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+    </article>
+  `;
+}
+
+function renderSectionLead({
+  eyebrow = "",
+  title = "",
+  description = "",
+  badge = "",
+} = {}) {
+  return `
+    <div class="section-lead">
+      <div class="section-lead__copy">
+        ${eyebrow ? `<span class="section-lead__eyebrow">${escapeHtml(eyebrow)}</span>` : ""}
+        ${title ? `<h3>${escapeHtml(title)}</h3>` : ""}
+        ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+      </div>
+      ${badge}
+    </div>
+  `;
+}
+
+function renderDeveloper() {
+  updateDomStatus();
+  elements.openInspectorButton.disabled = !Boolean(state.selectedRunDetails || state.activeJob?.result?.run_id);
+  elements.providerStatusNote.textContent = state.providerStatusMessage || t("developer.providerStatus");
+  renderDisplayDetectionDeveloperPanel();
+
+  if (!state.jobs.length) {
+    elements.jobList.innerHTML = renderPanelEmptyState({
+      eyebrow: tr("Queue", "Queue"),
+      title: tr("暂无任务", "No recent jobs"),
+      description: tr("新的任务提交后，这里会显示最近的执行队列。", "Recent queued and finished jobs will appear here."),
+    });
+  } else {
+    elements.jobList.innerHTML = state.jobs.map(renderJobCard).join("");
+  }
+
+  elements.activePayloadView.textContent = JSON.stringify(state.activeJob?.result || state.activeJob || {}, null, 2);
+
+  if (state.selectedRunDetails?.timeline?.length) {
+    elements.developerTimeline.innerHTML = state.selectedRunDetails.timeline
+      .slice()
+      .reverse()
+      .slice(0, 6)
+      .map(renderDeveloperTimelineItem)
+      .join("");
+  } else if (state.activeJob) {
+    elements.developerTimeline.innerHTML = renderLiveDeveloperTimeline();
+  } else {
+    elements.developerTimeline.innerHTML = renderPanelEmptyState({
+      eyebrow: tr("Timeline", "Timeline"),
+      title: tr("选择一条记录", "Select a run"),
+      description: tr("打开一条历史运行后，这里会显示最近的时间线和关键画面。", "Open a run to review its recent steps and captured screens."),
+    });
+  }
+}
+
+function renderJobCard(job) {
+  const startedAt = formatShortTime(job.started_at || job.created_at);
+  const finishedAt = Number.isFinite(Number(job.finished_at)) ? formatShortTime(job.finished_at) : "";
+  const timelineMeta = [startedAt !== "--" ? startedAt : "", finishedAt ? `→ ${finishedAt}` : ""].filter(Boolean).join(" ");
+
+  return `
+    <article class="job-card">
+      <div class="job-card__head">
+        <div>
+          <p>${escapeHtml(job.id)}</p>
+          <h3>${escapeHtml(cleanRunTitle(job.task))}</h3>
+        </div>
+        <span class="status-pill ${statusTone(job.status)}">${escapeHtml(translateJobStatus(job.status))}</span>
+      </div>
+      <div class="job-card__meta">
+        <span>${escapeHtml(timelineMeta || tr("等待时间轴", "Waiting for timeline"))}</span>
+      </div>
+    </article>
+  `;
+}
+
+function renderDeveloperTimelineItem(step) {
+  const screenshotUrl =
+    state.selectedRunDetails?.id && step.screenshot
+      ? buildArtifactUrl(state.selectedRunDetails.id, step.screenshot)
+      : null;
+  const actions = (step.executed_actions || []).slice(0, 4);
+
+  return `
+    <article class="timeline-item timeline-item--developer">
+      <div class="timeline-item__head">
+        <div>
+          <p>${escapeHtml(tr("步骤", "Step"))} ${escapeHtml(String(step.step))}</p>
+          <h3>${escapeHtml(step.plan?.status_summary || step.task || tr("无摘要", "No summary"))}</h3>
+        </div>
+        <span class="status-pill ${step.error ? "bad" : "ok"}">${escapeHtml(step.error ? tr("错误", "Error") : tr("完成", "OK"))}</span>
+      </div>
+      ${actions.length ? `<div class="action-row">${actions.map(renderActionPill).join("")}</div>` : ""}
+      ${screenshotUrl ? `<img class="timeline-shot" src="${escapeHtml(screenshotUrl)}" alt="${escapeHtml(tr("步骤截图", "Step screenshot"))}" />` : ""}
+      <div class="timeline-item__meta">${escapeHtml(formatShortTime(step.captured_at))}</div>
+    </article>
+  `;
+}
+
+function renderLiveDeveloperTimeline() {
+  const progress = state.activeJob?.result || {};
+  const previewUrl =
+    progress.run_id && progress.latest_screenshot
+      ? buildArtifactUrl(progress.run_id, progress.latest_screenshot)
+      : null;
+  const actions = (progress.latest_actions || []).slice(0, 4);
+
+  return `
+    <article class="timeline-item timeline-item--developer timeline-item--live">
+      <div class="timeline-item__head">
+        <div>
+          <p>${escapeHtml(tr("实时", "Live"))}</p>
+          <h3>${escapeHtml(normalizeText(progress.latest_summary) || tr("等待进度", "Waiting for progress"))}</h3>
+        </div>
+        <span class="status-pill ok">${escapeHtml(tr("执行中", "Running"))}</span>
+      </div>
+      ${actions.length ? `<div class="action-row">${actions.map(renderActionPill).join("")}</div>` : ""}
+      ${previewUrl ? `<img class="timeline-shot" src="${escapeHtml(previewUrl)}" alt="${escapeHtml(tr("最新截图", "Latest screenshot"))}" />` : ""}
+      <div class="timeline-item__meta">${escapeHtml(tr("实时执行中", "Live run in progress"))}</div>
+    </article>
+  `;
+}
+
+function renderInspector() {
+  const details = state.selectedRunDetails;
+  elements.inspectorSubtitle.textContent = details ? cleanRunTitle(details.task) : t("inspector.empty");
+
+  elements.detailTabs?.querySelectorAll("[data-detail-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.detailView === state.detailView);
+  });
+
+  if (!details) {
+    elements.runDetail.innerHTML = renderPanelEmptyState({
+      eyebrow: tr("Inspector", "Inspector"),
+      title: tr("选择一条记录", "Select a run"),
+      description: t("inspector.empty"),
+    });
+    return;
+  }
+
+  if (state.detailView === "timeline") {
+    elements.runDetail.innerHTML = renderRunTimeline(details);
+    return;
+  }
+
+  if (state.detailView === "gallery") {
+    elements.runDetail.innerHTML = renderRunGallery(details);
+    return;
+  }
+
+  elements.runDetail.innerHTML = renderRunOverview(details);
+}
+
+function renderRunOverview(details) {
+  const stateInfo = buildRecordState(details);
+  const screenshots = collectRunScreenshots(details);
+  const latestActions = collectLatestActions(details).slice(0, 4);
+  const latestShot = screenshots[0] || null;
+
+  return `
+    <div class="inspector-overview">
+      <article class="inspector-section-card inspector-section-card--summary">
+        ${renderSectionLead({
+          eyebrow: tr("Run overview", "Run overview"),
+          title: cleanRunTitle(details.task),
+          description: runSummary(details),
+          badge: `<span class="status-pill ${stateInfo.tone}">${escapeHtml(stateInfo.label)}</span>`,
+        })}
+        <div class="summary-grid">
+          ${renderDetailMetricCard(tr("开始", "Start"), formatShortTime(details.started_at))}
+          ${renderDetailMetricCard(tr("结束", "End"), formatShortTime(details.finished_at))}
+          ${renderDetailMetricCard(tr("时长", "Duration"), formatRunDurationWindow(details.started_at, details.finished_at))}
+          ${renderDetailMetricCard(tr("步骤", "Steps"), String(details.steps ?? 0))}
+        </div>
+        <div class="inspector-section-card__chips">
+          ${renderExecutionModeChip(details.dry_run)}
+          ${renderHumanVerificationChip(details)}
+        </div>
+      </article>
+
+      ${
+        latestShot
+          ? `
+            <article class="inspector-section-card inspector-section-card--media">
+              ${renderAgentRunHero({
+                src: latestShot.src,
+                alt: latestShot.alt,
+                caption: latestShot.summary || latestShot.caption,
+                supporting: tr("这是这次运行最近一次捕获到的画面。", "Most recent captured view from this run."),
+                runId: details.id,
+                task: details.task || "",
+              })}
+            </article>
+          `
+          : ""
+      }
+
+      ${
+        latestActions.length
+          ? `
+            <article class="inspector-section-card inspector-section-card--actions">
+              ${renderSectionLead({
+                eyebrow: tr("Trace", "Trace"),
+                title: tr("最近动作", "Recent actions"),
+                description: tr("详情页里先给你一小段动作轨迹。", "A quick glance at the latest executed actions."),
+              })}
+              <div class="action-row">${latestActions.map(renderActionPill).join("")}</div>
+            </article>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderRunTimeline(details) {
+  if (!(details.timeline || []).length) {
+    return renderPanelEmptyState({
+      eyebrow: tr("Timeline", "Timeline"),
+      title: tr("暂无时间线", "No timeline yet"),
+      description: tr("这次运行在这里还没有可展示的步骤。", "There are no timeline steps to display yet."),
+    });
+  }
+
+  return `
+    <div class="inspector-timeline-list">
+      ${(details.timeline || [])
+        .map((step) => {
+          const screenshotUrl = details.id && step.screenshot ? buildArtifactUrl(details.id, step.screenshot) : null;
+          const stepActions = (step.executed_actions || []).slice(0, 4);
+          return `
+            <article class="timeline-item timeline-item--inspector">
+              <div class="timeline-item__head">
+                <div>
+                  <p>${escapeHtml(tr("步骤", "Step"))} ${escapeHtml(String(step.step))}</p>
+                  <h3>${escapeHtml(step.plan?.status_summary || step.task || tr("无摘要", "No summary"))}</h3>
+                </div>
+                <span class="status-pill ${step.error ? "bad" : "ok"}">${escapeHtml(step.error ? tr("错误", "Error") : tr("完成", "OK"))}</span>
+              </div>
+              ${stepActions.length ? `<div class="action-row">${stepActions.map(renderActionPill).join("")}</div>` : ""}
+              ${
+                screenshotUrl
+                  ? `
+                    <div class="timeline-item__media">
+                      <img class="timeline-shot" src="${escapeHtml(screenshotUrl)}" alt="${escapeHtml(tr("步骤截图", "Step screenshot"))}" />
+                      <div class="message-actions">
+                        <button class="secondary-button" type="button" data-lightbox-src="${escapeHtml(screenshotUrl)}" data-lightbox-caption="${escapeHtml(step.plan?.status_summary || step.task || "")}">
+                          ${escapeHtml(tr("放大", "Zoom"))}
+                        </button>
+                      </div>
+                    </div>
+                  `
+                  : ""
+              }
+              <div class="timeline-item__meta">${escapeHtml(formatShortTime(step.captured_at))}</div>
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderRunGallery(details) {
+  const screenshots = collectRunScreenshots(details);
+  if (!screenshots.length) {
+    return renderPanelEmptyState({
+      eyebrow: tr("Gallery", "Gallery"),
+      title: tr("暂无截图", "No screenshots"),
+      description: tr("这次运行还没有可以查看的截图。", "This run has no screenshots to review yet."),
+    });
+  }
+
+  return `
+    <div class="inspector-gallery-grid">
+      ${screenshots
+        .map(
+          (shot) => `
+            <figure class="inspector-gallery-card">
+              <div class="inspector-gallery-card__media">
+                <img src="${escapeHtml(shot.src)}" alt="${escapeHtml(shot.alt)}" />
+              </div>
+              <figcaption class="inspector-gallery-card__caption">
+                <div>
+                  <strong>${escapeHtml(shot.caption)}</strong>
+                  <p>${escapeHtml(shot.alt)}</p>
+                </div>
+                <button class="secondary-button" type="button" data-lightbox-src="${escapeHtml(shot.src)}" data-lightbox-caption="${escapeHtml(shot.caption)}">
+                  ${escapeHtml(tr("放大", "Zoom"))}
+                </button>
+              </figcaption>
+            </figure>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderHelpCenter() {
+  if (elements.helpCenterTitle) {
+    elements.helpCenterTitle.textContent = state.helpTitle || tr("开发者文档", "Developer Docs");
+  }
+  if (!elements.helpContent) return;
+
+  if (state.helpLoading) {
+    elements.helpContent.innerHTML = renderPanelEmptyState({
+      eyebrow: tr("Docs", "Docs"),
+      title: tr("正在加载开发者文档...", "Loading developer docs..."),
+      description: tr("文档内容到达后会直接显示在这里。", "The documentation will appear here as soon as it is ready."),
+    });
+    return;
+  }
+
+  if (state.helpError) {
+    elements.helpContent.innerHTML = renderPanelEmptyState({
+      eyebrow: tr("Docs", "Docs"),
+      title: tr("无法加载文档", "Could not load documentation"),
+      description: state.helpError,
+      tone: "error",
+    });
+    return;
+  }
+
+  if (!state.helpContent) {
+    elements.helpContent.innerHTML = renderPanelEmptyState({
+      eyebrow: tr("Docs", "Docs"),
+      title: tr("暂无文档内容", "No documentation available"),
+      description: tr("这里暂时还没有可用的开发者文档。", "There is no developer documentation available yet."),
+    });
+    return;
+  }
+
+  elements.helpContent.innerHTML = `<div class="help-doc-shell">${renderSimpleMarkdown(state.helpContent)}</div>`;
+}
+
+function renderAboutPanel() {
+  if (!elements.aboutContent) return;
+  const isEnglish = state.locale === "en-US";
+  const diagnostics = state.meta?.diagnostics || {};
+  const recentRuns = (state.runs || []).slice(0, 6);
+  const appTitle = state.meta?.title || "Aoryn";
+  const version = state.meta?.version || APP_VERSION;
+  const runtimeMode =
+    state.meta?.runtime_mode === "packaged"
+      ? (isEnglish ? "Installed app" : "已安装应用")
+      : (isEnglish ? "Source runtime" : "源码运行");
+
+  if (elements.aboutTitle) {
+    elements.aboutTitle.textContent = isEnglish ? "About Aoryn" : "关于 Aoryn";
+  }
+  if (elements.aboutSubtitle) {
+    elements.aboutSubtitle.textContent = isEnglish ? "Version, diagnostics, and logs" : "版本、诊断与日志";
+  }
+
+  const pathRows = [
+    { key: "install_dir", label: isEnglish ? "Install folder" : "安装目录", value: diagnostics.install_dir || "-" },
+    { key: "config_dir", label: isEnglish ? "Config folder" : "配置目录", value: diagnostics.config_dir || "-" },
+    { key: "data_dir", label: isEnglish ? "Data folder" : "数据目录", value: diagnostics.data_dir || "-" },
+    { key: "run_root", label: isEnglish ? "Run history" : "运行记录目录", value: diagnostics.run_root || "-" },
+    { key: "cache_dir", label: isEnglish ? "Cache folder" : "缓存目录", value: diagnostics.cache_dir || "-" },
+  ];
+
+  elements.aboutContent.innerHTML = `
+    <div class="about-grid">
+      <section class="about-card about-card--hero">
+        <div class="about-card__header">
+          <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "About" : "关于")}</p>
+          <h3>${escapeHtml(appTitle)}</h3>
+        </div>
+        <div class="about-metrics">
+          <article class="about-metric"><span>${escapeHtml(isEnglish ? "Version" : "版本")}</span><strong>v${escapeHtml(version)}</strong></article>
+          <article class="about-metric"><span>${escapeHtml(isEnglish ? "Runtime" : "运行方式")}</span><strong>${escapeHtml(runtimeMode)}</strong></article>
+        </div>
+        <p class="about-card__copy">${escapeHtml(isEnglish ? "Share Setup.exe with end users. Use Review.zip when you want to send the build, release manifest, checksums, and a source snapshot for review." : "给最终用户分发时请使用 Setup.exe；如果要给模型或同事做审核，请使用 Review.zip，其中会包含安装包、发布清单、校验值和源码快照。")}</p>
+        <div class="about-card__actions button-row">
+          <button class="secondary-button" type="button" data-copy-diagnostics="true">${escapeHtml(isEnglish ? "Copy diagnostics" : "复制诊断信息")}</button>
+        </div>
+      </section>
+
+      <section class="about-card">
+        <div class="about-card__header">
+          <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "Paths" : "路径")}</p>
+          <h3>${escapeHtml(isEnglish ? "Install & data layout" : "安装与数据布局")}</h3>
+        </div>
+        <p class="about-card__copy">${escapeHtml(isEnglish ? "The install folder can be customized, but Aoryn always keeps config in %APPDATA%\\\\Aoryn and logs, cache, screenshots, and run history in %LOCALAPPDATA%\\\\Aoryn. Uninstall will ask whether you also want to remove that user data." : "安装目录可以自定义，但 Aoryn 会始终把配置保存在 %APPDATA%\\\\Aoryn，把日志、缓存、截图和运行记录保存在 %LOCALAPPDATA%\\\\Aoryn。卸载时会询问你是否同时删除这些用户数据。")}</p>
+        <div class="about-paths">
+          ${pathRows
+            .map(
+              (item) => `
+                <div class="about-path-row">
+                  <div class="about-path-row__copy">
+                    <strong>${escapeHtml(item.label)}</strong>
+                    <small>${escapeHtml(item.value)}</small>
+                  </div>
+                  <button class="secondary-button" type="button" data-open-path-key="${escapeHtml(item.key)}">${escapeHtml(isEnglish ? "Open" : "打开")}</button>
+                </div>
+              `
+            )
+            .join("")}
+        </div>
+      </section>
+
+      <section class="about-card about-card--wide">
+        <div class="about-card__header">
+          <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "Logs & run history" : "日志与运行记录")}</p>
+          <h3>${escapeHtml(isEnglish ? "Recent runs" : "最近运行")}</h3>
+        </div>
+        ${
+          recentRuns.length
+            ? `<div class="about-run-list">
+                ${recentRuns
+                  .map(
+                    (run) => `
+                      <div class="about-run-row">
+                        <div class="about-run-row__copy">
+                          <strong>${escapeHtml(cleanRunTitle(run.task || run.id))}</strong>
+                          <small>${escapeHtml(formatTimestamp(run.started_at || run.created_at))} · ${escapeHtml(renderRunState(run))}</small>
+                        </div>
+                        <button class="secondary-button" type="button" data-open-run-id="${escapeHtml(run.id)}">${escapeHtml(isEnglish ? "View" : "查看")}</button>
+                      </div>
+                    `
+                  )
+                  .join("")}
+              </div>`
+            : renderPanelEmptyState({
+                eyebrow: isEnglish ? "Runs" : "运行",
+                title: isEnglish ? "No runs yet." : "还没有运行记录。",
+                description: isEnglish ? "Run history and diagnostics shortcuts will appear here after the first task." : "执行第一条任务后，这里会显示最近运行和诊断入口。",
+              })
+        }
+      </section>
+    </div>
+  `;
+}
+
 function renderComposerState(context) {
   const configReady = isConfigHydrated();
   if (state.uiMode === "chat") {
@@ -6663,6 +7496,106 @@ function renderAboutPanel() {
                   .join("")}
               </div>`
             : `<div class="empty-state">${escapeHtml(isEnglish ? "No runs yet." : "还没有运行记录。")}</div>`
+        }
+      </section>
+    </div>
+  `;
+}
+
+function renderAboutPanel() {
+  if (!elements.aboutContent) return;
+  const isEnglish = state.locale === "en-US";
+  const diagnostics = state.meta?.diagnostics || {};
+  const recentRuns = (state.runs || []).slice(0, 6);
+  const appTitle = state.meta?.title || "Aoryn";
+  const version = state.meta?.version || APP_VERSION;
+  const runtimeMode =
+    state.meta?.runtime_mode === "packaged"
+      ? (isEnglish ? "Installed app" : "已安装应用")
+      : (isEnglish ? "Source runtime" : "源码运行");
+
+  if (elements.aboutTitle) {
+    elements.aboutTitle.textContent = isEnglish ? "About Aoryn" : "关于 Aoryn";
+  }
+  if (elements.aboutSubtitle) {
+    elements.aboutSubtitle.textContent = isEnglish ? "Version, diagnostics, and logs" : "版本、诊断与日志";
+  }
+
+  const pathRows = [
+    { key: "install_dir", label: isEnglish ? "Install folder" : "安装目录", value: diagnostics.install_dir || "-" },
+    { key: "config_dir", label: isEnglish ? "Config folder" : "配置目录", value: diagnostics.config_dir || "-" },
+    { key: "data_dir", label: isEnglish ? "Data folder" : "数据目录", value: diagnostics.data_dir || "-" },
+    { key: "run_root", label: isEnglish ? "Run history" : "运行记录目录", value: diagnostics.run_root || "-" },
+    { key: "cache_dir", label: isEnglish ? "Cache folder" : "缓存目录", value: diagnostics.cache_dir || "-" },
+  ];
+
+  elements.aboutContent.innerHTML = `
+    <div class="about-grid">
+      <section class="about-card about-card--hero">
+        <div class="about-card__header">
+          <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "About" : "关于")}</p>
+          <h3>${escapeHtml(appTitle)}</h3>
+        </div>
+        <div class="about-metrics">
+          <article class="about-metric"><span>${escapeHtml(isEnglish ? "Version" : "版本")}</span><strong>v${escapeHtml(version)}</strong></article>
+          <article class="about-metric"><span>${escapeHtml(isEnglish ? "Runtime" : "运行方式")}</span><strong>${escapeHtml(runtimeMode)}</strong></article>
+        </div>
+        <p class="about-card__copy">${escapeHtml(isEnglish ? "Share Setup.exe with end users. Use Review.zip when you want to send the build, release manifest, checksums, and a source snapshot for review." : "给最终用户分发时请使用 Setup.exe；如果要给模型或同事做审核，请使用 Review.zip，其中会包含安装包、发布清单、校验值和源码快照。")}</p>
+        <div class="about-card__actions button-row">
+          <button class="secondary-button" type="button" data-copy-diagnostics="true">${escapeHtml(isEnglish ? "Copy diagnostics" : "复制诊断信息")}</button>
+        </div>
+      </section>
+
+      <section class="about-card">
+        <div class="about-card__header">
+          <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "Paths" : "路径")}</p>
+          <h3>${escapeHtml(isEnglish ? "Install & data layout" : "安装与数据布局")}</h3>
+        </div>
+        <p class="about-card__copy">${escapeHtml(isEnglish ? "The install folder can be customized, but Aoryn always keeps config in %APPDATA%\\\\Aoryn and logs, cache, screenshots, and run history in %LOCALAPPDATA%\\\\Aoryn. Uninstall will ask whether you also want to remove that user data." : "安装目录可以自定义，但 Aoryn 会始终把配置保存在 %APPDATA%\\\\Aoryn，把日志、缓存、截图和运行记录保存在 %LOCALAPPDATA%\\\\Aoryn。卸载时会询问你是否同时删除这些用户数据。")}</p>
+        <div class="about-paths">
+          ${pathRows
+            .map(
+              (item) => `
+                <div class="about-path-row">
+                  <div class="about-path-row__copy">
+                    <strong>${escapeHtml(item.label)}</strong>
+                    <small>${escapeHtml(item.value)}</small>
+                  </div>
+                  <button class="secondary-button" type="button" data-open-path-key="${escapeHtml(item.key)}">${escapeHtml(isEnglish ? "Open" : "打开")}</button>
+                </div>
+              `
+            )
+            .join("")}
+        </div>
+      </section>
+
+      <section class="about-card about-card--wide">
+        <div class="about-card__header">
+          <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "Logs & run history" : "日志与运行记录")}</p>
+          <h3>${escapeHtml(isEnglish ? "Recent runs" : "最近运行")}</h3>
+        </div>
+        ${
+          recentRuns.length
+            ? `<div class="about-run-list">
+                ${recentRuns
+                  .map(
+                    (run) => `
+                      <div class="about-run-row">
+                        <div class="about-run-row__copy">
+                          <strong>${escapeHtml(cleanRunTitle(run.task || run.id))}</strong>
+                          <small>${escapeHtml(formatTimestamp(run.started_at || run.created_at))} · ${escapeHtml(renderRunState(run))}</small>
+                        </div>
+                        <button class="secondary-button" type="button" data-open-run-id="${escapeHtml(run.id)}">${escapeHtml(isEnglish ? "View" : "查看")}</button>
+                      </div>
+                    `
+                  )
+                  .join("")}
+              </div>`
+            : renderPanelEmptyState({
+                eyebrow: isEnglish ? "Runs" : "运行",
+                title: isEnglish ? "No runs yet." : "还没有运行记录。",
+                description: isEnglish ? "Run history and diagnostics shortcuts will appear here after the first task." : "执行第一条任务后，这里会显示最近运行和诊断入口。",
+              })
         }
       </section>
     </div>

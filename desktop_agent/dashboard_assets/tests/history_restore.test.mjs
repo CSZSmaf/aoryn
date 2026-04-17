@@ -195,6 +195,17 @@ globalThis.__appTest = {
   initializeApp,
   renderAll,
   renderAboutPanel,
+  renderCompletedConversation,
+  renderDeveloper,
+  renderHelpCenter,
+  renderInspector,
+  renderRunOverview,
+  renderRunTimeline,
+  renderRunGallery,
+  renderRunningMessage,
+  renderPendingMessage,
+  renderUserMessage,
+  renderNormalAssistantMessage,
   refreshOverview,
   buildSidebarHistoryItems,
   syncChatLaunchState,
@@ -210,6 +221,7 @@ globalThis.__appTest = {
     buildConfigOverrides,
     fillSelect,
     renderAboutPanel,
+    syncCustomSelect,
   },
 };`,
     context,
@@ -713,6 +725,218 @@ await runTest("about panel renders recent runs without throwing when timestamps 
   context.__appTest.renderAboutPanel();
 
   const aboutHtml = context.document.getElementById("aboutContent").innerHTML;
+  assert.match(aboutHtml, /about-grid/);
   assert.match(aboutHtml, /visit openai/);
   assert.equal(aboutHtml.includes("formatTimestamp"), false);
+});
+
+
+await runTest("completed run renders as one unified result block", async () => {
+  const context = createHarness();
+  context.__appTest.state.locale = "en-US";
+
+  const messages = context.__appTest.renderCompletedConversation({
+    id: "run-hero",
+    task: "Open the pricing page and summarize the tiers",
+    started_at: 1711000000,
+    finished_at: 1711000125,
+    steps: 4,
+    completed: true,
+    cancelled: false,
+    requires_human: false,
+    error: null,
+    cancel_reason: null,
+    interruption_reason: null,
+    dry_run: false,
+    timeline: [
+      {
+        step: 1,
+        task: "Open the website",
+        captured_at: 1711000005,
+        screenshot: "shot-1.png",
+        executed_actions: [{ type: "launch_browser" }],
+        plan: { status_summary: "Opened the website" },
+      },
+      {
+        step: 2,
+        task: "Navigate to pricing",
+        captured_at: 1711000060,
+        screenshot: "shot-2.png",
+        executed_actions: [{ type: "click", text: "Pricing" }],
+        plan: { status_summary: "Reached the pricing page" },
+      },
+      {
+        step: 3,
+        task: "Inspect the pricing tiers",
+        captured_at: 1711000105,
+        screenshot: "shot-3.png",
+        executed_actions: [{ type: "scroll" }],
+        plan: { status_summary: "Reviewed the available tiers" },
+      },
+    ],
+  });
+
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /assistant-card--run/);
+  assert.match(messages[0], /assistant-run__hero/);
+  assert.match(messages[0], /assistant-run__section--timeline/);
+  assert.match(messages[0], /assistant-run__followups/);
+});
+
+
+await runTest("chat and agent renderers both use the refreshed card shell", async () => {
+  const context = createHarness();
+  context.__appTest.state.locale = "en-US";
+
+  const chatHtml = context.__appTest.renderNormalAssistantMessage(
+    {
+      id: "assistant-1",
+      role: "assistant",
+      content: "Here is a polished answer.",
+      status: "complete",
+    },
+    { showActions: false, sessionMessages: [] }
+  );
+
+  const agentHtml = context.__appTest.renderRunningMessage({
+    task: "Open calculator and type 7+8",
+    started_at: 1711000000,
+    cancel_requested: false,
+    result: {
+      run_id: "run-live",
+      latest_summary: "Calculator is open and the expression is typed in.",
+      latest_screenshot: "live-shot.png",
+      latest_actions: [
+        { type: "launch_app", app: "calculator" },
+        { type: "type", text: "7+8" },
+      ],
+      steps: 2,
+      dry_run: false,
+    },
+  });
+
+  assert.match(chatHtml, /assistant-shell/);
+  assert.match(chatHtml, /assistant-card--chat/);
+  assert.match(agentHtml, /assistant-shell/);
+  assert.match(agentHtml, /assistant-card--run/);
+  assert.match(agentHtml, /assistant-run__hero/);
+});
+
+
+await runTest("developer surface empty states use the refreshed panel shell", async () => {
+  const context = createHarness();
+  context.__appTest.state.locale = "en-US";
+  context.__appTest.state.jobs = [];
+  context.__appTest.state.activeJob = null;
+  context.__appTest.state.selectedRunDetails = null;
+
+  context.__appTest.renderDeveloper();
+
+  assert.match(context.document.getElementById("jobList").innerHTML, /panel-empty-state/);
+  assert.match(context.document.getElementById("developerTimeline").innerHTML, /panel-empty-state/);
+});
+
+
+await runTest("inspector renders refreshed overview timeline and gallery shells", async () => {
+  const context = createHarness();
+  context.__appTest.state.locale = "en-US";
+  context.__appTest.state.selectedRunDetails = {
+    id: "run-inspector",
+    task: "Inspect the pricing page",
+    started_at: 1711000000,
+    finished_at: 1711000060,
+    steps: 3,
+    completed: true,
+    cancelled: false,
+    requires_human: false,
+    error: null,
+    cancel_reason: null,
+    interruption_reason: null,
+    dry_run: false,
+    timeline: [
+      {
+        step: 1,
+        task: "Open the homepage",
+        captured_at: 1711000005,
+        screenshot: "shot-1.png",
+        executed_actions: [{ type: "launch_browser" }],
+        plan: { status_summary: "Opened the homepage" },
+      },
+      {
+        step: 2,
+        task: "Open pricing",
+        captured_at: 1711000040,
+        screenshot: "shot-2.png",
+        executed_actions: [{ type: "click", text: "Pricing" }],
+        plan: { status_summary: "Opened the pricing page" },
+      },
+    ],
+  };
+
+  context.__appTest.state.detailView = "overview";
+  context.__appTest.renderInspector();
+  assert.match(context.document.getElementById("runDetail").innerHTML, /inspector-overview/);
+  assert.match(context.document.getElementById("runDetail").innerHTML, /inspector-section-card--summary/);
+
+  context.__appTest.state.detailView = "timeline";
+  context.__appTest.renderInspector();
+  assert.match(context.document.getElementById("runDetail").innerHTML, /inspector-timeline-list/);
+  assert.match(context.document.getElementById("runDetail").innerHTML, /timeline-item--inspector/);
+
+  context.__appTest.state.detailView = "gallery";
+  context.__appTest.renderInspector();
+  assert.match(context.document.getElementById("runDetail").innerHTML, /inspector-gallery-grid/);
+  assert.match(context.document.getElementById("runDetail").innerHTML, /inspector-gallery-card/);
+});
+
+
+await runTest("help center uses refreshed empty state and markdown shell", async () => {
+  const context = createHarness();
+  context.__appTest.state.locale = "en-US";
+  context.__appTest.state.helpTitle = "Developer Docs";
+  context.__appTest.state.helpLoading = true;
+  context.__appTest.state.helpError = "";
+  context.__appTest.state.helpContent = "";
+
+  context.__appTest.renderHelpCenter();
+  assert.match(context.document.getElementById("helpContent").innerHTML, /panel-empty-state/);
+
+  context.__appTest.state.helpLoading = false;
+  context.__appTest.state.helpContent = "# Developer Docs\n\nUse the desktop dashboard.";
+  context.__appTest.renderHelpCenter();
+  assert.match(context.document.getElementById("helpContent").innerHTML, /help-doc-shell/);
+});
+
+
+await runTest("custom select refreshed shell still renders trigger and menu markup", async () => {
+  const context = createHarness();
+  context.__appTest.state.locale = "en-US";
+  context.__appTest.state.openCustomSelectId = "modelProvider";
+
+  const wrapper = {
+    innerHTML: "",
+    classList: {
+      toggle() {},
+      contains(className) {
+        return className === "custom-select";
+      },
+    },
+  };
+  const select = {
+    id: "modelProvider",
+    options: [
+      { value: "lmstudio_local", textContent: "Local LM Studio" },
+      { value: "openai_compatible", textContent: "OpenAI-Compatible API" },
+    ],
+    selectedIndex: 1,
+    value: "openai_compatible",
+    disabled: false,
+    nextElementSibling: wrapper,
+  };
+
+  context.__appTest.originals.syncCustomSelect(select);
+
+  assert.match(wrapper.innerHTML, /custom-select__trigger/);
+  assert.match(wrapper.innerHTML, /custom-select__menu/);
+  assert.match(wrapper.innerHTML, /custom-select__option is-selected/);
 });
