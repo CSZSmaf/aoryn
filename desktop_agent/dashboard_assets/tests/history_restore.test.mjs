@@ -825,7 +825,7 @@ await runTest("chat and agent renderers both use the refreshed card shell", asyn
 });
 
 
-await runTest("dashboard brand assets and layout tokens stay on the corrected shell", async () => {
+await runTest("dashboard brand assets and layout tokens stay on the fallback white shell", async () => {
   const indexSource = fs.readFileSync(path.resolve(import.meta.dirname, "../index.html"), "utf8");
   const stylesSource = fs.readFileSync(path.resolve(import.meta.dirname, "../styles.css"), "utf8");
   const dashboardLogoSvg = path.resolve(import.meta.dirname, "../icons/logo-mark.svg");
@@ -833,9 +833,9 @@ await runTest("dashboard brand assets and layout tokens stay on the corrected sh
 
   assert.match(indexSource, /brand-mark__image" src="\/assets\/icons\/logo-mark\.png\?v=__APP_ASSET_VERSION__/);
   assert.equal(indexSource.includes("logo-mark.svg"), false);
-  assert.match(stylesSource, /--sidebar-open:\s*272px;/);
-  assert.match(stylesSource, /--sidebar-collapsed:\s*88px;/);
-  assert.match(stylesSource, /--content-max:\s*1080px;/);
+  assert.match(stylesSource, /--sidebar-open:\s*260px;/);
+  assert.match(stylesSource, /--sidebar-collapsed:\s*84px;/);
+  assert.match(stylesSource, /--content-max:\s*760px;/);
   assert.equal(stylesSource.includes("--content-max: 968px;"), false);
   assert.match(stylesSource, /\.chat-stream\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
   assert.match(stylesSource, /\.composer-suggestions\s*\{[\s\S]*?width:\s*min\(100%, var\(--content-max\)\);/);
