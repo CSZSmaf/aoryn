@@ -1,3 +1,4 @@
+import json
 import shutil
 import sys
 import time
@@ -10,7 +11,7 @@ from desktop_agent.actions import Action, PlanResult
 from desktop_agent.config import AgentConfig
 import desktop_agent.controller as controller
 from desktop_agent.controller import DesktopAgent, _build_history_entry
-from desktop_agent.executor import ExecutionError
+from desktop_agent.executor import ExecutionCancelled, ExecutionError
 from desktop_agent.logger import RunLogger
 from desktop_agent.perception import ScreenInfo
 from desktop_agent.safety import ActionGuard
@@ -43,7 +44,7 @@ class _ExecutorStub:
     def __init__(self) -> None:
         self.executed_batches = 0
 
-    def execute_many(self, actions, pause_after_action):
+    def execute_many(self, actions, pause_after_action, stop_requested=None):
         self.executed_batches += 1
 
     def browser_snapshot(self):
@@ -126,8 +127,8 @@ def test_desktop_agent_respects_stop_requested_between_steps():
             return should_stop["value"]
 
         class _StopAfterFirstBatchExecutor(_ExecutorStub):
-            def execute_many(self, actions, pause_after_action):
-                super().execute_many(actions, pause_after_action)
+            def execute_many(self, actions, pause_after_action, stop_requested=None):
+                super().execute_many(actions, pause_after_action, stop_requested=stop_requested)
                 should_stop["value"] = True
 
         agent = DesktopAgent(
@@ -177,14 +178,49 @@ def test_desktop_agent_logs_environment_payload():
         shutil.rmtree(scratch_root, ignore_errors=True)
 
 
+def test_desktop_agent_marks_user_stop_with_cancel_reason():
+    scratch_root = Path("test_artifacts") / f"controller_cancel_reason_{uuid4().hex}"
+    run_root = scratch_root / "runs"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    class _InterruptingExecutor(_ExecutorStub):
+        def execute_many(self, actions, pause_after_action, stop_requested=None):
+            super().execute_many(actions, pause_after_action, stop_requested=stop_requested)
+            raise ExecutionCancelled("Stopped by user.")
+
+    try:
+        config = AgentConfig(dry_run=False, max_steps=2, run_root=run_root)
+        agent = DesktopAgent(
+            config=config,
+            planner=_TwoStepPlanner(),
+            executor=_InterruptingExecutor(),
+            perception=_PerceptionStub(),
+            logger=RunLogger(run_root),
+            guard=ActionGuard(config),
+        )
+
+        result = agent.run("stop during execution")
+
+        assert result.completed is False
+        assert result.cancelled is True
+        assert result.cancel_reason == "Stopped by user."
+        summary_payload = json.loads((result.run_dir / "summary.json").read_text(encoding="utf-8"))
+        assert summary_payload["cancelled"] is True
+        assert summary_payload["cancel_reason"] == "Stopped by user."
+        step_payload = json.loads((result.run_dir / "step_01.json").read_text(encoding="utf-8"))
+        assert step_payload["error"] == "Stopped by user."
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
 def test_desktop_agent_replans_after_recoverable_execution_error():
     scratch_root = Path("test_artifacts") / f"controller_recover_{uuid4().hex}"
     run_root = scratch_root / "runs"
     run_root.mkdir(parents=True, exist_ok=True)
 
     class _FlakyExecutor(_ExecutorStub):
-        def execute_many(self, actions, pause_after_action):
-            super().execute_many(actions, pause_after_action)
+        def execute_many(self, actions, pause_after_action, stop_requested=None):
+            super().execute_many(actions, pause_after_action, stop_requested=stop_requested)
             if self.executed_batches == 1:
                 raise ExecutionError("Could not focus window: Calculator")
 

@@ -602,10 +602,14 @@ def test_dashboard_assets_remove_browser_install_entry_points():
     assert 'id="authGateOverlay"' not in index_html
     assert 'id="displayOverrideEnabled"' in index_html
     assert 'id="displayDetectionJsonView"' in index_html
+    assert 'id="closeAboutButton"' in index_html
+    assert ">脳<" not in index_html
+    assert 'id="closeAboutButton" type="button" data-i18n="common.close"' in index_html
     assert "beforeinstallprompt" not in app_js
     assert "serviceWorker.register" not in app_js
     assert "handleInstallApp" not in app_js
     assert "getInstallState" not in app_js
+    assert "cancel_reason" in app_js
     assert '"/api/system/display-detection"' in app_js or "'/api/system/display-detection'" in app_js
     assert "renderDisplayDetection" in app_js
     dom_ready_section = app_js[
@@ -1054,6 +1058,8 @@ def test_chat_frontend_assets_include_avatar_timer_and_katex_hooks():
     assert "onboarding-card" in styles_source
     assert "about-modal" in styles_source
     assert "environment-check-grid" in styles_source
+    assert "--text-primary: var(--ink);" in styles_source
+    assert "Desktop polish pass" in styles_source
 
 
 def test_dashboard_chat_reply_stream_prefers_real_stream_for_lmstudio(monkeypatch):

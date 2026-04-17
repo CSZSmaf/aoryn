@@ -534,6 +534,29 @@ async function refreshOverview(options = {}) {
   }
 }
 
+function updateJobSnapshot(jobId, patch) {
+  if (!jobId || !patch) return;
+  state.jobs = (state.jobs || []).map((job) => {
+    if (!job || job.id !== jobId) return job;
+    return { ...job, ...patch };
+  });
+}
+
+function markActiveJobStopping() {
+  if (!state.activeJob) return null;
+  const nextActiveJob = {
+    ...state.activeJob,
+    cancel_requested: true,
+    status: "stopping",
+  };
+  state.activeJob = nextActiveJob;
+  updateJobSnapshot(nextActiveJob.id, {
+    cancel_requested: true,
+    status: "stopping",
+  });
+  return nextActiveJob;
+}
+
 function hydrateDefaults() {
   if (!state.meta) return;
   const firstHydration = !state.hydrated;
@@ -616,6 +639,7 @@ function shouldRefreshSelectedRunDetails(options = {}) {
     Boolean(summary.error) !== Boolean(state.selectedRunDetails.error) ||
     Boolean(summary.completed) !== Boolean(state.selectedRunDetails.completed) ||
     Boolean(summary.cancelled) !== Boolean(state.selectedRunDetails.cancelled) ||
+    (summary.cancel_reason || null) !== (state.selectedRunDetails.cancel_reason || null) ||
     Boolean(summary.requires_human) !== Boolean(state.selectedRunDetails.requires_human) ||
     (summary.interruption_kind || null) !== (state.selectedRunDetails.interruption_kind || null) ||
     (summary.interruption_reason || null) !== (state.selectedRunDetails.interruption_reason || null)
@@ -1873,17 +1897,32 @@ async function handleStopTask() {
     return;
   }
 
-  elements.stopButton.disabled = true;
-  elements.submitHint.textContent = tr("正在停止", "Stopping");
+  const previousActiveJob = state.activeJob ? { ...state.activeJob } : null;
+  const previousJobs = Array.isArray(state.jobs) ? state.jobs.map((job) => (job ? { ...job } : job)) : [];
+  markActiveJobStopping();
+  renderAll();
   const response = await postJson("/api/tasks/stop", {});
 
   if (!response.ok) {
+    state.activeJob = previousActiveJob;
+    state.jobs = previousJobs;
     elements.submitHint.textContent = response.payload?.error || tr("停止失败", "Failed to stop the task");
     renderAll();
     return;
   }
 
-  elements.submitHint.textContent = tr("停止请求已发送", "Stop requested");
+  state.activeJob = {
+    ...state.activeJob,
+    ...(response.payload || {}),
+    cancel_requested: true,
+    status: "stopping",
+  };
+  updateJobSnapshot(state.activeJob.id, {
+    ...(response.payload || {}),
+    cancel_requested: true,
+    status: "stopping",
+  });
+  renderAll();
   await refreshOverview({ forceDetailRefresh: true });
 }
 
@@ -3003,9 +3042,9 @@ function renderHumanVerificationChip(record) {
 function buildRecordState(record) {
   if (!record) return { label: tr("未知", "Unknown"), tone: "" };
   if (record.cancel_requested && !record.cancelled && !record.completed && !record.error) return { label: tr("停止中", "Stopping"), tone: "warn" };
+  if (record.cancelled || record.status === "cancelled") return { label: tr("已取消", "Cancelled"), tone: "warn" };
   if (needsHumanVerification(record) || record.status === "attention") return { label: tr("需处理", "Attention"), tone: "warn" };
   if (record.error || record.status === "failed") return { label: tr("失败", "Failed"), tone: "bad" };
-  if (record.cancelled) return { label: tr("已取消", "Cancelled"), tone: "warn" };
   if (record.completed || record.status === "completed") return { label: tr("已完成", "Done"), tone: "ok" };
   if (record.status === "queued") return { label: tr("等待", "Queued"), tone: "" };
   return { label: tr("执行中", "Running"), tone: "ok" };
@@ -3031,6 +3070,7 @@ function translateJobStatus(status) {
     queued: tr("等待", "Queued"),
     running: tr("执行中", "Running"),
     attention: tr("需处理", "Attention"),
+    cancelled: tr("已取消", "Cancelled"),
     completed: tr("完成", "Done"),
     failed: tr("失败", "Failed"),
     stopping: tr("停止中", "Stopping"),
@@ -3040,7 +3080,7 @@ function translateJobStatus(status) {
 
 function statusTone(status) {
   if (status === "running" || status === "completed") return "ok";
-  if (status === "attention" || status === "stopping") return "warn";
+  if (status === "attention" || status === "stopping" || status === "cancelled") return "warn";
   if (status === "failed") return "bad";
   return "";
 }
@@ -3255,6 +3295,7 @@ function cleanRunTitle(value) {
 
 function runSummary(details) {
   if (details.error) return normalizeText(details.error);
+  if (details.cancel_reason) return normalizeText(details.cancel_reason);
   if (details.interruption_reason) return normalizeText(details.interruption_reason);
   if (details.cancelled) return tr("任务在完成前被停止。", "The run was stopped before completion.");
   if (needsHumanVerification(details)) return tr("当前需要人工处理。", "This run currently needs attention.");
@@ -5593,7 +5634,7 @@ function renderComposerState(context) {
   elements.stopButton.setAttribute("title", stopLabel);
 
   if (isRunning) {
-    elements.submitHint.textContent = state.activeJob.cancel_requested ? tr("\u5df2\u8bf7\u6c42\u505c\u6b62", "Stop requested") : tr("\u6b63\u5728\u6267\u884c", "Running");
+    elements.submitHint.textContent = state.activeJob.cancel_requested ? tr("\u6b63\u5728\u505c\u6b62", "Stopping") : tr("\u6b63\u5728\u6267\u884c", "Running");
     return;
   }
 

@@ -8,6 +8,7 @@ import time
 import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from desktop_agent.actions import Action
 from desktop_agent.browser_dom import BrowserDOMError, PlaywrightBrowserSession, dom_backend_status
@@ -32,9 +33,18 @@ class ExecutionError(RuntimeError):
     """Raised when action execution fails."""
 
 
+class ExecutionCancelled(ExecutionError):
+    """Raised when the user stops execution mid-run."""
+
+    def __init__(self, message: str = "Stopped by user.", *, executed_actions: list[Action] | None = None) -> None:
+        super().__init__(message)
+        self.executed_actions = list(executed_actions or [])
+
+
 class BaseExecutor:
     def __init__(self) -> None:
         self.current_environment: DesktopEnvironment | None = None
+        self._active_stop_requested: Callable[[], bool] | None = None
 
     def execute(self, action: Action) -> None:
         raise NotImplementedError
@@ -42,11 +52,55 @@ class BaseExecutor:
     def update_environment(self, environment: DesktopEnvironment | None) -> None:
         self.current_environment = environment
 
-    def execute_many(self, actions: list[Action], pause_after_action: float) -> None:
-        for action in actions:
-            self.execute(action)
-            if pause_after_action > 0:
-                time.sleep(pause_after_action)
+    def execute_many(
+        self,
+        actions: list[Action],
+        pause_after_action: float,
+        stop_requested: Callable[[], bool] | None = None,
+    ) -> None:
+        previous_stop_requested = self._active_stop_requested
+        self._active_stop_requested = stop_requested
+        executed_actions: list[Action] = []
+        try:
+            for action in actions:
+                self._ensure_not_stopped()
+                try:
+                    self.execute(action)
+                except ExecutionCancelled as exc:
+                    if not exc.executed_actions:
+                        exc.executed_actions = list(executed_actions)
+                    raise
+                executed_actions.append(action)
+                self._ensure_not_stopped(executed_actions=executed_actions)
+                if pause_after_action > 0:
+                    try:
+                        self._sleep_interruptibly(pause_after_action)
+                    except ExecutionCancelled as exc:
+                        if not exc.executed_actions:
+                            exc.executed_actions = list(executed_actions)
+                        raise
+        finally:
+            self._active_stop_requested = previous_stop_requested
+
+    def _stop_requested(self) -> bool:
+        if self._active_stop_requested is None:
+            return False
+        try:
+            return bool(self._active_stop_requested())
+        except Exception:
+            return False
+
+    def _ensure_not_stopped(self, *, executed_actions: list[Action] | None = None) -> None:
+        if self._stop_requested():
+            raise ExecutionCancelled(executed_actions=executed_actions)
+
+    def _sleep_interruptibly(self, seconds: float, *, poll_interval: float = 0.05) -> None:
+        remaining = max(0.0, float(seconds or 0.0))
+        while remaining > 0:
+            self._ensure_not_stopped()
+            chunk = min(remaining, poll_interval)
+            time.sleep(chunk)
+            remaining -= chunk
 
     def browser_snapshot(self) -> dict[str, str | None] | None:
         return None
@@ -118,9 +172,11 @@ class RealDesktopExecutor(BaseExecutor):
                 gui = _load_pyautogui()
                 gui.scroll(action.amount or 0)
             elif action.type == "wait":
-                time.sleep(float(action.seconds or 0))
+                self._sleep_interruptibly(float(action.seconds or 0))
             else:  # pragma: no cover
                 raise ExecutionError(f"Unsupported action type: {action.type}")
+        except ExecutionCancelled:
+            raise
         except Exception as exc:  # pragma: no cover - depends on runtime environment
             raise ExecutionError(str(exc)) from exc
 
@@ -232,9 +288,14 @@ class RealDesktopExecutor(BaseExecutor):
             raise ExecutionError(f"Could not move or resize window: {title}")
 
     def _wait_for_window(self, title: str, timeout_seconds: float | None = None) -> None:
-        match = wait_for_window(title, timeout_seconds=float(timeout_seconds or self.config.window_match_timeout))
+        match = wait_for_window(
+            title,
+            timeout_seconds=float(timeout_seconds or self.config.window_match_timeout),
+            stop_requested=self._stop_requested,
+        )
         self.current_environment = capture_effective_desktop_environment(self.config)
         if match is None:
+            self._ensure_not_stopped()
             raise ExecutionError(f"Timed out waiting for window: {title}")
 
     def _relative_click(

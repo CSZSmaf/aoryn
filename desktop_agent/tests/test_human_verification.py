@@ -38,7 +38,7 @@ class _ExecutorStub:
     def __init__(self) -> None:
         self.has_executed = False
 
-    def execute_many(self, actions, pause_after_action):
+    def execute_many(self, actions, pause_after_action, stop_requested=None):
         self.has_executed = True
 
     def browser_snapshot(self):

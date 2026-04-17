@@ -98,6 +98,7 @@ class AuthAPIClient:
         payload: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        proxy_mapping = build_proxy_mapping(self.proxy_url) or None
         try:
             with proxy_socket_tunnel(self.proxy_url):
                 response = requests.request(
@@ -106,7 +107,7 @@ class AuthAPIClient:
                     json=payload,
                     headers={**self.default_headers, **(headers or {})},
                     timeout=self.timeout,
-                    proxies=build_proxy_mapping(self.proxy_url),
+                    proxies=proxy_mapping,
                 )
         except RuntimeError as exc:
             raise AuthAPIError(str(exc)) from exc

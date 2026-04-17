@@ -336,7 +336,7 @@ if QApplication is not None:
             self.logo_button.clicked.connect(self._on_toggle_main)
             card_layout.addWidget(self.logo_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
-            self.task_label = QLabel(f"{APP_NAME} ready", self.card)
+            self.task_label = QLabel(f"{APP_NAME} 就绪", self.card)
             self.task_label.setObjectName("floatingTaskLabel")
             self.task_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             card_layout.addWidget(self.task_label, 1)
@@ -347,27 +347,27 @@ if QApplication is not None:
 
             self.input_line = QLineEdit(self.card)
             self.input_line.setObjectName("floatingInputLine")
-            self.input_line.setPlaceholderText("Queue the next task...")
+            self.input_line.setPlaceholderText("输入下一条任务…")
             self.input_line.returnPressed.connect(self._handle_submit)
             self.input_line.setClearButtonEnabled(True)
             card_layout.addWidget(self.input_line, 1)
 
-            self.submit_button = QPushButton("Queue", self.card)
+            self.submit_button = QPushButton("排队", self.card)
             self.submit_button.setObjectName("floatingPrimaryButton")
             self.submit_button.clicked.connect(self._handle_submit)
             card_layout.addWidget(self.submit_button)
 
-            self.continue_button = QPushButton("Continue", self.card)
+            self.continue_button = QPushButton("继续", self.card)
             self.continue_button.setObjectName("floatingPrimaryButton")
             self.continue_button.clicked.connect(self._handle_continue_follow_up)
             card_layout.addWidget(self.continue_button)
 
-            self.stop_button = QPushButton("Stop", self.card)
+            self.stop_button = QPushButton("停止", self.card)
             self.stop_button.setObjectName("floatingDangerButton")
             self.stop_button.clicked.connect(self._on_stop_task)
             card_layout.addWidget(self.stop_button, 0, Qt.AlignmentFlag.AlignRight)
 
-            self.open_button = QPushButton("Open", self.card)
+            self.open_button = QPushButton("打开", self.card)
             self.open_button.setObjectName("floatingGhostButton")
             self.open_button.clicked.connect(self._on_toggle_main)
             card_layout.addWidget(self.open_button, 0, Qt.AlignmentFlag.AlignRight)
@@ -379,37 +379,38 @@ if QApplication is not None:
                   background: transparent;
                 }
                 #floatingShellCard {
-                  background: rgba(15, 23, 42, 0.985);
-                  border: 1px solid rgba(148, 163, 184, 0.12);
-                  border-radius: 18px;
+                  background: rgba(252, 253, 251, 0.96);
+                  border: 1px solid rgba(22, 33, 29, 0.1);
+                  border-radius: 20px;
+                  box-shadow: 0 18px 42px rgba(22, 33, 29, 0.14);
                 }
                 #floatingLogoButton {
-                  border: 1px solid rgba(148, 163, 184, 0.14);
+                  border: 1px solid rgba(22, 33, 29, 0.08);
                   border-radius: 15px;
-                  background: rgba(30, 41, 59, 0.88);
+                  background: rgba(244, 247, 243, 0.98);
                   padding: 0;
                 }
                 #floatingTaskLabel {
-                  color: #f8fafc;
+                  color: #16211d;
                   font-size: 12px;
-                  font-weight: 600;
+                  font-weight: 700;
                 }
                 #floatingTimerLabel {
-                  color: #ccfbf1;
+                  color: #0f8f73;
                   font-size: 10px;
                   font-weight: 700;
                   padding: 2px 6px;
-                  background: rgba(20, 184, 166, 0.16);
+                  background: rgba(15, 143, 115, 0.12);
                   border-radius: 999px;
                 }
                 #floatingInputLine {
                   min-height: 26px;
                   padding: 0 9px;
                   border-radius: 13px;
-                  border: 1px solid rgba(148, 163, 184, 0.18);
-                  background: rgba(255, 255, 255, 0.98);
-                  color: #0f172a;
-                  selection-background-color: rgba(20, 184, 166, 0.28);
+                  border: 1px solid rgba(22, 33, 29, 0.1);
+                  background: rgba(246, 249, 245, 0.98);
+                  color: #16211d;
+                  selection-background-color: rgba(15, 143, 115, 0.2);
                 }
                 #floatingGhostButton, #floatingDangerButton, #floatingPrimaryButton {
                   min-height: 26px;
@@ -419,19 +420,19 @@ if QApplication is not None:
                   font-size: 11px;
                 }
                 #floatingGhostButton {
-                  border: 1px solid rgba(148, 163, 184, 0.2);
-                  background: rgba(255, 255, 255, 0.06);
-                  color: #e2e8f0;
+                  border: 1px solid rgba(22, 33, 29, 0.1);
+                  background: rgba(244, 247, 243, 0.96);
+                  color: #4d5f59;
                 }
                 #floatingDangerButton {
-                  border: 1px solid rgba(248, 113, 113, 0.22);
-                  background: rgba(127, 29, 29, 0.28);
-                  color: #fee2e2;
+                  border: 1px solid rgba(185, 28, 28, 0.12);
+                  background: rgba(254, 242, 242, 0.96);
+                  color: #b91c1c;
                 }
                 #floatingPrimaryButton {
-                  border: 1px solid rgba(45, 212, 191, 0.16);
-                  background: rgba(45, 212, 191, 0.16);
-                  color: #ccfbf1;
+                  border: 1px solid rgba(15, 143, 115, 0.14);
+                  background: rgba(230, 247, 241, 0.96);
+                  color: #0f8f73;
                 }
                 """
             )
@@ -480,7 +481,7 @@ if QApplication is not None:
                 self._clear_drag_state()
             return super().eventFilter(watched, event)
 
-        def show_idle(self, *, status: str = f"{APP_NAME} ready") -> None:  # pragma: no cover - GUI runtime behavior
+        def show_idle(self, *, status: str = f"{APP_NAME} 就绪") -> None:  # pragma: no cover - GUI runtime behavior
             self._active_job = None
             self._follow_up_draft = ""
             self._waiting_status = status
@@ -496,7 +497,7 @@ if QApplication is not None:
             self._timer.stop()
             self.hide()
 
-        def show_waiting_follow_up(self, draft: str, *, status: str = "Next task queued") -> None:  # pragma: no cover
+        def show_waiting_follow_up(self, draft: str, *, status: str = "下一条任务已排队") -> None:  # pragma: no cover
             self._active_job = None
             self._follow_up_draft = draft
             self._waiting_status = status
@@ -560,6 +561,7 @@ if QApplication is not None:
             active = self._active_job or {}
             has_job = bool(self._active_job)
             has_follow_up = bool(self._follow_up_draft)
+            stop_requested = bool(active.get("cancel_requested")) if has_job else False
             show_input = has_job or has_follow_up
 
             width = self._ACTIVE_WIDTH if show_input else self._IDLE_WIDTH
@@ -568,30 +570,34 @@ if QApplication is not None:
             self._apply_window_shape()
 
             if has_job:
-                title = str(active.get("task") or "Running local task")
+                title = str(active.get("task") or "正在执行任务")
+                if stop_requested:
+                    title = f"正在停止 · {title}"
             elif has_follow_up:
-                title = self._waiting_status or "Next task queued"
+                title = self._waiting_status or "下一条任务已排队"
             else:
-                title = self._waiting_status or f"{APP_NAME} ready"
+                title = self._waiting_status or f"{APP_NAME} 就绪"
             self.task_label.setText(title[:42])
 
             self.timer_label.setVisible(has_job)
             self.stop_button.setVisible(has_job)
+            self.stop_button.setEnabled(has_job and not stop_requested)
+            self.stop_button.setText("停止中…" if stop_requested else "停止")
             self.continue_button.setVisible(not has_job and has_follow_up)
             self.input_line.setVisible(show_input)
             self.submit_button.setVisible(show_input)
 
             if has_job:
-                self.submit_button.setText("Queue")
-                self.input_line.setPlaceholderText("Queue the next task...")
+                self.submit_button.setText("排队")
+                self.input_line.setPlaceholderText("输入下一条任务…")
             elif has_follow_up:
-                self.submit_button.setText("Update")
-                self.input_line.setPlaceholderText("Update the queued task...")
+                self.submit_button.setText("更新")
+                self.input_line.setPlaceholderText("更新已排队的任务…")
                 if not self.input_line.text().strip():
                     self.input_line.setText(self._follow_up_draft)
             else:
                 self.input_line.clear()
-                self.input_line.setPlaceholderText("Type a task...")
+                self.input_line.setPlaceholderText("输入任务…")
 
 
 class DesktopShellController:
@@ -704,7 +710,7 @@ class DesktopShellController:
             if self.main_window.isVisible():
                 self.floating.hide_floating()
             else:
-                self.floating.show_idle(status="Task complete")
+                self.floating.show_idle(status="任务完成")
             return
 
         self.success_feedback_deadline = 0
@@ -721,14 +727,21 @@ class DesktopShellController:
             self.show_main_window(run_id=self.last_finished_run_id)
             return
 
+        if job and (job.get("cancelled") or job.get("status") == "cancelled" or (isinstance(result, dict) and result.get("cancelled"))):
+            self.last_finished_run_id = str(run_id or "") or self.last_finished_run_id
+            self.success_feedback_deadline = time.time() + 3.0
+            if not self.main_window.isVisible():
+                self.floating.show_idle(status="任务已停止")
+            return
+
         if self.follow_up_draft:
             if not self.main_window.isVisible():
-                self.floating.show_waiting_follow_up(self.follow_up_draft, status="Ready to continue")
+                self.floating.show_waiting_follow_up(self.follow_up_draft, status="准备继续")
             return
 
         self.success_feedback_deadline = time.time() + 3.0
         if not self.main_window.isVisible():
-            self.floating.show_idle(status="Task complete")
+            self.floating.show_idle(status="任务完成")
 
     def _build_tray(self):  # pragma: no cover - GUI runtime behavior
         tray = QSystemTrayIcon(QIcon(str(self.icons_root / "app-icon-64.png")), self.qt_app)
@@ -785,7 +798,7 @@ class DesktopShellController:
             self.floating.show_waiting_follow_up(self.follow_up_draft)
             return
         if self.success_feedback_deadline and time.time() < self.success_feedback_deadline:
-            self.floating.show_idle(status="Task complete")
+            self.floating.show_idle(status="任务完成")
             return
         self.floating.show_idle()
 
@@ -882,8 +895,27 @@ class DesktopShellController:
             self._hide_main_window_for_floating()
 
     def _stop_active_task(self) -> None:  # pragma: no cover - GUI runtime behavior
+        if self.current_active_job and not self.current_active_job.get("cancel_requested"):
+            self.current_active_job = {
+                **self.current_active_job,
+                "cancel_requested": True,
+                "status": "stopping",
+            }
+            if not self.main_window.isVisible():
+                self.floating.update_active_job(self.current_active_job, self.follow_up_draft)
         try:
-            requests.post(f"{self.base_url}/api/tasks/stop", json={}, timeout=1.5)
+            response = requests.post(f"{self.base_url}/api/tasks/stop", json={}, timeout=1.5)
+            if response.ok:
+                payload = response.json()
+                if isinstance(payload, dict) and self.current_active_job:
+                    self.current_active_job = {
+                        **self.current_active_job,
+                        **payload,
+                        "cancel_requested": True,
+                        "status": "stopping",
+                    }
+                    if not self.main_window.isVisible():
+                        self.floating.update_active_job(self.current_active_job, self.follow_up_draft)
         except Exception:
             return
 

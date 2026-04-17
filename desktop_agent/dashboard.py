@@ -82,6 +82,7 @@ class DashboardJob:
     error: str | None = None
     cancel_requested: bool = False
     cancelled: bool = False
+    cancel_reason: str | None = None
     requires_human: bool = False
     interruption_kind: str | None = None
     interruption_reason: str | None = None
@@ -104,6 +105,7 @@ class DashboardJob:
             "error": self.error,
             "cancel_requested": self.cancel_requested,
             "cancelled": self.cancelled,
+            "cancel_reason": self.cancel_reason,
             "requires_human": self.requires_human,
             "interruption_kind": self.interruption_kind,
             "interruption_reason": self.interruption_reason,
@@ -227,6 +229,7 @@ class TaskQueue:
                 "finished_at": result.finished_at,
                 "error": result.error,
                 "cancelled": result.cancelled,
+                "cancel_reason": result.cancel_reason,
                 "requires_human": result.requires_human,
                 "interruption_kind": result.interruption_kind,
                 "interruption_reason": result.interruption_reason,
@@ -243,6 +246,7 @@ class TaskQueue:
                 job.result = payload
                 job.error = result.error
                 job.cancelled = result.cancelled
+                job.cancel_reason = result.cancel_reason
                 job.started_at = result.started_at
                 job.finished_at = result.finished_at
                 job.requires_human = result.requires_human

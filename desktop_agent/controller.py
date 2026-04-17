@@ -10,7 +10,13 @@ from typing import Any, Callable
 
 from desktop_agent.actions import PlanResult
 from desktop_agent.config import AgentConfig
-from desktop_agent.executor import BaseExecutor, ExecutionError, MockExecutor, RealDesktopExecutor
+from desktop_agent.executor import (
+    BaseExecutor,
+    ExecutionCancelled,
+    ExecutionError,
+    MockExecutor,
+    RealDesktopExecutor,
+)
 from desktop_agent.human_verification import HumanVerificationSignal, detect_human_verification
 from desktop_agent.logger import RunLogger
 from desktop_agent.perception import MockCapture, PerceptionError, ScreenCapture
@@ -34,6 +40,7 @@ class AgentRunResult:
     finished_at: float
     error: str | None = None
     cancelled: bool = False
+    cancel_reason: str | None = None
     requires_human: bool = False
     interruption_kind: str | None = None
     interruption_reason: str | None = None
@@ -79,6 +86,7 @@ class DesktopAgent:
         completed = False
         error_message: str | None = None
         cancelled = False
+        cancel_reason: str | None = None
         step_count = 0
         challenge_signal: HumanVerificationSignal | None = None
         last_plan_signature: str | None = None
@@ -88,6 +96,7 @@ class DesktopAgent:
         for step_index in range(1, self.config.max_steps + 1):
             if self._stop_requested():
                 cancelled = True
+                cancel_reason = "Stopped by user."
                 break
             step_count = step_index
             screenshot_path = run_dir / f"step_{step_index:02d}.{self.config.screenshot_format}"
@@ -179,8 +188,13 @@ class DesktopAgent:
                     break
                 if self._stop_requested():
                     cancelled = True
+                    cancel_reason = "Stopped by user."
                     break
-                self.executor.execute_many(safe_actions, pause_after_action=self.config.pause_after_action)
+                self.executor.execute_many(
+                    safe_actions,
+                    pause_after_action=self.config.pause_after_action,
+                    stop_requested=self._stop_requested,
+                )
                 recoverable_error_count = 0
                 challenge_signal = detect_human_verification(self.executor.browser_snapshot())
                 if challenge_signal is not None:
@@ -244,6 +258,7 @@ class DesktopAgent:
                 history.append(_build_history_entry(plan, safe_actions))
                 if self._stop_requested():
                     cancelled = True
+                    cancel_reason = "Stopped by user."
                     break
                 if plan.done:
                     completed = True
@@ -251,6 +266,39 @@ class DesktopAgent:
                 if not plan.actions:
                     error_message = "Planner returned no actions before completion."
                     break
+            except ExecutionCancelled as exc:
+                cancelled = True
+                cancel_reason = str(exc) or "Stopped by user."
+                cancelled_at = time.time()
+                cancel_plan = _build_cancelled_plan(plan)
+                self.logger.log_step(
+                    run_dir=run_dir,
+                    step_index=step_index,
+                    task=task,
+                    screenshot_path=screenshot_path,
+                    plan=cancel_plan,
+                    executed_actions=list(exc.executed_actions),
+                    error=cancel_reason,
+                    challenge=None,
+                    captured_at=cancelled_at,
+                    environment=None,
+                )
+                self._emit_progress(
+                    self._build_progress_payload(
+                        task=task,
+                        run_dir=run_dir,
+                        step_index=step_index,
+                        screenshot_path=screenshot_path,
+                        captured_at=cancelled_at,
+                        plan=cancel_plan,
+                        executed_actions=list(exc.executed_actions),
+                        error=cancel_reason,
+                        challenge=None,
+                        started_at=started_at,
+                        environment=None,
+                    )
+                )
+                break
             except (PlannerError, SafetyError, ExecutionError, PerceptionError) as exc:
                 step_error = str(exc)
                 recoverable = self._is_recoverable_error(exc)
@@ -322,6 +370,7 @@ class DesktopAgent:
             planner_mode=self.config.planner_mode,
             error=error_message,
             cancelled=cancelled,
+            cancel_reason=cancel_reason,
             requires_human=challenge_signal is not None,
             interruption_kind=challenge_signal.kind if challenge_signal else None,
             interruption_reason=challenge_signal.detail if challenge_signal else None,
@@ -337,6 +386,7 @@ class DesktopAgent:
             finished_at=finished_at,
             error=error_message,
             cancelled=cancelled,
+            cancel_reason=cancel_reason,
             requires_human=challenge_signal is not None,
             interruption_kind=challenge_signal.kind if challenge_signal else None,
             interruption_reason=challenge_signal.detail if challenge_signal else None,
@@ -417,6 +467,18 @@ def _build_human_handoff_plan(signal: HumanVerificationSignal) -> PlanResult:
         status_summary=signal.summary,
         done=False,
         actions=[],
+        raw_response=None,
+    )
+
+
+def _build_cancelled_plan(previous_plan: PlanResult | None) -> PlanResult:
+    return PlanResult(
+        status_summary="Task stopped by user.",
+        done=False,
+        actions=[],
+        current_focus=previous_plan.current_focus if previous_plan else None,
+        reasoning="Execution stopped after the user pressed Stop.",
+        remaining_steps=list(previous_plan.remaining_steps) if previous_plan else [],
         raw_response=None,
     )
 

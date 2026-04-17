@@ -6,6 +6,7 @@ from desktop_agent.windows_env import (
     TaskbarState,
     WindowSnapshot,
     detect_display_environment,
+    wait_for_window,
 )
 
 
@@ -98,3 +99,23 @@ def test_detect_display_environment_is_read_only_off_windows():
     assert snapshot.override.status == "readonly"
     assert snapshot.override.editable is False
     assert snapshot.effective.platform == "posix"
+
+
+def test_wait_for_window_returns_none_when_stop_requested(monkeypatch):
+    checks = {"count": 0}
+
+    def stop_requested() -> bool:
+        checks["count"] += 1
+        return checks["count"] >= 2
+
+    monkeypatch.setattr(
+        "desktop_agent.windows_env.capture_desktop_environment",
+        lambda: DesktopEnvironment(platform="windows", virtual_bounds=Rect(0, 0, 1920, 1080)),
+    )
+    monkeypatch.setattr("desktop_agent.windows_env.find_window", lambda environment, query: None)
+    monkeypatch.setattr("desktop_agent.windows_env.time.sleep", lambda seconds: None)
+
+    match = wait_for_window("Calculator", timeout_seconds=1.0, poll_interval=0.01, stop_requested=stop_requested)
+
+    assert match is None
+    assert checks["count"] >= 2

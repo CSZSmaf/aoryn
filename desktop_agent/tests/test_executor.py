@@ -3,6 +3,8 @@ import pytest
 from desktop_agent.actions import Action
 from desktop_agent.config import AgentConfig
 from desktop_agent.executor import (
+    BaseExecutor,
+    ExecutionCancelled,
     ExecutionError,
     RealDesktopExecutor,
     _find_known_blockers,
@@ -298,6 +300,87 @@ def test_find_known_blockers_ignores_dwm_notification_window():
     blockers = _find_known_blockers(environment)
 
     assert [item.title for item in blockers] == ["Translate"]
+
+
+def test_execute_many_stops_during_pause_after_action(monkeypatch):
+    class _Executor(BaseExecutor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.executed: list[str] = []
+
+        def execute(self, action: Action) -> None:
+            self.executed.append(action.type)
+
+    stop_state = {"checks": 0}
+
+    def stop_requested() -> bool:
+        stop_state["checks"] += 1
+        return stop_state["checks"] >= 3
+
+    monkeypatch.setattr("desktop_agent.executor.time.sleep", lambda seconds: None)
+
+    executor = _Executor()
+    action = Action.from_dict({"type": "wait", "seconds": 0.1})
+
+    with pytest.raises(ExecutionCancelled) as exc:
+        executor.execute_many([action], pause_after_action=0.2, stop_requested=stop_requested)
+
+    assert executor.executed == ["wait"]
+    assert exc.value.executed_actions == [action]
+
+
+def test_wait_action_stops_quickly(monkeypatch):
+    sleep_calls: list[float] = []
+    stop_state = {"checks": 0}
+
+    def stop_requested() -> bool:
+        stop_state["checks"] += 1
+        return stop_state["checks"] >= 3
+
+    monkeypatch.setattr("desktop_agent.executor.time.sleep", lambda seconds: sleep_calls.append(seconds))
+
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False))
+    action = Action.from_dict({"type": "wait", "seconds": 0.2})
+
+    with pytest.raises(ExecutionCancelled) as exc:
+        executor.execute_many([action], pause_after_action=0, stop_requested=stop_requested)
+
+    assert exc.value.executed_actions == []
+    assert sleep_calls
+
+
+def test_wait_for_window_action_stops_quickly(monkeypatch):
+    stop_state = {"checks": 0}
+    wait_callbacks: list[bool] = []
+
+    def stop_requested() -> bool:
+        stop_state["checks"] += 1
+        return stop_state["checks"] >= 3
+
+    def fake_wait_for_window(query, *, timeout_seconds=2.5, poll_interval=0.1, stop_requested=None):
+        assert query == "Calculator"
+        assert stop_requested is not None
+        wait_callbacks.append(bool(stop_requested()))
+        wait_callbacks.append(bool(stop_requested()))
+        return None
+
+    monkeypatch.setattr("desktop_agent.executor.wait_for_window", fake_wait_for_window)
+    monkeypatch.setattr(
+        "desktop_agent.executor.capture_effective_desktop_environment",
+        lambda config=None: DesktopEnvironment(platform="windows", virtual_bounds=Rect(0, 0, 1920, 1080)),
+    )
+
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False))
+
+    with pytest.raises(ExecutionCancelled) as exc:
+        executor.execute_many(
+            [Action.from_dict({"type": "wait_for_window", "title": "Calculator", "seconds": 1.0})],
+            pause_after_action=0,
+            stop_requested=stop_requested,
+        )
+
+    assert exc.value.executed_actions == []
+    assert wait_callbacks == [False, True]
 
 
 def test_find_known_blockers_matches_explicit_cookie_and_password_titles():

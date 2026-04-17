@@ -6,7 +6,7 @@ import time
 from ctypes import wintypes
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from desktop_agent.config import AgentConfig
@@ -260,9 +260,17 @@ def launch_app_by_name(target: str) -> bool:
         return False
 
 
-def wait_for_window(query: str, *, timeout_seconds: float = 2.5, poll_interval: float = 0.1) -> WindowSnapshot | None:
+def wait_for_window(
+    query: str,
+    *,
+    timeout_seconds: float = 2.5,
+    poll_interval: float = 0.1,
+    stop_requested: Callable[[], bool] | None = None,
+) -> WindowSnapshot | None:
     deadline = time.time() + max(0.1, timeout_seconds)
     while time.time() < deadline:
+        if stop_requested is not None and stop_requested():
+            return None
         window = find_window(capture_desktop_environment(), query)
         if window is not None:
             return window
