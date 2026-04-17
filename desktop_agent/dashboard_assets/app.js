@@ -5605,7 +5605,7 @@ function formatChatPendingElapsed(startedAt) {
 function renderAssistantAvatar() {
   return `
     <div class="assistant-avatar" aria-hidden="true">
-      <img class="assistant-avatar__image" src="/assets/icons/logo-mark.png?v=${APP_ASSET_VERSION}" alt="" />
+      <img class="assistant-avatar__image" src="/assets/icons/logo-mark.svg?v=${APP_ASSET_VERSION}" alt="" />
     </div>
   `;
 }
