@@ -5104,7 +5104,11 @@ body {
   --glass-blur: none;
   --sidebar-open: 260px;
   --sidebar-collapsed: 84px;
-  --content-max: 1120px;
+  --content-max: 1400px;
+  --composer-max: 1240px;
+  --reading-max: 860px;
+  --welcome-stage-max: 1520px;
+  --welcome-aside-width: 420px;
 }
 
 html,
@@ -5333,16 +5337,20 @@ body {
 .chat-scroll {
   display: flex;
   justify-content: center;
-  padding: 28px 32px 18px;
+  padding: 32px clamp(32px, 4vw, 56px) 18px;
 }
 
 .chat-stream {
   width: min(100%, var(--content-max));
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   margin: 0 auto;
-  gap: 18px;
+  gap: 20px;
+}
+
+.chat-stream > .message {
+  width: 100%;
 }
 
 .chat-welcome {
@@ -5353,7 +5361,7 @@ body {
   text-align: center;
   max-width: none;
   margin: 0 auto;
-  padding: 88px 0 24px;
+  padding: 96px clamp(16px, 4vw, 40px) 24px;
 }
 
 .chat-welcome .brand-wordmark,
@@ -5374,6 +5382,118 @@ body {
   text-align: center;
 }
 
+.chat-stream[data-context="agent-welcome"] {
+  width: min(100%, var(--welcome-stage-max));
+  gap: 28px;
+}
+
+.chat-stream[data-context="agent-welcome"] .chat-welcome {
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, var(--welcome-aside-width));
+  align-items: center;
+  justify-items: stretch;
+  gap: clamp(24px, 4vw, 72px);
+  padding: 72px 8px 24px;
+  text-align: left;
+}
+
+.chat-stream[data-context="agent-welcome"] .chat-welcome p:first-child {
+  display: block;
+  margin: 0;
+}
+
+.chat-stream[data-context="agent-welcome"] .chat-welcome__hero {
+  display: grid;
+  gap: 14px;
+  align-content: center;
+  max-width: 860px;
+}
+
+.chat-stream[data-context="agent-welcome"] .chat-welcome__hero h2 {
+  max-width: 8ch;
+  font-size: clamp(3rem, 5vw, 4.8rem);
+  line-height: 0.98;
+  letter-spacing: -0.05em;
+  text-wrap: balance;
+}
+
+.chat-stream[data-context="agent-welcome"] .chat-welcome__hero p:last-child {
+  max-width: 26ch;
+  text-align: left;
+  font-size: 1.05rem;
+  line-height: 1.75;
+}
+
+.chat-stream[data-context="agent-welcome"] .chat-welcome__aside {
+  display: grid;
+  gap: 16px;
+  align-self: stretch;
+}
+
+.chat-stream[data-context="agent-welcome"] .welcome-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 26px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 248, 250, 0.94));
+  box-shadow: var(--shadow-soft);
+}
+
+.chat-stream[data-context="agent-welcome"] .welcome-card__eyebrow {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-stream[data-context="agent-welcome"] .welcome-card__list {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-stream[data-context="agent-welcome"] .welcome-card__item {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.chat-stream[data-context="agent-welcome"] .welcome-card__item strong {
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 620;
+}
+
+.chat-stream[data-context="agent-welcome"] .welcome-card__item span {
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.chat-stream[data-context="agent-welcome"] .welcome-card__badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.chat-stream[data-context="agent-welcome"] .welcome-card__item--empty {
+  min-height: 120px;
+  align-content: center;
+}
+
 .message-bubble {
   max-width: min(64ch, 74%);
   padding: 12px 16px;
@@ -5392,7 +5512,7 @@ body {
 }
 
 .assistant-shell {
-  width: min(100%, var(--content-max));
+  width: 100%;
   grid-template-columns: 46px minmax(0, 1fr);
   gap: 16px;
 }
@@ -5456,6 +5576,10 @@ body {
   line-height: 1.72;
 }
 
+.assistant-card--chat .assistant-copy {
+  max-width: min(100%, var(--reading-max));
+}
+
 .assistant-run__metrics .metric-card,
 .assistant-run__section,
 .assistant-run__followup-card,
@@ -5490,15 +5614,29 @@ body {
   flex-direction: column;
   align-items: center;
   margin: 0 auto;
-  padding: 8px 32px 28px;
+  padding: 10px clamp(32px, 4vw, 56px) 28px;
   background: var(--surface);
 }
 
 .composer-suggestions {
-  width: min(100%, var(--content-max));
+  width: min(100%, var(--composer-max));
   margin: 0 auto 10px;
   justify-content: center;
   gap: 8px;
+}
+
+.composer-wrap[data-context="agent-welcome"] {
+  width: min(100%, var(--welcome-stage-max));
+  padding: 0 clamp(32px, 4vw, 56px) 32px;
+}
+
+.composer-wrap[data-context="agent-welcome"] .composer-suggestions,
+.composer-wrap[data-context="agent-welcome"] .composer {
+  width: min(100%, 1120px);
+}
+
+.composer-wrap[data-context="agent-welcome"] .composer-suggestions {
+  justify-content: flex-start;
 }
 
 .suggestion-chip {
@@ -5509,8 +5647,8 @@ body {
 }
 
 .composer {
-  width: min(100%, var(--content-max));
-  max-width: var(--content-max);
+  width: min(100%, var(--composer-max));
+  max-width: var(--composer-max);
   margin: 0 auto;
   padding: 0;
   border-radius: 28px;
@@ -5617,5 +5755,251 @@ body {
 
   .composer-wrap {
     padding-inline: 20px;
+  }
+}
+
+@media (max-width: 1400px) {
+  .chat-stream[data-context="agent-welcome"] .chat-welcome {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding-inline: 0;
+    text-align: center;
+  }
+
+  .chat-stream[data-context="agent-welcome"] .chat-welcome__hero {
+    justify-items: center;
+  }
+
+  .chat-stream[data-context="agent-welcome"] .chat-welcome__hero h2,
+  .chat-stream[data-context="agent-welcome"] .chat-welcome__hero p:last-child {
+    max-width: 12ch;
+    text-align: center;
+  }
+
+  .chat-stream[data-context="agent-welcome"] .chat-welcome__hero p:last-child {
+    max-width: 34ch;
+  }
+
+  .chat-stream[data-context="agent-welcome"] .chat-welcome__aside {
+    width: min(100%, 720px);
+  }
+
+  .composer-wrap[data-context="agent-welcome"] .composer-suggestions {
+    justify-content: center;
+  }
+}
+
+/* Final welcome layout override: keep the shell minimal and center the composer. */
+.chat-stream[data-context="agent-welcome"],
+.chat-stream[data-context="chat-welcome"] {
+  width: min(100%, var(--content-max));
+  min-height: 0;
+  justify-content: flex-end;
+  gap: 0;
+}
+
+.chat-stream[data-context="agent-welcome"] {
+  width: min(100%, var(--content-max));
+  min-height: 0;
+  justify-content: flex-end;
+}
+
+.chat-stream[data-context="agent-welcome"] .chat-welcome,
+.chat-stream[data-context="chat-welcome"] .chat-welcome,
+.chat-welcome--minimal {
+  display: none;
+}
+
+.chat-stream[data-context="agent-welcome"] .chat-welcome h2,
+.chat-stream[data-context="chat-welcome"] .chat-welcome h2,
+.chat-welcome--minimal h2 {
+  margin: 0;
+  max-width: 12ch;
+  font-size: clamp(2.4rem, 4vw, 4rem);
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+  text-align: center;
+  text-wrap: balance;
+}
+
+.composer-wrap[data-context="agent-welcome"],
+.composer-wrap[data-context="chat-welcome"] {
+  width: 100%;
+  padding: 0 clamp(32px, 4vw, 56px) 36px;
+}
+
+.composer-wrap[data-context="agent-welcome"] .composer-suggestions,
+.composer-wrap[data-context="agent-welcome"] .composer,
+.composer-wrap[data-context="chat-welcome"] .composer-suggestions,
+.composer-wrap[data-context="chat-welcome"] .composer {
+  width: min(100%, 1120px);
+}
+
+.composer-wrap[data-context="agent-welcome"] .composer-suggestions,
+.composer-wrap[data-context="chat-welcome"] .composer-suggestions {
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 900px) {
+  .chat-stream[data-context="agent-welcome"],
+  .chat-stream[data-context="chat-welcome"] {
+    min-height: 0;
+  }
+
+  .chat-stream[data-context="agent-welcome"] .chat-welcome,
+  .chat-stream[data-context="chat-welcome"] .chat-welcome,
+  .chat-welcome--minimal {
+    display: none;
+  }
+
+  .chat-stream[data-context="agent-welcome"] .chat-welcome h2,
+  .chat-stream[data-context="chat-welcome"] .chat-welcome h2,
+  .chat-welcome--minimal h2 {
+    font-size: clamp(2rem, 9vw, 3rem);
+  }
+
+  .composer-wrap[data-context="agent-welcome"],
+  .composer-wrap[data-context="chat-welcome"] {
+    padding-inline: 20px;
+  }
+}
+
+/* Final conversation width fix: the flex row `.surface` was letting `.chat-surface`
+   shrink to its content width, which kept the composer short and visually left-biased. */
+.surface {
+  min-width: 0;
+}
+
+.chat-surface,
+.developer-surface {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-surface {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-scroll,
+.composer-wrap {
+  width: 100%;
+}
+
+.composer-wrap,
+.composer-wrap[data-context="agent-welcome"],
+.composer-wrap[data-context="chat-welcome"] {
+  max-width: none;
+}
+
+.composer,
+.composer-suggestions,
+.composer-wrap[data-context="agent-welcome"] .composer,
+.composer-wrap[data-context="agent-welcome"] .composer-suggestions,
+.composer-wrap[data-context="chat-welcome"] .composer,
+.composer-wrap[data-context="chat-welcome"] .composer-suggestions {
+  width: min(100%, 1180px);
+  max-width: 1180px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.composer-wrap[data-context="agent-welcome"] .composer-suggestions,
+.composer-wrap[data-context="chat-welcome"] .composer-suggestions {
+  justify-content: flex-start;
+}
+
+/* Final welcome-stage positioning: pull the empty-state composer cluster into the
+   upper-middle canvas, while leaving active threads anchored to the bottom shell. */
+.chat-surface[data-context="agent-welcome"],
+.chat-surface[data-context="chat-welcome"] {
+  justify-content: center;
+}
+
+.chat-scroll[data-context="agent-welcome"],
+.chat-scroll[data-context="chat-welcome"] {
+  display: none;
+}
+
+.composer-wrap[data-context="agent-welcome"],
+.composer-wrap[data-context="chat-welcome"] {
+  flex: 0 0 auto;
+  position: relative;
+  overflow: visible;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 14px;
+  padding: 0 clamp(32px, 4vw, 56px);
+  transform: translateY(clamp(44px, 6vh, 88px));
+}
+
+.composer-wrap[data-context="agent-welcome"]::before,
+.composer-wrap[data-context="chat-welcome"]::before {
+  content: "Aoryn";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, calc(-100% - clamp(14px, 2.1vh, 22px)));
+  padding-inline: 0.08em;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  font-size: clamp(2rem, 3.2vw, 3rem);
+  font-weight: 720;
+  font-style: normal;
+  line-height: 1.04;
+  letter-spacing: -0.045em;
+  color: rgba(15, 23, 42, 0.94);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.82);
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+.composer-wrap[data-context="agent-welcome"] .composer,
+.composer-wrap[data-context="agent-welcome"] .composer-suggestions,
+.composer-wrap[data-context="chat-welcome"] .composer,
+.composer-wrap[data-context="chat-welcome"] .composer-suggestions {
+  width: min(100%, 960px);
+  max-width: 960px;
+}
+
+.composer-wrap[data-context="agent-welcome"] .composer-suggestions,
+.composer-wrap[data-context="chat-welcome"] .composer-suggestions {
+  margin: 0 auto;
+  justify-content: flex-start;
+}
+
+.composer-wrap[data-context="agent-welcome"] .composer textarea,
+.composer-wrap[data-context="chat-welcome"] .composer textarea {
+  min-height: 96px;
+}
+
+@media (max-width: 900px) {
+  .chat-scroll[data-context="agent-welcome"],
+  .chat-scroll[data-context="chat-welcome"] {
+    display: none;
+  }
+
+  .composer-wrap[data-context="agent-welcome"],
+  .composer-wrap[data-context="chat-welcome"] {
+    gap: 10px;
+    padding-inline: 20px;
+    transform: translateY(clamp(20px, 4vh, 40px));
+  }
+
+  .composer-wrap[data-context="agent-welcome"]::before,
+  .composer-wrap[data-context="chat-welcome"]::before {
+    font-size: clamp(1.65rem, 7vw, 2.2rem);
+    transform: translate(-50%, calc(-100% - 12px));
+  }
+
+  .composer-wrap[data-context="agent-welcome"] .composer,
+  .composer-wrap[data-context="agent-welcome"] .composer-suggestions,
+  .composer-wrap[data-context="chat-welcome"] .composer,
+  .composer-wrap[data-context="chat-welcome"] .composer-suggestions {
+    width: min(100%, 100%);
+    max-width: 100%;
   }
 }

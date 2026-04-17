@@ -257,6 +257,46 @@ begin
   end;
 end;
 
+function TryReadLocalUninstallCommand(
+  const InstallDirValue: string;
+  var UninstallCommandValue: string
+): Boolean;
+var
+  FindRec: TFindRec;
+  CandidatePath: string;
+begin
+  UninstallCommandValue := '';
+  if Trim(InstallDirValue) = '' then
+  begin
+    Result := False;
+    exit;
+  end;
+
+  if not FindFirst(AddBackslash(InstallDirValue) + 'unins???.exe', FindRec) then
+  begin
+    Result := False;
+    exit;
+  end;
+
+  try
+    repeat
+      CandidatePath := AddBackslash(InstallDirValue) + FindRec.Name;
+      if FileExists(CandidatePath) then
+      begin
+        UninstallCommandValue :=
+          '"' + CandidatePath + '" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART ' +
+          UpgradeUninstallKeepUserDataSwitch();
+        Result := True;
+        exit;
+      end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+
+  Result := False;
+end;
+
 procedure AddExistingInstallCandidate(
   const SourceName: string;
   const InstalledVersionValue: string;
@@ -270,16 +310,21 @@ var
   ExistingCommandKey: string;
   CandidateDirKey: string;
   CandidateCommandKey: string;
+  ResolvedUninstallCommand: string;
 begin
+  ResolvedUninstallCommand := Trim(UninstallCommandValue);
+  if (ResolvedUninstallCommand = '') and (Trim(InstallDirValue) <> '') then
+    TryReadLocalUninstallCommand(InstallDirValue, ResolvedUninstallCommand);
+
   if
     (Trim(InstalledVersionValue) = '') and
     (Trim(InstallDirValue) = '') and
-    (Trim(UninstallCommandValue) = '')
+    (ResolvedUninstallCommand = '')
   then
     exit;
 
   CandidateDirKey := NormalizeDirName(InstallDirValue);
-  CandidateCommandKey := NormalizeCommandKey(UninstallCommandValue);
+  CandidateCommandKey := NormalizeCommandKey(ResolvedUninstallCommand);
 
   for Index := 0 to GetArrayLength(ExistingInstallVersions) - 1 do
   begin
@@ -301,8 +346,8 @@ begin
 
       if (Trim(ExistingInstallDirs[Index]) = '') and (Trim(InstallDirValue) <> '') then
         ExistingInstallDirs[Index] := InstallDirValue;
-      if (Trim(ExistingInstallUninstallCommands[Index]) = '') and (Trim(UninstallCommandValue) <> '') then
-        ExistingInstallUninstallCommands[Index] := Trim(UninstallCommandValue);
+      if (Trim(ExistingInstallUninstallCommands[Index]) = '') and (ResolvedUninstallCommand <> '') then
+        ExistingInstallUninstallCommands[Index] := ResolvedUninstallCommand;
       if (Trim(ExistingInstallSources[Index]) = '') and (Trim(SourceName) <> '') then
         ExistingInstallSources[Index] := SourceName;
 
@@ -320,7 +365,7 @@ begin
   SetArrayLength(ExistingInstallComparisons, NewIndex + 1);
   ExistingInstallVersions[NewIndex] := InstalledVersionValue;
   ExistingInstallDirs[NewIndex] := InstallDirValue;
-  ExistingInstallUninstallCommands[NewIndex] := Trim(UninstallCommandValue);
+  ExistingInstallUninstallCommands[NewIndex] := ResolvedUninstallCommand;
   ExistingInstallSources[NewIndex] := SourceName;
   ExistingInstallComparisons[NewIndex] := CompareDetectedVersionText(InstalledVersionValue);
   SyncExistingInstallSummary();

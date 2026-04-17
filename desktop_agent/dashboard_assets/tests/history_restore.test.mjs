@@ -496,7 +496,10 @@ fetchJson = async (url) => {
   assert.equal(sidebarHtml.includes("sidebar-skeleton"), false);
 
   const chatHtml = context.document.getElementById("chatStream").innerHTML;
-  assert.match(chatHtml, /chat-welcome/);
+  assert.equal(chatHtml.includes("chat-welcome"), false);
+  assert.equal(chatHtml.includes("welcome-card"), false);
+  assert.equal(context.document.getElementById("chatStream").dataset.context, "agent-welcome");
+  assert.equal(context.document.getElementById("chatScroll").dataset.context, "agent-welcome");
 });
 
 
@@ -848,29 +851,108 @@ await runTest("dashboard brand assets and layout tokens stay on the fallback whi
   const dashboardLogoSvg = path.resolve(import.meta.dirname, "../icons/logo-mark.svg");
   const webLogoSvg = path.resolve(import.meta.dirname, "../../../web/public/logo-mark.svg");
   const finalRootBlock = getLastCssBlock(stylesSource, ":root");
+  const finalSurfaceBlock = getLastCssBlock(stylesSource, ".surface", /min-width:\s*0;/);
+  const finalChatSurfaceSizingBlock = getLastCssBlock(stylesSource, ".chat-surface,\n.developer-surface", /flex:\s*1 1 auto;/);
+  const finalChatSurfaceBlock = getLastCssBlock(stylesSource, ".chat-surface", /display:\s*flex;/);
   const finalChatScrollBlock = getLastCssBlock(stylesSource, ".chat-scroll", /justify-content:\s*center;/);
+  const finalWelcomeChatSurfaceBlock = getLastCssBlock(
+    stylesSource,
+    '.chat-surface[data-context="agent-welcome"],\n.chat-surface[data-context="chat-welcome"]',
+    /justify-content:\s*center;/
+  );
+  const finalWelcomeChatScrollBlock = getLastCssBlock(
+    stylesSource,
+    '.chat-scroll[data-context="agent-welcome"],\n.chat-scroll[data-context="chat-welcome"]',
+    /display:\s*none;/
+  );
   const finalChatStreamBlock = getLastCssBlock(stylesSource, ".chat-stream");
-  const finalChatWelcomeBlock = getLastCssBlock(stylesSource, ".chat-welcome");
+  const finalMessageRowBlock = getLastCssBlock(stylesSource, ".chat-stream > .message");
+  const finalChatWelcomeBlock = getLastCssBlock(stylesSource, ".chat-welcome", /width:\s*min\(100%, var\(--content-max\)\);/);
+  const finalWelcomeMinimalBlock = getLastCssBlock(stylesSource, ".chat-welcome--minimal", /display:\s*none;/);
+  const finalAgentWelcomeBlock = getLastCssBlock(
+    stylesSource,
+    '.chat-stream[data-context="agent-welcome"]',
+    /justify-content:\s*flex-end;/
+  );
+  const finalAssistantShellBlock = getLastCssBlock(stylesSource, ".assistant-shell");
   const finalComposerWrapBlock = getLastCssBlock(stylesSource, ".composer-wrap", /align-items:\s*center;/);
-  const finalComposerSuggestionsBlock = getLastCssBlock(stylesSource, ".composer-suggestions");
-  const finalComposerBlock = getLastCssBlock(stylesSource, ".composer");
+  const finalWelcomeComposerWrapBlock = getLastCssBlock(
+    stylesSource,
+    '.composer-wrap[data-context="agent-welcome"],\n.composer-wrap[data-context="chat-welcome"]',
+    /flex-direction:\s*column-reverse;/
+  );
+  const finalWelcomeComposerWordmarkBlock = getLastCssBlock(
+    stylesSource,
+    '.composer-wrap[data-context="agent-welcome"]::before,\n.composer-wrap[data-context="chat-welcome"]::before',
+    /content:\s*"Aoryn";/
+  );
+  const finalWelcomeComposerSizingBlock = getLastCssBlock(
+    stylesSource,
+    '.composer-wrap[data-context="agent-welcome"] .composer,\n.composer-wrap[data-context="agent-welcome"] .composer-suggestions,\n.composer-wrap[data-context="chat-welcome"] .composer,\n.composer-wrap[data-context="chat-welcome"] .composer-suggestions',
+    /width:\s*min\(100%, 960px\);/
+  );
+  const finalWelcomeComposerSuggestionsBlock = getLastCssBlock(
+    stylesSource,
+    '.composer-wrap[data-context="agent-welcome"] .composer-suggestions,\n.composer-wrap[data-context="chat-welcome"] .composer-suggestions',
+    /justify-content:\s*flex-start;/
+  );
+  const finalComposerSuggestionsBlock = getLastCssBlock(
+    stylesSource,
+    ".composer-suggestions",
+    /width:\s*min\(100%, var\(--composer-max\)\);/
+  );
+  const finalComposerBlock = getLastCssBlock(
+    stylesSource,
+    ".composer",
+    /width:\s*min\(100%, var\(--composer-max\)\);/
+  );
 
   assert.match(indexSource, /brand-mark__image" src="\/assets\/icons\/logo-mark\.png\?v=__APP_ASSET_VERSION__/);
   assert.equal(indexSource.includes("logo-mark.svg"), false);
   assert.match(finalRootBlock, /--sidebar-open:\s*260px;/);
   assert.match(finalRootBlock, /--sidebar-collapsed:\s*84px;/);
-  assert.match(finalRootBlock, /--content-max:\s*1120px;/);
+  assert.match(finalRootBlock, /--content-max:\s*1400px;/);
+  assert.match(finalRootBlock, /--composer-max:\s*1240px;/);
+  assert.match(finalRootBlock, /--reading-max:\s*860px;/);
+  assert.match(finalSurfaceBlock, /min-width:\s*0;/);
+  assert.match(finalChatSurfaceSizingBlock, /flex:\s*1 1 auto;/);
+  assert.match(finalChatSurfaceSizingBlock, /width:\s*100%;/);
+  assert.match(finalChatSurfaceBlock, /display:\s*flex;/);
   assert.equal(stylesSource.includes("--content-max: 760px;"), false);
   assert.equal(stylesSource.includes("--content-max: 968px;"), false);
   assert.match(finalChatScrollBlock, /display:\s*flex;/);
   assert.match(finalChatScrollBlock, /justify-content:\s*center;/);
+  assert.match(finalWelcomeChatSurfaceBlock, /justify-content:\s*center;/);
+  assert.match(finalWelcomeChatScrollBlock, /display:\s*none;/);
+  assert.match(finalChatStreamBlock, /align-items:\s*stretch;/);
   assert.match(finalChatStreamBlock, /width:\s*min\(100%, var\(--content-max\)\);/);
+  assert.match(finalMessageRowBlock, /width:\s*100%;/);
   assert.match(finalChatWelcomeBlock, /width:\s*min\(100%, var\(--content-max\)\);/);
   assert.match(finalChatWelcomeBlock, /text-align:\s*center;/);
+  assert.match(finalWelcomeMinimalBlock, /display:\s*none;/);
+  assert.match(finalAgentWelcomeBlock, /justify-content:\s*flex-end;/);
+  assert.match(finalAgentWelcomeBlock, /min-height:\s*0;/);
+  assert.match(finalAssistantShellBlock, /width:\s*100%;/);
   assert.match(finalComposerWrapBlock, /width:\s*100%;/);
   assert.match(finalComposerWrapBlock, /align-items:\s*center;/);
-  assert.match(finalComposerSuggestionsBlock, /width:\s*min\(100%, var\(--content-max\)\);/);
-  assert.match(finalComposerBlock, /width:\s*min\(100%, var\(--content-max\)\);/);
+  assert.match(finalWelcomeComposerWrapBlock, /flex:\s*0 0 auto;/);
+  assert.match(finalWelcomeComposerWrapBlock, /position:\s*relative;/);
+  assert.match(finalWelcomeComposerWrapBlock, /overflow:\s*visible;/);
+  assert.match(finalWelcomeComposerWrapBlock, /flex-direction:\s*column-reverse;/);
+  assert.match(finalWelcomeComposerWrapBlock, /gap:\s*14px;/);
+  assert.match(finalWelcomeComposerWrapBlock, /transform:\s*translateY\(clamp\(44px, 6vh, 88px\)\);/);
+  assert.match(finalWelcomeComposerWordmarkBlock, /content:\s*"Aoryn";/);
+  assert.match(finalWelcomeComposerWordmarkBlock, /position:\s*absolute;/);
+  assert.match(finalWelcomeComposerWordmarkBlock, /padding-inline:\s*0\.08em;/);
+  assert.match(finalWelcomeComposerWordmarkBlock, /font-style:\s*normal;/);
+  assert.match(finalWelcomeComposerWordmarkBlock, /font-weight:\s*720;/);
+  assert.match(finalWelcomeComposerWordmarkBlock, /color:\s*rgba\(15,\s*23,\s*42,\s*0\.94\);/);
+  assert.match(finalWelcomeComposerSizingBlock, /width:\s*min\(100%, 960px\);/);
+  assert.match(finalWelcomeComposerSizingBlock, /max-width:\s*960px;/);
+  assert.match(finalWelcomeComposerSuggestionsBlock, /justify-content:\s*flex-start;/);
+  assert.match(finalWelcomeComposerSuggestionsBlock, /margin:\s*0 auto;/);
+  assert.match(finalComposerSuggestionsBlock, /width:\s*min\(100%, 1180px\);|width:\s*min\(100%, var\(--composer-max\)\);/);
+  assert.match(finalComposerBlock, /width:\s*min\(100%, 1180px\);|width:\s*min\(100%, var\(--composer-max\)\);/);
   assert.equal(fs.existsSync(dashboardLogoSvg), false);
   assert.equal(fs.existsSync(webLogoSvg), false);
 });

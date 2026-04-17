@@ -4584,6 +4584,120 @@ function renderChat() {
   renderAgentChat();
 }
 
+function setConversationLayoutContext(value) {
+  const contextValue = normalizeText(value || "") || "default";
+  if (elements.chatStream) {
+    elements.chatStream.dataset.context = contextValue;
+  }
+  if (elements.chatScroll) {
+    elements.chatScroll.dataset.context = contextValue;
+  }
+  const chatSurface = elements.chatScroll?.closest(".chat-surface");
+  if (chatSurface) {
+    chatSurface.dataset.context = contextValue;
+  }
+  const composerWrap = elements.taskForm?.closest(".composer-wrap");
+  if (composerWrap) {
+    composerWrap.dataset.context = contextValue;
+  }
+}
+
+function buildWelcomeRecentItems() {
+  const recentItems = [];
+
+  for (const run of state.runs || []) {
+    const title = cleanRunTitle(run.task || run.id || "");
+    if (!title) continue;
+    recentItems.push({
+      key: `run-${run.id || title}`,
+      kind: tr("Agent", "Agent"),
+      title,
+      meta: formatShortTime(run.created_at || run.started_at || run.finished_at),
+      timestamp: Number(run.created_at || run.started_at || run.finished_at || 0),
+    });
+  }
+
+  for (const session of state.chatSessions || []) {
+    const hasMessages = Array.isArray(session.messages) && session.messages.length;
+    const title = cleanRunTitle(session.title || "");
+    if (!hasMessages || !title) continue;
+    recentItems.push({
+      key: `chat-${session.id || title}`,
+      kind: tr("Chat", "Chat"),
+      title,
+      meta: formatShortTime(session.updated_at || session.created_at),
+      timestamp: Number(session.updated_at || session.created_at || 0),
+    });
+  }
+
+  return recentItems
+    .sort((left, right) => right.timestamp - left.timestamp)
+    .filter((item, index, items) => items.findIndex((entry) => entry.title === item.title) === index)
+    .slice(0, 4);
+}
+
+function renderWelcomeMessage() {
+  return "";
+  const recentItems = buildWelcomeRecentItems();
+  const capabilityItems = [
+    tr("浏览器流程执行", "Browser workflow runs"),
+    tr("桌面应用操作", "Desktop app control"),
+    tr("截图与过程回放", "Screenshots and run playback"),
+  ];
+  return `
+    <div class="chat-welcome">
+      <div class="chat-welcome__hero">
+        <p>${escapeHtml(t("chat.emptyEyebrow"))}</p>
+        <h2>${escapeHtml(t("chat.emptyTitle"))}</h2>
+        <p>${escapeHtml(t("chat.emptyBody"))}</p>
+      </div>
+      <aside class="chat-welcome__aside" aria-label="${escapeHtml(tr("工作台概览", "Workspace overview"))}">
+        <section class="welcome-card">
+          <p class="welcome-card__eyebrow">${escapeHtml(tr("现在可以", "Ready for"))}</p>
+          <div class="welcome-card__list">
+            ${capabilityItems
+              .map(
+                (item) => `
+                  <div class="welcome-card__item">
+                    <strong>${escapeHtml(item)}</strong>
+                  </div>
+                `
+              )
+              .join("")}
+          </div>
+        </section>
+        <section class="welcome-card">
+          <p class="welcome-card__eyebrow">${escapeHtml(tr("最近记录", "Recent history"))}</p>
+          <div class="welcome-card__list">
+            ${
+              recentItems.length
+                ? recentItems
+                    .map(
+                      (item) => `
+                        <div class="welcome-card__item">
+                          <span class="welcome-card__badge">${escapeHtml(item.kind)}</span>
+                          <strong>${escapeHtml(item.title)}</strong>
+                          <span>${escapeHtml(item.meta)}</span>
+                        </div>
+                      `
+                    )
+                    .join("")
+                : `
+                    <div class="welcome-card__item welcome-card__item--empty">
+                      <strong>${escapeHtml(tr("新工作区", "Fresh workspace"))}</strong>
+                      <span>${escapeHtml(
+                        tr("执行过的任务和对话会在这里汇总，右侧不再空着。", "Completed runs and chats will collect here instead of leaving the right side empty.")
+                      )}</span>
+                    </div>
+                  `
+            }
+          </div>
+        </section>
+      </aside>
+    </div>
+  `;
+}
+
 function renderAgentChat() {
   const context = getAgentConversationContext();
   const messages = [];
@@ -4604,6 +4718,7 @@ function renderAgentChat() {
   }
 
   elements.chatStream.innerHTML = messages.join("");
+  setConversationLayoutContext(`agent-${context.type}`);
   renderComposerSuggestions(context);
   renderComposerState(context);
 
@@ -4619,6 +4734,12 @@ function renderNormalChat() {
   const messages = [];
 
   if (!session || !(session.messages || []).length) {
+    messages.push(`
+      <div class="chat-welcome chat-welcome--minimal">
+        <h2>${escapeHtml(tr("浠婂ぉ鎯宠亰浠€涔堬紵", "What do you want to ask?"))}</h2>
+      </div>
+    `);
+  } else if (!session || !(session.messages || []).length) {
     messages.push(`
       <div class="chat-welcome">
         <p>${escapeHtml(tr("普通对话", "Chat"))}</p>
@@ -4645,6 +4766,7 @@ function renderNormalChat() {
   }
 
   elements.chatStream.innerHTML = messages.join("");
+  setConversationLayoutContext(!session || !(session.messages || []).length ? "chat-welcome" : "chat-thread");
   renderComposerSuggestions({ type: "chat" });
   renderComposerState({ type: "chat" });
 

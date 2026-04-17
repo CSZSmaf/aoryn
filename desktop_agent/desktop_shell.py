@@ -15,7 +15,7 @@ import requests
 from desktop_agent.dashboard import DashboardApp
 from desktop_agent.controller import load_agent_config
 from desktop_agent.runtime_paths import default_cache_root, local_data_root
-from desktop_agent.version import APP_ID, APP_NAME, APP_VERSION
+from desktop_agent.version import APP_ASSET_VERSION, APP_ID, APP_NAME, APP_VERSION
 
 try:  # pragma: no cover - import availability depends on runtime environment
     from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, QTimer, Qt, QUrl
@@ -615,7 +615,7 @@ class DesktopShellController:
         self.base_url = base_url.rstrip("/")
         self.icons_root = self.dashboard_app.ui_root / "icons"
         self.main_window = DesktopMainWindow(
-            url=f"{self.base_url}/index.html",
+            url=f"{self.base_url}/index.html?v={APP_ASSET_VERSION}",
             icon_path=self.icons_root / "app-icon-64.png",
             display_mode=getattr(self.dashboard_app.config, "window_display_mode", "workarea_maximized"),
             on_hide_requested=self._handle_main_window_hidden,

@@ -398,6 +398,35 @@ def test_desktop_shell_controller_quit_path_blocks_tray_reopen():
     assert quit_calls == ["quit"]
 
 
+def test_desktop_shell_controller_loads_versioned_dashboard_url(monkeypatch):
+    import desktop_agent.desktop_shell as desktop_shell
+
+    captured: dict[str, object] = {}
+
+    class _WindowStub:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def show(self):
+            return None
+
+    monkeypatch.setattr(desktop_shell, "DesktopMainWindow", _WindowStub)
+    monkeypatch.setattr(desktop_shell, "FloatingExecutionWindow", lambda **kwargs: SimpleNamespace(move=lambda *_: None))
+    monkeypatch.setattr(desktop_shell.DesktopShellController, "_build_tray", lambda self: SimpleNamespace(show=lambda: None))
+
+    desktop_shell.DesktopShellController(
+        qt_app=SimpleNamespace(),
+        dashboard_app=SimpleNamespace(
+            ui_root=Path("desktop_agent/dashboard_assets"),
+            config=SimpleNamespace(window_display_mode="workarea_maximized"),
+        ),
+        server=SimpleNamespace(),
+        base_url="http://127.0.0.1:8765/",
+    )
+
+    assert captured["url"] == f"http://127.0.0.1:8765/index.html?v={desktop_shell.APP_ASSET_VERSION}"
+
+
 def test_desktop_main_window_show_policy_uses_work_area_on_windows(monkeypatch):
     from desktop_agent.desktop_shell import DesktopMainWindow
 

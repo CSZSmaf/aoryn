@@ -42,6 +42,9 @@ def test_inno_setup_script_detects_existing_and_legacy_installs_for_cleanup():
     assert "GetVersionNumbersString(ExePath, InstalledVersionValue)" in source
     assert "function TryReadExistingInstallFromRoot(" in source
     assert "function TryReadUninstallCommandFromRoot(" in source
+    assert "function TryReadLocalUninstallCommand(" in source
+    assert "FindFirst(AddBackslash(InstallDirValue) + 'unins???.exe', FindRec)" in source
+    assert "UpgradeUninstallKeepUserDataSwitch()" in source
     assert "function IsLikelyAorynInstallEntry(" in source
     assert "RegGetSubkeyNames" in source
     assert "'DisplayName'" in source
@@ -51,6 +54,7 @@ def test_inno_setup_script_detects_existing_and_legacy_installs_for_cleanup():
     assert "DisplayVersion" in source
     assert "Inno Setup: App Path" in source
     assert "procedure DetectExistingInstall();" in source
+    assert "TryReadLocalUninstallCommand(InstallDirValue, ResolvedUninstallCommand);" in source
     assert "AddExistingInstallCandidate('installer metadata'" in source
     assert "DetectLegacyInstallEntriesFromRoot(HKCU, 'legacy uninstall key (HKCU)');" in source
     assert "DetectLegacyInstallEntriesFromRoot(HKLM, 'legacy uninstall key (HKLM)');" in source
