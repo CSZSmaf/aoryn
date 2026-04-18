@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from desktop_agent.actions import Action, PlanResult
 
@@ -33,6 +34,10 @@ class RunLogger:
         challenge: dict | None = None,
         captured_at: float | None = None,
         environment: dict | None = None,
+        state: dict[str, Any] | None = None,
+        world_model: dict[str, Any] | None = None,
+        step_proposal: dict[str, Any] | None = None,
+        verification: dict[str, Any] | None = None,
     ) -> Path:
         payload = {
             "step": step_index,
@@ -44,6 +49,10 @@ class RunLogger:
             "executed_actions": [item.to_dict() for item in executed_actions],
             "error": error,
             "challenge": challenge,
+            "state": state,
+            "world_model": world_model,
+            "step_proposal": step_proposal,
+            "verification": verification,
         }
         output = run_dir / f"step_{step_index:02d}.json"
         output.write_text(
@@ -51,6 +60,18 @@ class RunLogger:
             encoding="utf-8",
         )
         return output
+
+    def log_execution_state(
+        self,
+        *,
+        run_dir: Path,
+        task_graph: dict[str, Any] | None,
+        state: dict[str, Any] | None,
+        facts: list[dict[str, Any]] | None,
+    ) -> None:
+        self._write_json(run_dir / "plan.json", task_graph or {})
+        self._write_json(run_dir / "state.json", state or {})
+        self._write_json(run_dir / "facts.json", {"items": list(facts or [])})
 
     def log_summary(
         self,
@@ -68,6 +89,7 @@ class RunLogger:
         interruption_reason: str | None = None,
         started_at: float | None = None,
         finished_at: float | None = None,
+        architecture: str = "generic_agent_v1",
     ) -> Path:
         payload = {
             "task": task,
@@ -83,13 +105,18 @@ class RunLogger:
             "interruption_reason": interruption_reason,
             "started_at": started_at,
             "finished_at": finished_at if finished_at is not None else time.time(),
+            "architecture": architecture,
         }
         output = run_dir / "summary.json"
-        output.write_text(
+        self._write_json(output, payload)
+        return output
+
+    @staticmethod
+    def _write_json(path: Path, payload: dict[str, Any]) -> None:
+        path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        return output
 
 
 def _slugify(text: str) -> str:

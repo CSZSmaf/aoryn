@@ -104,8 +104,16 @@ def load_run_details(run_root: Path, run_id: str) -> dict[str, Any] | None:
                 "plan": step_payload.get("plan", {}),
                 "executed_actions": step_payload.get("executed_actions", []),
                 "challenge": step_payload.get("challenge"),
+                "state": step_payload.get("state"),
+                "world_model": step_payload.get("world_model"),
+                "step_proposal": step_payload.get("step_proposal"),
+                "verification": step_payload.get("verification"),
             }
         )
+
+    plan_payload = _load_optional_json(run_dir / "plan.json")
+    state_payload = _load_optional_json(run_dir / "state.json")
+    facts_payload = _load_optional_json(run_dir / "facts.json")
 
     return {
         "id": run_id,
@@ -122,8 +130,12 @@ def load_run_details(run_root: Path, run_id: str) -> dict[str, Any] | None:
         "started_at": summary.get("started_at", summary_stat.st_mtime),
         "finished_at": summary.get("finished_at", summary_stat.st_mtime),
         "error": summary.get("error"),
+        "architecture": summary.get("architecture"),
         "artifacts": [item.name for item in sorted(run_dir.iterdir()) if item.is_file()],
         "timeline": steps,
+        "plan": plan_payload,
+        "state": state_payload,
+        "facts": facts_payload.get("items") if isinstance(facts_payload, dict) else facts_payload,
     }
 
 
@@ -162,3 +174,12 @@ def _find_latest_step_image(run_dir: Path) -> Path | None:
     if images:
         return images[-1]
     return None
+
+
+def _load_optional_json(path: Path) -> dict[str, Any] | list[Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None

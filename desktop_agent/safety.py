@@ -60,6 +60,8 @@ class ActionGuard:
             combo = tuple(key.lower() for key in action.keys)
             if combo not in self.config.hotkey_set():
                 raise SafetyError(f"Hotkey is not allowed: {combo}")
+        elif action.type in {"clipboard_copy", "clipboard_paste"}:
+            return
         elif action.type == "press":
             if (action.key or "").lower() not in {
                 "enter",
@@ -73,6 +75,17 @@ class ActionGuard:
                 "right",
             }:
                 raise SafetyError(f"Key is not allowed: {action.key}")
+        elif action.type == "drag":
+            if None in {action.x, action.y, action.end_x, action.end_y}:
+                raise SafetyError("drag requires x, y, end_x, and end_y.")
+            if screen_width is not None and not (0 <= int(action.x or -1) < screen_width):
+                raise SafetyError("drag.x is out of bounds.")
+            if screen_width is not None and not (0 <= int(action.end_x or -1) < screen_width):
+                raise SafetyError("drag.end_x is out of bounds.")
+            if screen_height is not None and not (0 <= int(action.y or -1) < screen_height):
+                raise SafetyError("drag.y is out of bounds.")
+            if screen_height is not None and not (0 <= int(action.end_y or -1) < screen_height):
+                raise SafetyError("drag.end_y is out of bounds.")
         elif action.type == "type":
             if action.text is None:
                 raise SafetyError("Missing text payload.")
@@ -109,6 +122,40 @@ class ActionGuard:
                 raise SafetyError("DOM selector exceeds safe length.")
             if selector and not _looks_like_safe_selector(selector):
                 raise SafetyError(f"Unsafe DOM selector: {selector}")
+        elif action.type in {"browser_dom_fill", "browser_dom_select"}:
+            selector = (action.selector or "").strip()
+            if not selector:
+                raise SafetyError(f"{action.type} requires a selector.")
+            if action.text is None:
+                raise SafetyError(f"{action.type} requires text.")
+            if len(action.text) > self.config.max_text_length:
+                raise SafetyError("DOM input exceeds max_text_length.")
+            if not _looks_like_safe_selector(selector):
+                raise SafetyError(f"Unsafe DOM selector: {selector}")
+        elif action.type in {"browser_dom_wait", "browser_dom_extract"}:
+            selector = (action.selector or "").strip()
+            text = (action.text or "").strip()
+            if not selector and not text:
+                raise SafetyError(f"{action.type} requires text or selector.")
+            if selector and not _looks_like_safe_selector(selector):
+                raise SafetyError(f"Unsafe DOM selector: {selector}")
+            if action.seconds is not None and action.seconds > self.config.max_wait_seconds:
+                raise SafetyError("browser_dom_wait.seconds exceeds limit.")
+        elif action.type in {"uia_invoke", "uia_set_value", "uia_select", "uia_expand"}:
+            selector = (action.selector or "").strip()
+            text = (action.text or "").strip()
+            if not selector and not text:
+                raise SafetyError(f"{action.type} requires text or selector.")
+            if len(selector) > 240:
+                raise SafetyError("UIA selector exceeds safe length.")
+            if action.type in {"uia_set_value", "uia_select"} and len(text) > self.config.max_text_length:
+                raise SafetyError("UIA text exceeds max_text_length.")
+        elif action.type == "shell_recipe_request":
+            recipe = (action.recipe or "").strip()
+            if not recipe:
+                raise SafetyError("shell_recipe_request requires recipe.")
+            if recipe not in self.config.shell_recipe_registry:
+                raise SafetyError(f"Shell recipe is not allowed: {recipe}")
         elif action.type == "click":
             if action.clicks < 1 or action.clicks > 3:
                 raise SafetyError("clicks must be in [1, 3].")

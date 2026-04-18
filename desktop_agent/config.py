@@ -18,6 +18,8 @@ class AgentConfig:
     max_browser_target_length: int = 512
     max_wait_seconds: float = 10.0
     max_scroll_amount: int = 1200
+    primary_model_profile: str = "openai_api:best_available"
+    fallback_model_profile: str = "lmstudio_local:auto"
     model_provider: str = "lmstudio_local"
     model_base_url: str = "http://127.0.0.1:1234/v1"
     model_name: str = "auto"
@@ -37,6 +39,27 @@ class AgentConfig:
     window_conflict_policy: str = "minimize_first"
     window_match_timeout: float = 2.5
     screen_target_policy: str = "foreground_window_monitor"
+    approval_policy: str = "tiered"
+    max_subgoal_retries: int = 2
+    enabled_capabilities: list[str] = field(
+        default_factory=lambda: [
+            "browser_dom",
+            "windows_uia",
+            "desktop_gui",
+            "filesystem",
+            "clipboard",
+            "office_com",
+            "guarded_shell_recipe",
+        ]
+    )
+    driver_preferences: list[str] = field(default_factory=list)
+    shell_recipe_policy: str = "approval_required"
+    shell_recipe_registry: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            "python_env_bootstrap": ["python", "-m", "venv", ".venv"],
+            "pip_install": ["python", "-m", "pip", "install"],
+        }
+    )
     display_override_enabled: bool = False
     display_override_monitor_device_name: str | None = None
     display_override_dpi_scale: float | None = None

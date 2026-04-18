@@ -94,6 +94,35 @@ class PlaywrightBrowserSession:
 
         raise BrowserDOMError(f"Could not find a DOM target matching `{label}`.")
 
+    def fill(self, *, value: str, text: str | None = None, selector: str | None = None) -> None:
+        locator = self._resolve_locator(text=text, selector=selector)
+        timeout_ms = int(self.config.browser_dom_timeout * 1000)
+        locator.wait_for(state="visible", timeout=timeout_ms)
+        locator.fill(value, timeout=timeout_ms)
+
+    def select(self, *, value: str, text: str | None = None, selector: str | None = None) -> None:
+        locator = self._resolve_locator(text=text, selector=selector)
+        timeout_ms = int(self.config.browser_dom_timeout * 1000)
+        locator.wait_for(state="visible", timeout=timeout_ms)
+        try:
+            locator.select_option(value=value, timeout=timeout_ms)
+        except Exception:
+            locator.select_option(label=value, timeout=timeout_ms)
+
+    def wait_for(self, *, text: str | None = None, selector: str | None = None, timeout_seconds: float | None = None) -> None:
+        locator = self._resolve_locator(text=text, selector=selector)
+        timeout_ms = int((timeout_seconds or self.config.browser_dom_timeout) * 1000)
+        locator.wait_for(state="visible", timeout=timeout_ms)
+
+    def extract(self, *, text: str | None = None, selector: str | None = None) -> str:
+        locator = self._resolve_locator(text=text, selector=selector)
+        timeout_ms = int(self.config.browser_dom_timeout * 1000)
+        locator.wait_for(state="visible", timeout=timeout_ms)
+        try:
+            return str(locator.inner_text(timeout=timeout_ms) or "").strip()
+        except Exception:
+            return str(locator.text_content(timeout=timeout_ms) or "").strip()
+
     def snapshot(self) -> dict[str, str | None] | None:
         if self._page is None:
             return None
@@ -184,6 +213,34 @@ class PlaywrightBrowserSession:
             page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
         except Exception:
             return
+
+    def _resolve_locator(self, *, text: str | None = None, selector: str | None = None):
+        page = self._ensure_page()
+        timeout_ms = int(self.config.browser_dom_timeout * 1000)
+        if selector:
+            locator = page.locator(selector).first
+            locator.wait_for(state="visible", timeout=timeout_ms)
+            return locator
+
+        label = (text or "").strip()
+        if not label:
+            raise BrowserDOMError("A text label or selector is required.")
+
+        locators = [
+            page.get_by_label(re.compile(re.escape(label), re.I)).first,
+            page.get_by_placeholder(re.compile(re.escape(label), re.I)).first,
+            page.get_by_role("textbox", name=re.compile(re.escape(label), re.I)).first,
+            page.get_by_role("combobox", name=re.compile(re.escape(label), re.I)).first,
+            page.get_by_role("option", name=re.compile(re.escape(label), re.I)).first,
+            page.get_by_text(re.compile(re.escape(label), re.I)).first,
+        ]
+        for locator in locators:
+            try:
+                locator.wait_for(state="visible", timeout=1200)
+                return locator
+            except Exception:
+                continue
+        raise BrowserDOMError(f"Could not resolve a DOM locator matching `{label}`.")
 
 
 def _optional_existing_path(path: str | None) -> str | None:

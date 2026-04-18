@@ -26,6 +26,9 @@ for filename in ("README.md", "README.en.md", "config.example.yaml"):
         datas.append((str(source), "."))
 
 hiddenimports = collect_submodules("desktop_agent")
+hiddenimports += collect_submodules("pywinauto")
+hiddenimports += collect_submodules("win32com")
+hiddenimports += collect_submodules("comtypes")
 
 version_parts = [int(part) for part in APP_VERSION.split(".")]
 while len(version_parts) < 4:

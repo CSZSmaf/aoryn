@@ -12,6 +12,7 @@ from typing import Callable
 
 from desktop_agent.actions import Action
 from desktop_agent.browser_dom import BrowserDOMError, PlaywrightBrowserSession, dom_backend_status
+from desktop_agent.capabilities import CapabilityExecutor
 from desktop_agent.config import AgentConfig
 from desktop_agent.windows_env import (
     DesktopEnvironment,
@@ -106,13 +107,18 @@ class BaseExecutor:
         return None
 
 
-class RealDesktopExecutor(BaseExecutor):
+class ActionExecutor(BaseExecutor):
+    """Low-level guarded action executor."""
+
+
+class RealDesktopExecutor(ActionExecutor):
     """Real desktop executor based on pyautogui."""
 
     def __init__(self, config: AgentConfig):
         super().__init__()
         self.config = config
         self.dom_session = None
+        self._last_dom_extract: str | None = None
 
     def execute(self, action: Action) -> None:
         try:
@@ -156,21 +162,49 @@ class RealDesktopExecutor(BaseExecutor):
                 self._search_in_browser(action.text or "")
             elif action.type == "browser_dom_click":
                 self._dom_click(text=action.text, selector=action.selector)
+            elif action.type == "browser_dom_fill":
+                self._dom_fill(value=action.text or "", selector=action.selector, label=action.target_scope)
+            elif action.type == "browser_dom_select":
+                self._dom_select(value=action.text or "", selector=action.selector, label=action.target_scope)
+            elif action.type == "browser_dom_wait":
+                self._dom_wait(text=action.text, selector=action.selector, seconds=action.seconds)
+            elif action.type == "browser_dom_extract":
+                self._dom_extract(text=action.text, selector=action.selector)
+            elif action.type == "uia_invoke":
+                self._uia_invoke(title=action.title, selector=action.selector, text=action.text)
+            elif action.type == "uia_set_value":
+                self._uia_set_value(title=action.title, selector=action.selector, text=action.text or "")
+            elif action.type == "uia_select":
+                self._uia_select(title=action.title, selector=action.selector, text=action.text or "")
+            elif action.type == "uia_expand":
+                self._uia_expand(title=action.title, selector=action.selector, text=action.text)
             elif action.type == "hotkey":
                 gui = _load_pyautogui()
                 gui.hotkey(*action.keys)
+            elif action.type == "clipboard_copy":
+                gui = _load_pyautogui()
+                gui.hotkey("ctrl", "c")
+            elif action.type == "clipboard_paste":
+                gui = _load_pyautogui()
+                gui.hotkey("ctrl", "v")
             elif action.type == "press":
                 gui = _load_pyautogui()
                 gui.press(action.key or "")
             elif action.type == "type":
                 gui = _load_pyautogui()
                 gui.write(action.text or "", interval=0.02)
+            elif action.type == "drag":
+                gui = _load_pyautogui()
+                gui.moveTo(action.x, action.y)
+                gui.dragTo(action.end_x, action.end_y, duration=0.2, button=action.button)
             elif action.type == "click":
                 gui = _load_pyautogui()
                 gui.click(action.x, action.y, clicks=action.clicks, button=action.button)
             elif action.type == "scroll":
                 gui = _load_pyautogui()
                 gui.scroll(action.amount or 0)
+            elif action.type == "shell_recipe_request":
+                self._run_shell_recipe(recipe=action.recipe or "", arguments=action.text or "")
             elif action.type == "wait":
                 self._sleep_interruptibly(float(action.seconds or 0))
             else:  # pragma: no cover
@@ -245,6 +279,89 @@ class RealDesktopExecutor(BaseExecutor):
         self._prepare_for_browser_task()
         session = self._get_dom_session(required=True)
         session.click(text=text, selector=selector)
+
+    def _dom_fill(self, *, value: str, selector: str | None, label: str | None) -> None:
+        self._prepare_for_browser_task()
+        session = self._get_dom_session(required=True)
+        session.fill(value=value, text=label, selector=selector)
+
+    def _dom_select(self, *, value: str, selector: str | None, label: str | None) -> None:
+        self._prepare_for_browser_task()
+        session = self._get_dom_session(required=True)
+        session.select(value=value, text=label, selector=selector)
+
+    def _dom_wait(self, *, text: str | None, selector: str | None, seconds: float | None) -> None:
+        self._prepare_for_browser_task()
+        session = self._get_dom_session(required=True)
+        session.wait_for(text=text, selector=selector, timeout_seconds=seconds)
+
+    def _dom_extract(self, *, text: str | None, selector: str | None) -> None:
+        self._prepare_for_browser_task()
+        session = self._get_dom_session(required=True)
+        extracted = session.extract(text=text, selector=selector)
+        self._last_dom_extract = extracted
+
+    def _uia_invoke(self, *, title: str | None, selector: str | None, text: str | None) -> None:
+        element = _resolve_uia_element(title=title, selector=selector, text=text)
+        if hasattr(element, "invoke"):
+            element.invoke()
+            return
+        element.click_input()
+
+    def _uia_set_value(self, *, title: str | None, selector: str | None, text: str) -> None:
+        element = _resolve_uia_element(title=title, selector=selector, text=None)
+        if hasattr(element, "set_edit_text"):
+            element.set_edit_text(text)
+            return
+        if hasattr(element, "set_text"):
+            element.set_text(text)
+            return
+        element.click_input()
+        gui = _load_pyautogui()
+        gui.write(text, interval=0.02)
+
+    def _uia_select(self, *, title: str | None, selector: str | None, text: str) -> None:
+        element = _resolve_uia_element(title=title, selector=selector, text=None)
+        if hasattr(element, "select"):
+            try:
+                element.select(text)
+                return
+            except Exception:
+                pass
+        element.expand() if hasattr(element, "expand") else element.click_input()
+        option = _resolve_uia_element(title=title, selector=None, text=text)
+        option.click_input()
+
+    def _uia_expand(self, *, title: str | None, selector: str | None, text: str | None) -> None:
+        element = _resolve_uia_element(title=title, selector=selector, text=text)
+        if hasattr(element, "expand"):
+            element.expand()
+            return
+        element.click_input()
+
+    def _run_shell_recipe(self, *, recipe: str, arguments: str) -> None:
+        policy = (self.config.shell_recipe_policy or "approval_required").strip().lower()
+        if policy == "disabled":
+            raise ExecutionError("Shell recipes are disabled by policy.")
+
+        command = list(self.config.shell_recipe_registry.get(recipe) or [])
+        if not command:
+            raise ExecutionError(f"Unknown shell recipe: {recipe}")
+
+        if recipe == "pip_install":
+            package_names = re.findall(r"[A-Za-z0-9._\-]+", arguments)
+            if not package_names:
+                raise ExecutionError("pip_install requires at least one safe package name.")
+            command.extend(package_names[:5])
+
+        subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=max(15, int(self.config.model_request_timeout)),
+            shell=False,
+        )
 
     def _prepare_for_browser_task(self) -> None:
         self._refresh_environment()
@@ -427,9 +544,11 @@ class MockDesktopState:
     browser_dom_clicks: list[str] = field(default_factory=list)
     current_url: str | None = None
     address_bar_active: bool = False
+    clipboard_text: str | None = None
+    last_extracted_text: str | None = None
 
 
-class MockExecutor(BaseExecutor):
+class MockExecutor(ActionExecutor):
     """Mock executor for tests and dry-run mode."""
 
     def __init__(self, config: AgentConfig | None = None) -> None:
@@ -483,6 +602,32 @@ class MockExecutor(BaseExecutor):
                 self.state.browser_dom_clicks.append(label)
             self._ensure_browser_context()
             return
+        if action.type in {"browser_dom_fill", "browser_dom_select"}:
+            self._ensure_browser_context()
+            self.state.text_buffers["browser"] = action.text or ""
+            return
+        if action.type == "browser_dom_wait":
+            self._ensure_browser_context()
+            return
+        if action.type == "browser_dom_extract":
+            self._ensure_browser_context()
+            self.state.last_extracted_text = self.state.text_buffers.get("browser")
+            return
+        if action.type in {"uia_invoke", "uia_set_value", "uia_select", "uia_expand"}:
+            if action.title:
+                self.state.active_app = _infer_mock_app_from_title(action.title.lower()) or self.state.active_app
+            if action.type == "uia_set_value" and self.state.active_app:
+                self.state.text_buffers[self.state.active_app] = action.text or ""
+            return
+        if action.type == "clipboard_copy":
+            if self.state.active_app:
+                self.state.clipboard_text = self.state.text_buffers.get(self.state.active_app, "")
+            return
+        if action.type == "clipboard_paste":
+            if self.state.active_app:
+                current = self.state.text_buffers.get(self.state.active_app, "")
+                self.state.text_buffers[self.state.active_app] = current + (self.state.clipboard_text or "")
+            return
         if action.type == "type":
             if self.state.active_app:
                 if self.state.active_app == "browser" and self.state.address_bar_active:
@@ -490,6 +635,8 @@ class MockExecutor(BaseExecutor):
                 else:
                     current = self.state.text_buffers.get(self.state.active_app, "")
                     self.state.text_buffers[self.state.active_app] = current + (action.text or "")
+            return
+        if action.type == "drag":
             return
         if action.type == "hotkey":
             combo = tuple(action.keys)
@@ -508,6 +655,8 @@ class MockExecutor(BaseExecutor):
         if action.type == "press":
             if action.key == "enter" and self.state.active_app == "browser" and self.state.address_bar_active:
                 self._commit_browser_address_bar()
+            return
+        if action.type == "shell_recipe_request":
             return
         if action.type in {"wait", "click", "scroll"}:
             return
@@ -571,6 +720,61 @@ def _load_pyautogui():
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.1
     return pyautogui
+
+
+def _resolve_uia_element(*, title: str | None, selector: str | None, text: str | None):
+    try:
+        from pywinauto import Desktop
+    except ModuleNotFoundError as exc:
+        raise ExecutionError("pywinauto is required for Windows UI Automation actions.") from exc
+
+    desktop = Desktop(backend="uia")
+    window = None
+    if (title or "").strip():
+        window = desktop.window(title_re=re.escape(str(title).strip()))
+    else:
+        try:
+            window = desktop.active()
+        except Exception as exc:  # pragma: no cover - runtime dependent
+            raise ExecutionError("Could not resolve the active desktop window for UI Automation.") from exc
+
+    query = _parse_uia_selector(selector)
+    if text and "title_re" not in query and "best_match" not in query and "name" not in query:
+        query["title_re"] = re.escape(text.strip())
+    try:
+        if query:
+            return window.child_window(**query).wrapper_object()
+        return window.wrapper_object()
+    except Exception as exc:  # pragma: no cover - runtime dependent
+        raise ExecutionError(
+            f"Could not resolve a UI Automation element for selector={selector!r} text={text!r}."
+        ) from exc
+
+
+def _parse_uia_selector(selector: str | None) -> dict[str, str]:
+    normalized = str(selector or "").strip()
+    if not normalized:
+        return {}
+    query: dict[str, str] = {}
+    for segment in normalized.split(";"):
+        if "=" not in segment:
+            continue
+        key, value = segment.split("=", 1)
+        cleaned_key = key.strip().lower()
+        cleaned_value = value.strip()
+        if not cleaned_key or not cleaned_value:
+            continue
+        if cleaned_key in {"name", "title"}:
+            query["title_re"] = re.escape(cleaned_value)
+        elif cleaned_key in {"auto_id", "automation_id"}:
+            query["auto_id"] = cleaned_value
+        elif cleaned_key in {"control_type", "type"}:
+            query["control_type"] = cleaned_value
+        elif cleaned_key == "class_name":
+            query["class_name"] = cleaned_value
+        elif cleaned_key == "best_match":
+            query["best_match"] = cleaned_value
+    return query
 
 
 def _resolve_browser_binary(binary: str | None) -> str | None:

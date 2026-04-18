@@ -6,6 +6,8 @@ max_text_length: 200
 max_browser_target_length: 512
 max_wait_seconds: 10
 max_scroll_amount: 1200
+primary_model_profile: openai_api:best_available
+fallback_model_profile: lmstudio_local:auto
 model_base_url: http://127.0.0.1:1234/v1
 model_name: auto
 model_api_key:
@@ -13,6 +15,18 @@ model_request_timeout: 90
 model_auto_discover: true
 model_structured_output: auto
 model_provider: lmstudio_local
+approval_policy: tiered
+max_subgoal_retries: 2
+enabled_capabilities:
+  - browser_dom
+  - windows_uia
+  - desktop_gui
+  - filesystem
+  - clipboard
+  - office_com
+  - guarded_shell_recipe
+driver_preferences: []
+shell_recipe_policy: approval_required
 browser_control_mode: hybrid
 browser_dom_backend: playwright
 browser_dom_timeout: 8

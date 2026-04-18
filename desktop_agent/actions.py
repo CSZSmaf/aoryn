@@ -23,12 +23,18 @@ class Action:
     y: int | None = None
     width: int | None = None
     height: int | None = None
+    end_x: int | None = None
+    end_y: int | None = None
     relative_x: float | None = None
     relative_y: float | None = None
     button: str = "left"
     clicks: int = 1
     seconds: float | None = None
     amount: int | None = None
+    risk_level: str = "low"
+    expected_evidence: list[dict[str, Any]] = field(default_factory=list)
+    target_scope: str | None = None
+    recipe: str | None = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Action":
@@ -49,12 +55,18 @@ class Action:
             y=_optional_int(payload.get("y")),
             width=_optional_int(payload.get("width")),
             height=_optional_int(payload.get("height")),
+            end_x=_optional_int(payload.get("end_x")),
+            end_y=_optional_int(payload.get("end_y")),
             relative_x=_optional_float(payload.get("relative_x")),
             relative_y=_optional_float(payload.get("relative_y")),
             button=str(payload.get("button", "left")).strip().lower() or "left",
             clicks=int(payload.get("clicks", 1) or 1),
             seconds=_optional_float(payload.get("seconds")),
             amount=_optional_int(payload.get("amount")),
+            risk_level=_optional_compact_str(payload.get("risk_level")) or "low",
+            expected_evidence=_as_dict_list(payload.get("expected_evidence")),
+            target_scope=_optional_str(payload.get("target_scope")),
+            recipe=_optional_str(payload.get("recipe")),
         )
         action.validate()
         return action
@@ -94,6 +106,11 @@ class Action:
         elif self.type == "press":
             if not self.key:
                 raise ActionValidationError("press requires key.")
+        elif self.type in {"clipboard_copy", "clipboard_paste"}:
+            pass
+        elif self.type == "drag":
+            if None in {self.x, self.y, self.end_x, self.end_y}:
+                raise ActionValidationError("drag requires x, y, end_x, and end_y.")
         elif self.type == "type":
             if self.text is None:
                 raise ActionValidationError("type requires text.")
@@ -105,6 +122,28 @@ class Action:
                 raise ActionValidationError(
                     "browser_dom_click requires text or selector."
                 )
+        elif self.type in {"browser_dom_fill", "browser_dom_select"}:
+            if not ((self.selector or "").strip() or (self.text or "").strip()):
+                raise ActionValidationError(f"{self.type} requires selector or text.")
+            if self.text is None:
+                raise ActionValidationError(f"{self.type} requires text.")
+        elif self.type == "browser_dom_wait":
+            if not ((self.selector or "").strip() or (self.text or "").strip()):
+                raise ActionValidationError("browser_dom_wait requires selector or text.")
+        elif self.type == "browser_dom_extract":
+            if not ((self.selector or "").strip() or (self.text or "").strip()):
+                raise ActionValidationError("browser_dom_extract requires selector or text.")
+        elif self.type in {"uia_invoke", "uia_expand"}:
+            if not ((self.selector or "").strip() or (self.text or "").strip()):
+                raise ActionValidationError(f"{self.type} requires selector or text.")
+        elif self.type in {"uia_set_value", "uia_select"}:
+            if not ((self.selector or "").strip() or (self.text or "").strip()):
+                raise ActionValidationError(f"{self.type} requires selector or text.")
+            if self.text is None:
+                raise ActionValidationError(f"{self.type} requires text.")
+        elif self.type == "shell_recipe_request":
+            if not (self.recipe or "").strip():
+                raise ActionValidationError("shell_recipe_request requires recipe.")
         elif self.type == "click":
             if self.x is None or self.y is None:
                 raise ActionValidationError("click requires x and y.")
@@ -132,12 +171,18 @@ class Action:
             "y": self.y,
             "width": self.width,
             "height": self.height,
+            "end_x": self.end_x,
+            "end_y": self.end_y,
             "relative_x": self.relative_x,
             "relative_y": self.relative_y,
             "button": self.button,
             "clicks": self.clicks,
             "seconds": self.seconds,
             "amount": self.amount,
+            "risk_level": self.risk_level,
+            "expected_evidence": list(self.expected_evidence),
+            "target_scope": self.target_scope,
+            "recipe": self.recipe,
         }
 
 
@@ -248,3 +293,15 @@ def _as_string_list(value: Any) -> list[str]:
                 items.append(text)
         return items
     raise ActionValidationError("remaining_steps must be a list[str] or str.")
+
+
+def _as_dict_list(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        items: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                items.append(dict(item))
+        return items
+    raise ActionValidationError("expected_evidence must be a list[dict].")

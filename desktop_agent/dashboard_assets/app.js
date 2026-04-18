@@ -973,6 +973,9 @@ function renderLoadingMessage() {
 
 function renderRunningMessage(active) {
   const progress = active.result || {};
+  const executionState = progress.execution_state || {};
+  const pendingDecision = progress.pending_decision || executionState.pending_decision || null;
+  const currentSubgoal = executionState.current_subgoal || null;
   const previewUrl =
     progress.run_id && progress.latest_screenshot
       ? buildArtifactUrl(progress.run_id, progress.latest_screenshot)
@@ -1941,6 +1944,12 @@ function handleInteractiveClick(event) {
     return;
   }
 
+  const decisionTrigger = event.target.closest("[data-job-decision]");
+  if (decisionTrigger) {
+    handleJobDecision(decisionTrigger.dataset.jobId, decisionTrigger.dataset.jobDecision);
+    return;
+  }
+
   const stopTrigger = event.target.closest("[data-stop-active-task]");
   if (stopTrigger) {
     handleStopTask();
@@ -2026,6 +2035,17 @@ async function handleStopTask() {
     status: "stopping",
   });
   renderAll();
+  await refreshOverview({ forceDetailRefresh: true });
+}
+
+async function handleJobDecision(jobId, decision) {
+  if (!jobId || !decision) return;
+  const response = await postJson(`/api/jobs/${encodeURIComponent(jobId)}/decision`, { decision });
+  if (!response.ok) {
+    elements.submitHint.textContent = response.payload?.error || tr("操作失败", "The action could not be completed");
+    renderAll();
+    return;
+  }
   await refreshOverview({ forceDetailRefresh: true });
 }
 
@@ -3187,6 +3207,7 @@ function renderHumanVerificationChip(record) {
 }
 
 function buildRecordState(record) {
+  if (record?.status === "approval") return { label: tr("等待确认", "Awaiting approval"), tone: "warn" };
   if (!record) return { label: tr("未知", "Unknown"), tone: "" };
   if (record.cancel_requested && !record.cancelled && !record.completed && !record.error) return { label: tr("停止中", "Stopping"), tone: "warn" };
   if (record.cancelled || record.status === "cancelled") return { label: tr("已取消", "Cancelled"), tone: "warn" };
@@ -3217,6 +3238,7 @@ function translateInterruptionKind(kind) {
 }
 
 function translateJobStatus(status) {
+  if (status === "approval") return tr("等待确认", "Awaiting approval");
   const mapping = {
     queued: tr("等待", "Queued"),
     running: tr("执行中", "Running"),
@@ -3230,6 +3252,7 @@ function translateJobStatus(status) {
 }
 
 function statusTone(status) {
+  if (status === "approval") return "warn";
   if (status === "running" || status === "completed") return "ok";
   if (status === "attention" || status === "stopping" || status === "cancelled") return "warn";
   if (status === "failed") return "bad";
@@ -6154,42 +6177,73 @@ function renderLoadingMessage() {
 
 function renderRunningMessage(active) {
   const progress = active.result || {};
+  const executionState = progress.execution_state || {};
+  const pendingDecision = progress.pending_decision || executionState.pending_decision || null;
+  const currentSubgoal = executionState.current_subgoal || null;
   const previewUrl =
     progress.run_id && progress.latest_screenshot
       ? buildArtifactUrl(progress.run_id, progress.latest_screenshot)
       : null;
-  const latestSummary = normalizeText(progress.latest_summary) || tr("等待下一步。", "Waiting for the next step.");
+  const latestSummary = normalizeText(progress.latest_summary) || tr("Waiting for the next step.", "Waiting for the next step.");
   const latestActions = (progress.latest_actions || []).slice(0, 4);
   const jobState = active.cancel_requested
-    ? { label: tr("停止中", "Stopping"), tone: "warn" }
-    : { label: tr("执行中", "Running"), tone: "ok" };
+    ? { label: tr("Stopping", "Stopping"), tone: "warn" }
+    : { label: tr("Running", "Running"), tone: "ok" };
+  const effectiveJobState = pendingDecision
+    ? { label: tr("Awaiting approval", "Awaiting approval"), tone: "warn" }
+    : jobState;
+
+  const approvalSection = pendingDecision
+    ? renderAgentRunSection({
+        label: tr("Approval", "Approval"),
+        title: tr("Waiting for your approval", "Waiting for your approval"),
+        description:
+          pendingDecision.reason ||
+          tr("This higher-risk step needs approval before the run can continue.", "This higher-risk step needs approval before the run can continue."),
+        modifier: "status",
+        body: `
+          <div class="assistant-run__callout">
+            <div>
+              <strong>${escapeHtml(pendingDecision.summary || "")}</strong>
+              <p>${escapeHtml(currentSubgoal?.title || "")}</p>
+            </div>
+          </div>
+        `,
+      })
+    : "";
+  const decisionDock = pendingDecision
+    ? [
+        `<button class="primary-button" type="button" data-job-decision="approve" data-job-id="${escapeHtml(active.id)}">${escapeHtml(tr("Approve", "Approve"))}</button>`,
+        `<button class="secondary-button" type="button" data-job-decision="reject" data-job-id="${escapeHtml(active.id)}">${escapeHtml(tr("Reject", "Reject"))}</button>`,
+      ].join("")
+    : "";
 
   const liveStateSection = renderAgentRunSection({
-    label: tr("实时", "Live"),
-    title: tr("任务仍在推进", "Run is actively progressing"),
-    description: tr("卡片会持续刷新最新截图和最近动作，让状态更集中。", "The card refreshes with the latest captured view and recent execution trace."),
+    label: tr("Live", "Live"),
+    title: tr("Run is actively progressing", "Run is actively progressing"),
+    description: tr("The card refreshes with the latest captured view and recent execution trace.", "The card refreshes with the latest captured view and recent execution trace."),
     modifier: "status",
     body: `
       <div class="assistant-run__callout">
         <span class="assistant-run__live-dot" aria-hidden="true"></span>
         <div>
-          <strong>${escapeHtml(tr("正在实时执行", "Streaming execution"))}</strong>
-          <p>${escapeHtml(tr("Aoryn 仍在替你点击、输入并观察桌面。", "Aoryn is still clicking, typing, and observing the desktop for you."))}</p>
+          <strong>${escapeHtml(tr("Streaming execution", "Streaming execution"))}</strong>
+          <p>${escapeHtml(tr("Aoryn is still clicking, typing, and observing the desktop for you.", "Aoryn is still clicking, typing, and observing the desktop for you."))}</p>
         </div>
       </div>
     `,
   });
 
   return renderAgentRunCard({
-    eyebrow: tr("Agent 运行", "Agent run"),
+    eyebrow: tr("Agent run", "Agent run"),
     title: cleanRunTitle(active.task || latestSummary),
     summary: latestSummary,
-    stateLabel: jobState.label,
-    stateTone: jobState.tone,
+    stateLabel: effectiveJobState.label,
+    stateTone: effectiveJobState.tone,
     metrics: [
-      renderMetricCard(tr("开始", "Started"), formatShortTime(active.started_at || progress.started_at)),
-      renderMetricCard(tr("时长", "Duration"), formatRunDurationWindow(active.started_at || progress.started_at)),
-      renderMetricCard(tr("步骤", "Steps"), String(progress.steps ?? 0)),
+      renderMetricCard(tr("Started", "Started"), formatShortTime(active.started_at || progress.started_at)),
+      renderMetricCard(tr("Duration", "Duration"), formatRunDurationWindow(active.started_at || progress.started_at)),
+      renderMetricCard(tr("Steps", "Steps"), String(progress.steps ?? 0)),
     ],
     chips: [
       renderExecutionModeChip(progress.dry_run ?? active.dry_run),
@@ -6197,25 +6251,26 @@ function renderRunningMessage(active) {
     ],
     hero: renderAgentRunHero({
       src: previewUrl,
-      alt: tr("最新截图", "Latest screenshot"),
+      alt: tr("Latest screenshot", "Latest screenshot"),
       caption: latestSummary,
-      supporting: tr("这是当前运行捕获到的最新画面。", "Latest captured frame from the active run."),
+      supporting: tr("Latest captured frame from the active run.", "Latest captured frame from the active run."),
       runId: progress.run_id,
       task: active.task || "",
     }),
     trace: renderAgentRunActionPreview(latestActions),
-    timeline: liveStateSection,
+    timeline: `${liveStateSection}${approvalSection}`,
     dock: renderAgentRunDock([
       progress.run_id
         ? `<button class="secondary-button" type="button" data-open-inspector="${escapeHtml(progress.run_id)}">${escapeHtml(
-            tr("详情", "Details")
+            tr("Details", "Details")
           )}</button>`
         : "",
+      decisionDock,
       `<button class="primary-button" type="button" data-stop-active-task="true">${escapeHtml(
-        active.cancel_requested ? tr("停止中", "Stopping") : tr("停止", "Stop")
+        active.cancel_requested ? tr("Stopping", "Stopping") : tr("Stop", "Stop")
       )}</button>`,
     ]),
-    variant: active.cancel_requested ? "stopping" : "live",
+    variant: active.cancel_requested ? "stopping" : pendingDecision ? "attention" : "live",
   });
 }
 

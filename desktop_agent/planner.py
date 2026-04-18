@@ -11,6 +11,7 @@ from desktop_agent.actions import ActionValidationError, PlanResult
 from desktop_agent.config import AgentConfig
 from desktop_agent.prompts import SYSTEM_PROMPT
 from desktop_agent.web_agent import WebAgent, WebCommand
+from desktop_agent.workflow import Subgoal, TaskGraph, WorldModel
 from desktop_agent.windows_env import DesktopEnvironment
 
 
@@ -330,6 +331,76 @@ class AutoPlanner(BasePlanner):
         raise PlannerError(str(last_error) if last_error is not None else "Unable to plan the task.")
 
 
+class TaskGraphPlanner:
+    """Split a broad task into generic, verifiable subgoals."""
+
+    def __init__(self, config: AgentConfig | None = None) -> None:
+        self.config = config or AgentConfig()
+        self.web_agent = WebAgent()
+
+    def plan(self, task: str, *, history: list[str] | None = None, world_model: WorldModel | None = None) -> TaskGraph:
+        browser_command = self.web_agent.parse(task)
+        raw_subgoals = _extract_task_sub_goals(task, browser_command)
+        if not raw_subgoals:
+            raw_subgoals = [task.strip()]
+
+        subgoals: list[Subgoal] = []
+        for index, item in enumerate(raw_subgoals, start=1):
+            title = item.strip()
+            if not title:
+                continue
+            subgoals.append(
+                Subgoal(
+                    id=f"subgoal_{index:02d}",
+                    title=title,
+                    success_condition=_build_subgoal_success_condition(title, world_model=world_model),
+                    capability_preference=_infer_capability_preference(title, world_model=world_model),
+                    risk_level=_infer_subgoal_risk(title),
+                    retry_budget=max(1, int(self.config.max_subgoal_retries or 1)),
+                )
+            )
+
+        if not subgoals:
+            subgoals.append(
+                Subgoal(
+                    id="subgoal_01",
+                    title=task.strip() or "Complete the task.",
+                    success_condition="Confirm that the requested task is completed.",
+                    retry_budget=max(1, int(self.config.max_subgoal_retries or 1)),
+                )
+            )
+
+        success_criteria = [item.success_condition for item in subgoals]
+        constraints = [
+            "Use guarded actions only.",
+            "Switch capability when verification repeatedly fails.",
+        ]
+        risk_points = [item.title for item in subgoals if item.risk_level in {"high", "critical"}]
+        return TaskGraph(
+            task=task.strip(),
+            subgoals=subgoals,
+            success_criteria=success_criteria,
+            constraints=constraints,
+            risk_points=risk_points,
+        )
+
+
+class SubgoalPlanner:
+    """Plan low-level guarded actions for a single current subgoal."""
+
+    def __init__(self, config: AgentConfig, *, base_planner: BasePlanner | None = None):
+        self.config = config
+        self.base_planner = base_planner or build_planner(config)
+
+    def plan_subgoal(self, subgoal: Subgoal, world_model: WorldModel, history: list[str]) -> PlanResult:
+        return self.base_planner.plan(
+            task=subgoal.title,
+            screenshot_path=world_model.screenshot_path,
+            history=history,
+            environment=world_model.environment,
+        )
+
+
 def build_planner(config: AgentConfig) -> BasePlanner:
     mode = config.planner_mode.lower().strip()
     if mode == "rule":
@@ -543,6 +614,70 @@ def _clean_sub_goal_part(text: str) -> str:
     cleaned = cleaned.strip(",;:，；。")
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned
+
+
+def _build_subgoal_success_condition(title: str, *, world_model: WorldModel | None = None) -> str:
+    normalized = title.strip()
+    lowered = normalized.lower()
+    if any(token in lowered for token in ("open ", "launch ", "visit ", "打开", "启动", "访问")):
+        return f"Verify that the requested destination or application is open: {normalized}"
+    if any(token in lowered for token in ("search", "find", "lookup", "搜索", "查找", "检索")):
+        return f"Verify that visible results or page content correspond to: {normalized}"
+    if any(token in lowered for token in ("type", "fill", "enter", "输入", "填写")):
+        return f"Verify that the requested content was entered for: {normalized}"
+    if any(token in lowered for token in ("click", "select", "choose", "点击", "选择")):
+        return f"Verify that the requested control changed state after: {normalized}"
+    if world_model is not None and world_model.active_window_title:
+        return f"Verify that progress is visible in {world_model.active_window_title} after: {normalized}"
+    return f"Verify that the subgoal is completed: {normalized}"
+
+
+def _infer_capability_preference(title: str, *, world_model: WorldModel | None = None) -> str | None:
+    lowered = title.strip().lower()
+    if any(token in lowered for token in ("browser", "website", "web", "search", "visit", "网页", "网站", "搜索", "访问")):
+        return "browser_dom"
+    if any(token in lowered for token in ("copy", "paste", "clipboard", "复制", "粘贴")):
+        return "clipboard"
+    if any(token in lowered for token in ("excel", "powerpoint", "word", "spreadsheet", "slide", "ppt")):
+        return "office_com"
+    if any(token in lowered for token in ("terminal", "shell", "python env", "venv", "命令行", "终端")):
+        return "guarded_shell_recipe"
+    if world_model is not None and world_model.active_app == "browser":
+        return "browser_dom"
+    return None
+
+
+def _infer_subgoal_risk(title: str) -> str:
+    lowered = title.strip().lower()
+    if any(
+        token in lowered
+        for token in (
+            "login",
+            "sign in",
+            "password",
+            "cart",
+            "checkout",
+            "pay",
+            "submit",
+            "send",
+            "delete",
+            "remove",
+            "install",
+            "登录",
+            "密码",
+            "购物车",
+            "下单",
+            "支付",
+            "提交",
+            "发送",
+            "删除",
+            "安装",
+        )
+    ):
+        return "high"
+    if any(token in lowered for token in ("save", "download", "bookmark", "保存", "下载", "收藏")):
+        return "medium"
+    return "low"
 
 
 def _import_requests():

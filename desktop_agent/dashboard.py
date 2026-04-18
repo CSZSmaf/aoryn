@@ -118,6 +118,9 @@ class TaskQueue:
         self.lock = threading.Lock()
         self.jobs: dict[str, DashboardJob] = {}
         self.cancel_events: dict[str, threading.Event] = {}
+        self.decision_events: dict[str, threading.Event] = {}
+        self.pending_decisions: dict[str, dict[str, Any]] = {}
+        self.decision_responses: dict[str, dict[str, Any]] = {}
         self.active_job_id: str | None = None
 
     def submit(
@@ -158,6 +161,7 @@ class TaskQueue:
             )
             self.jobs[job.job_id] = job
             self.cancel_events[job.job_id] = threading.Event()
+            self.decision_events[job.job_id] = threading.Event()
             self.active_job_id = job.job_id
 
         thread = threading.Thread(
@@ -194,8 +198,30 @@ class TaskQueue:
             cancel_event = self.cancel_events.get(job.job_id)
             if cancel_event is not None:
                 cancel_event.set()
+            decision_event = self.decision_events.get(job.job_id)
+            if decision_event is not None:
+                self.decision_responses[job.job_id] = {"decision": "cancel", "note": "Stopped by user."}
+                decision_event.set()
             job.cancel_requested = True
             job.status = "stopping"
+            job.updated_at = time.time()
+            return job.to_dict()
+
+    def decide(self, job_id: str, *, decision: str, note: str | None = None) -> dict[str, Any]:
+        normalized = str(decision or "").strip().lower()
+        if normalized not in {"approve", "reject", "cancel"}:
+            raise ValueError("decision must be approve, reject, or cancel.")
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is None:
+                raise RuntimeError("Job not found.")
+            if job.status != "approval":
+                raise RuntimeError("This job is not waiting for approval.")
+            event = self.decision_events.get(job_id)
+            if event is None:
+                raise RuntimeError("No approval wait is registered for this job.")
+            self.decision_responses[job_id] = {"decision": normalized, "note": note}
+            event.set()
             job.updated_at = time.time()
             return job.to_dict()
 
@@ -218,6 +244,7 @@ class TaskQueue:
                 config_overrides=job.config_overrides,
                 stop_requested=cancel_event.is_set if cancel_event is not None else None,
                 progress_callback=lambda payload: self._update_job_progress(job_id, payload),
+                decision_callback=lambda payload: self._await_job_decision(job_id, payload),
             )
             payload = {
                 "task": result.task,
@@ -264,6 +291,9 @@ class TaskQueue:
         finally:
             with self.lock:
                 self.cancel_events.pop(job_id, None)
+                self.decision_events.pop(job_id, None)
+                self.pending_decisions.pop(job_id, None)
+                self.decision_responses.pop(job_id, None)
 
     def _update_job_progress(self, job_id: str, payload: dict[str, Any]) -> None:
         with self.lock:
@@ -273,9 +303,56 @@ class TaskQueue:
             current_result = dict(job.result or {})
             current_result.update(payload)
             job.result = current_result
+            pending_decision = payload.get("execution_state", {}).get("pending_decision") if isinstance(payload.get("execution_state"), dict) else None
+            if pending_decision:
+                self.pending_decisions[job_id] = pending_decision
+                job.status = "approval"
+            elif job.status == "approval":
+                job.status = "running"
+                self.pending_decisions.pop(job_id, None)
             if isinstance(payload.get("started_at"), (int, float)):
                 job.started_at = float(payload["started_at"])
             job.updated_at = time.time()
+
+    def _await_job_decision(self, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            job = self.jobs[job_id]
+            event = self.decision_events.get(job_id)
+            if event is None:
+                raise RuntimeError("No approval event is registered for this job.")
+            self.pending_decisions[job_id] = dict(payload.get("pending_decision") or {})
+            event.clear()
+            job.status = "approval"
+            current_result = dict(job.result or {})
+            current_result.update(
+                {
+                    "pending_decision": self.pending_decisions[job_id],
+                    "execution_state": payload.get("state"),
+                    "step_proposal": payload.get("step_proposal"),
+                }
+            )
+            job.result = current_result
+            job.updated_at = time.time()
+
+        while True:
+            if event.wait(timeout=0.1):
+                break
+            cancel_event = self.cancel_events.get(job_id)
+            if cancel_event is not None and cancel_event.is_set():
+                return {"decision": "cancel", "note": "Stopped by user."}
+
+        with self.lock:
+            response = dict(self.decision_responses.pop(job_id, {"decision": "reject"}))
+            self.pending_decisions.pop(job_id, None)
+            event.clear()
+            job = self.jobs.get(job_id)
+            if job is not None:
+                job.status = "running"
+                current_result = dict(job.result or {})
+                current_result.pop("pending_decision", None)
+                job.result = current_result
+                job.updated_at = time.time()
+            return response
 
 _TEXT_TEMPLATE_REPLACEMENTS = {
     "__APP_NAME__": APP_NAME,
@@ -827,6 +904,18 @@ class DashboardApp:
                         return self._send_error(HTTPStatus.CONFLICT, str(exc))
                     return self._send_json(job, status=HTTPStatus.ACCEPTED)
 
+                if path.startswith("/api/jobs/") and path.endswith("/decision"):
+                    job_id = path.removeprefix("/api/jobs/").removesuffix("/decision").strip("/")
+                    try:
+                        job = app.queue.decide(
+                            job_id,
+                            decision=str(body.get("decision", "")).strip(),
+                            note=str(body.get("note", "")).strip() or None,
+                        )
+                    except (RuntimeError, ValueError) as exc:
+                        return self._send_error(HTTPStatus.CONFLICT, str(exc))
+                    return self._send_json(job, status=HTTPStatus.ACCEPTED)
+
                 if path == "/api/chat":
                     try:
                         resolved_overrides = app._resolve_request_config_overrides(body.get("config_overrides"))
@@ -1004,12 +1093,19 @@ class DashboardApp:
                 "dry_run": False,
                 "max_steps": config.max_steps,
                 "pause_after_action": config.pause_after_action,
+                "primary_model_profile": config.primary_model_profile,
+                "fallback_model_profile": config.fallback_model_profile,
                 "model_provider": config.model_provider,
                 "model_base_url": config.model_base_url,
                 "model_name": config.model_name,
                 "model_api_key": config.model_api_key or "",
                 "model_auto_discover": config.model_auto_discover,
                 "model_structured_output": config.model_structured_output,
+                "approval_policy": config.approval_policy,
+                "max_subgoal_retries": config.max_subgoal_retries,
+                "enabled_capabilities": list(config.enabled_capabilities),
+                "driver_preferences": list(config.driver_preferences),
+                "shell_recipe_policy": config.shell_recipe_policy,
                 "browser_control_mode": config.browser_control_mode,
                 "browser_dom_backend": config.browser_dom_backend,
                 "browser_dom_timeout": config.browser_dom_timeout,
@@ -2201,12 +2297,16 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
 
     cleaned: dict[str, Any] = {}
     parsers: dict[str, Any] = {
+        "primary_model_profile": _optional_text,
+        "fallback_model_profile": _optional_text,
         "model_provider": _optional_text,
         "model_base_url": _optional_text,
         "model_name": _optional_text,
         "model_api_key": _optional_text,
         "model_auto_discover": _optional_bool,
         "model_structured_output": _optional_text,
+        "approval_policy": _optional_text,
+        "max_subgoal_retries": _optional_int,
         "browser_control_mode": _optional_text,
         "browser_dom_backend": _optional_text,
         "browser_dom_timeout": _optional_float,
@@ -2220,9 +2320,16 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
         "display_override_work_area_top": _optional_int,
         "display_override_work_area_width": _optional_int,
         "display_override_work_area_height": _optional_int,
+        "shell_recipe_policy": _optional_text,
     }
     for key, parser in parsers.items():
         value = parser(raw.get(key))
         if value is not None:
             cleaned[key] = value
+    enabled_capabilities = raw.get("enabled_capabilities")
+    if isinstance(enabled_capabilities, list):
+        cleaned["enabled_capabilities"] = [str(item).strip() for item in enabled_capabilities if str(item).strip()]
+    driver_preferences = raw.get("driver_preferences")
+    if isinstance(driver_preferences, list):
+        cleaned["driver_preferences"] = [str(item).strip() for item in driver_preferences if str(item).strip()]
     return cleaned
