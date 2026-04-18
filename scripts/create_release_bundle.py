@@ -17,14 +17,18 @@ def main() -> None:
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--release-root", required=True)
     parser.add_argument("--release-dir", required=True)
+    parser.add_argument("--browser-release-dir", required=True)
     parser.add_argument("--installer-path", required=True)
+    parser.add_argument("--browser-installer-path", required=True)
     args = parser.parse_args()
 
     payload = build_release_artifacts(
         project_root=Path(args.project_root).resolve(),
         release_root=Path(args.release_root).resolve(),
         release_dir=Path(args.release_dir).resolve(),
+        browser_release_dir=Path(args.browser_release_dir).resolve(),
         installer_path=Path(args.installer_path).resolve(),
+        browser_installer_path=Path(args.browser_installer_path).resolve(),
     )
     print(json.dumps(payload, ensure_ascii=False))
 

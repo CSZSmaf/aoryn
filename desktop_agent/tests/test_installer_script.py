@@ -14,6 +14,7 @@ def test_inno_setup_script_keeps_custom_install_and_user_data_policy():
     assert "[UninstallDelete]" in source
     assert r'Name: "{userappdata}\Aoryn"; Check: ShouldRemoveUserData' in source
     assert r'Name: "{localappdata}\Aoryn"; Check: ShouldRemoveUserData' in source
+    assert r'Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"' in source
     assert "function ShouldRemoveUserData: Boolean;" in source
     assert "function UpgradeUninstallKeepUserDataSwitch(): string;" in source
     assert "function HasKeepUserDataSwitch(): Boolean;" in source
@@ -69,3 +70,16 @@ def test_inno_setup_script_detects_existing_and_legacy_installs_for_cleanup():
     assert "Do you want Setup to uninstall the detected copy and replace it with version {#AppVersion}?" in source
     assert "will create a separate copy instead of updating the existing installation" not in source
     assert "This setup upgrades the existing installation and does not create a second copy." not in source
+
+
+def test_browser_inno_setup_script_publishes_standalone_browser_installer():
+    script = Path("installer") / "AorynBrowser.iss"
+    source = script.read_text(encoding="utf-8")
+
+    assert '#define ProductName "Aoryn Browser"' in source
+    assert '#define AppExeName "AorynBrowser.exe"' in source
+    assert '#define InstallDirName "Aoryn Browser"' in source
+    assert r"DefaultDirName={localappdata}\Programs\{#InstallDirName}" in source
+    assert r'Subkey: "Software\Aoryn\BrowserInstaller"' in source
+    assert r'Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\{#AppExeName}"' in source
+    assert r'Filename: "{app}\{#AppExeName}"; Description: "Launch {#ProductName}"' in source

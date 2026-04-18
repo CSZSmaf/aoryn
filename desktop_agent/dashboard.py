@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from desktop_agent.browser_dom import dom_backend_status
+from desktop_agent.browser_runtime import browser_runtime_status
 from desktop_agent.chat_support import (
     build_agent_handoff,
     build_chat_system_prompt,
@@ -1138,6 +1139,7 @@ class DashboardApp:
         config = load_agent_config(self.config_path)
         dom_status = dom_backend_status(config.browser_dom_backend)
         diagnostics = self.system_paths()
+        managed_browser = browser_runtime_status(config)
         return {
             "title": APP_NAME,
             "version": APP_VERSION,
@@ -1164,6 +1166,13 @@ class DashboardApp:
                 "model_api_key": config.model_api_key or "",
                 "model_auto_discover": config.model_auto_discover,
                 "model_structured_output": config.model_structured_output,
+                "default_surface_policy": config.default_surface_policy,
+                "managed_browser_enabled": config.managed_browser_enabled,
+                "external_browser_attach_enabled": config.external_browser_attach_enabled,
+                "safe_mode_enabled": config.safe_mode_enabled,
+                "user_input_preemption_policy": config.user_input_preemption_policy,
+                "browser_runtime_transport": config.browser_runtime_transport,
+                "browser_profile_strategy": config.browser_profile_strategy,
                 "approval_policy": config.approval_policy,
                 "max_subgoal_retries": config.max_subgoal_retries,
                 "enabled_capabilities": list(config.enabled_capabilities),
@@ -1188,6 +1197,7 @@ class DashboardApp:
                 "backend": dom_status.backend,
                 "detail": dom_status.detail,
             },
+            "managed_browser_status": managed_browser,
             "planner_modes": [
                 {"value": "auto", "label": "Auto"},
                 {"value": "rule", "label": "Rule"},
@@ -1252,6 +1262,23 @@ class DashboardApp:
                 {"value": "json_schema", "label": "JSON Schema"},
                 {"value": "json_object", "label": "JSON Object"},
                 {"value": "off", "label": "Off"},
+            ],
+            "surface_policies": [
+                {"value": "current_user_desktop", "label": "Current User Desktop"},
+                {"value": "managed_aoryn_browser", "label": "Managed Aoryn Browser"},
+                {"value": "external_browser_attach", "label": "External Browser Attach"},
+                {"value": "safe_mode_desktop", "label": "Safe Mode Desktop"},
+            ],
+            "user_input_preemption_policies": [
+                {"value": "pause_and_resume", "label": "Pause And Resume"},
+                {"value": "ignore", "label": "Ignore"},
+            ],
+            "browser_runtime_transports": [
+                {"value": "local_http", "label": "Local HTTP"},
+                {"value": "local_ipc", "label": "Local IPC"},
+            ],
+            "browser_profile_strategies": [
+                {"value": "separate_managed_profile", "label": "Separate Managed Profile"},
             ],
             "browser_control_modes": [
                 {"value": "hybrid", "label": "Hybrid GUI + DOM"},
@@ -2368,6 +2395,13 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
         "model_api_key": _optional_text,
         "model_auto_discover": _optional_bool,
         "model_structured_output": _optional_text,
+        "default_surface_policy": _optional_text,
+        "managed_browser_enabled": _optional_bool,
+        "external_browser_attach_enabled": _optional_bool,
+        "safe_mode_enabled": _optional_bool,
+        "user_input_preemption_policy": _optional_text,
+        "browser_runtime_transport": _optional_text,
+        "browser_profile_strategy": _optional_text,
         "approval_policy": _optional_text,
         "max_subgoal_retries": _optional_int,
         "browser_control_mode": _optional_text,

@@ -14,11 +14,14 @@ from urllib.parse import quote, urlparse
 
 DEFAULT_PUBLIC_BASE_URL = "https://downloads.aoryn.org"
 DEFAULT_LATEST_INSTALLER_KEY = "latest/Aoryn-Setup-latest.exe"
+DEFAULT_LATEST_BROWSER_INSTALLER_KEY = "latest/AorynBrowser-Setup-latest.exe"
 DEFAULT_PAGES_PROJECT = "aoryn"
 DEFAULT_PROXY_HINT = "socks5h://127.0.0.1:10808"
 DEFAULT_R2_CONNECT_TIMEOUT_SECONDS = 300
 DEFAULT_R2_READ_TIMEOUT_SECONDS = 300
 DEFAULT_INSTALLER_SINGLE_UPLOAD_THRESHOLD = 512 * 1024 * 1024
+DEFAULT_PAGES_DOWNLOAD_KEY_ENV = "AORYN_WINDOWS_INSTALLER_KEY"
+DEFAULT_PAGES_DOWNLOAD_URL_ENV = "AORYN_WINDOWS_INSTALLER_URL"
 SUPPORTED_PROXY_SCHEMES = frozenset({"http", "https", "socks5", "socks5h"})
 NETWORK_ERROR_CLASS_NAMES = frozenset(
     {
@@ -76,16 +79,22 @@ def build_content_disposition(installer_path: Path) -> str:
     return f'attachment; filename="{build_download_name(installer_path)}"'
 
 
-def build_pages_env_patch(latest_key: str, latest_url: str) -> dict[str, Any]:
+def build_pages_env_patch(
+    latest_key: str,
+    latest_url: str,
+    *,
+    key_env_name: str = DEFAULT_PAGES_DOWNLOAD_KEY_ENV,
+    url_env_name: str = DEFAULT_PAGES_DOWNLOAD_URL_ENV,
+) -> dict[str, Any]:
     return {
         "deployment_configs": {
             "production": {
                 "env_vars": {
-                    "AORYN_WINDOWS_INSTALLER_KEY": {
+                    key_env_name: {
                         "type": "plain_text",
                         "value": latest_key,
                     },
-                    "AORYN_WINDOWS_INSTALLER_URL": {
+                    url_env_name: {
                         "type": "plain_text",
                         "value": latest_url,
                     },
@@ -396,6 +405,8 @@ def update_pages_download_settings(
     project_name: str,
     latest_key: str,
     latest_url: str,
+    key_env_name: str = DEFAULT_PAGES_DOWNLOAD_KEY_ENV,
+    url_env_name: str = DEFAULT_PAGES_DOWNLOAD_URL_ENV,
     proxy_url: str | None = None,
 ) -> dict[str, Any]:
     return cloudflare_api_request(
@@ -403,7 +414,7 @@ def update_pages_download_settings(
         account_id,
         "PATCH",
         f"/pages/projects/{project_name}",
-        build_pages_env_patch(latest_key, latest_url),
+        build_pages_env_patch(latest_key, latest_url, key_env_name=key_env_name, url_env_name=url_env_name),
         proxy_url=proxy_url,
     )
 
@@ -532,6 +543,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--latest-key", default=os.getenv("AORYN_R2_LATEST_KEY", DEFAULT_LATEST_INSTALLER_KEY))
     parser.add_argument("--cf-api-token", default=os.getenv("AORYN_CF_API_TOKEN"))
     parser.add_argument("--pages-project", default=os.getenv("AORYN_PAGES_PROJECT", DEFAULT_PAGES_PROJECT))
+    parser.add_argument("--pages-key-env", default=DEFAULT_PAGES_DOWNLOAD_KEY_ENV)
+    parser.add_argument("--pages-url-env", default=DEFAULT_PAGES_DOWNLOAD_URL_ENV)
     parser.add_argument("--proxy")
     parser.add_argument("--sync-pages-download-settings", action="store_true")
     parser.add_argument("--retry-pages-deployment", action="store_true")
@@ -594,6 +607,8 @@ def main(argv: list[str] | None = None) -> int:
                 project_name=project_name,
                 latest_key=latest_key,
                 latest_url=latest_url,
+                key_env_name=require_value("pages key env", args.pages_key_env),
+                url_env_name=require_value("pages url env", args.pages_url_env),
                 proxy_url=proxy_url,
             )
             pages_synced = True

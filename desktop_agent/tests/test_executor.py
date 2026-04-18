@@ -104,6 +104,50 @@ def test_browser_open_uses_dom_session_in_hybrid_mode(monkeypatch):
     assert ("click", "Log in") in events
 
 
+def test_browser_open_uses_managed_browser_when_surface_requests_it(monkeypatch):
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False))
+    events: list[tuple[str, str]] = []
+
+    class FakeBridge:
+        def ensure_running(self):
+            events.append(("ensure", "ready"))
+
+        def navigate(self, target: str):
+            events.append(("navigate", target))
+
+        def snapshot(self):
+            return {"url": "https://openai.com", "title": "OpenAI", "text": "Docs", "managed_by": "aoryn_browser"}
+
+    executor.managed_browser = FakeBridge()
+    monkeypatch.setattr(
+        "desktop_agent.executor.dom_backend_status",
+        lambda backend: type("Status", (), {"available": False, "detail": "Playwright missing"})(),
+    )
+    monkeypatch.setattr("desktop_agent.executor.webbrowser.open", lambda url: (_ for _ in ()).throw(AssertionError("unexpected browser fallback")))
+
+    executor.execute(
+        Action.from_dict(
+            {"type": "browser_open", "text": "openai.com", "target_scope": "managed_aoryn_browser"}
+        )
+    )
+
+    assert ("navigate", "https://openai.com") in events
+
+
+def test_browser_snapshot_prefers_managed_browser_runtime():
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False))
+
+    class FakeBridge:
+        def snapshot(self):
+            return {"url": "https://aoryn.org", "title": "Aoryn", "text": "Browser", "managed_by": "aoryn_browser"}
+
+    executor.managed_browser = FakeBridge()
+
+    snapshot = executor.browser_snapshot()
+
+    assert snapshot["managed_by"] == "aoryn_browser"
+
+
 def test_browser_open_falls_back_to_gui_when_dom_backend_is_unavailable_in_hybrid_mode(monkeypatch):
     opened: list[str] = []
 

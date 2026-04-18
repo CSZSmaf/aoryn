@@ -27,6 +27,15 @@ class AgentConfig:
     model_request_timeout: float = 90.0
     model_auto_discover: bool = True
     model_structured_output: str = "auto"
+    default_surface_policy: str = "current_user_desktop"
+    managed_browser_enabled: bool = True
+    external_browser_attach_enabled: bool = True
+    safe_mode_enabled: bool = False
+    user_input_preemption_policy: str = "pause_and_resume"
+    browser_runtime_transport: str = "local_http"
+    browser_profile_strategy: str = "separate_managed_profile"
+    managed_browser_host: str = "127.0.0.1"
+    managed_browser_port: int = 38991
     browser_control_mode: str = "hybrid"
     browser_dom_backend: str = "playwright"
     browser_dom_timeout: float = 8.0

@@ -9,6 +9,7 @@ from desktop_agent.actions import Action, PlanResult
 from desktop_agent.config import AgentConfig
 from desktop_agent.drivers import DriverRegistry
 from desktop_agent.planner import PlannerError
+from desktop_agent.surfaces import TargetAnchor, choose_surface_kind
 from desktop_agent.web_agent import WebAgent
 from desktop_agent.workflow import (
     EvidenceRequirement,
@@ -835,7 +836,24 @@ class CapabilityExecutor:
             proposal.risk_level,
             proposal.actions,
         )
+        proposal.surface_kind = choose_surface_kind(
+            config=self.config,
+            active_app=world_model.active_app,
+            browser_snapshot=world_model.browser_snapshot,
+            goal_type=subgoal.goal_type,
+            subgoal_text=subgoal.title,
+        )
+        proposal.primary_anchor = proposal.primary_anchor or _build_primary_anchor(
+            proposal=proposal,
+            world_model=world_model,
+        )
+        if not proposal.fallback_anchors:
+            proposal.fallback_anchors = _build_fallback_anchors(
+                proposal=proposal,
+                world_model=world_model,
+            )
         proposal.current_focus = proposal.current_focus or subgoal.title
+        execution_state.current_surface_kind = proposal.surface_kind
         return proposal
 
     def propose_repair(
@@ -900,6 +918,22 @@ class CapabilityExecutor:
         if not proposal.repair_strategy:
             proposal.repair_strategy = ["retry_with_fresh_observation"]
         proposal.cost_hint = proposal.cost_hint or _estimate_cost_hint(proposal.actions)
+        proposal.surface_kind = proposal.surface_kind or choose_surface_kind(
+            config=self.config,
+            active_app=world_model.active_app,
+            browser_snapshot=world_model.browser_snapshot,
+            goal_type=subgoal.goal_type,
+            subgoal_text=subgoal.title,
+        )
+        proposal.primary_anchor = proposal.primary_anchor or _build_primary_anchor(
+            proposal=proposal,
+            world_model=world_model,
+        )
+        if not proposal.fallback_anchors:
+            proposal.fallback_anchors = _build_fallback_anchors(
+                proposal=proposal,
+                world_model=world_model,
+            )
         return proposal
 
     def verify_step(
@@ -1038,11 +1072,86 @@ def _world_model_facts(world_model: WorldModel) -> list[ObservedFact]:
         facts.append(ObservedFact(source="world_model", key="active_app", value=str(world_model.active_app)))
     if world_model.active_window_title:
         facts.append(ObservedFact(source="world_model", key="active_window", value=str(world_model.active_window_title)))
+    if world_model.surface_kind:
+        facts.append(ObservedFact(source="world_model", key="surface_kind", value=str(world_model.surface_kind)))
+    if isinstance(world_model.browser_observation, dict):
+        runtime = str(world_model.browser_observation.get("runtime") or "").strip()
+        if runtime:
+            facts.append(ObservedFact(source="world_model", key="browser_runtime", value=runtime))
     if world_model.selection_text:
         facts.append(ObservedFact(source="world_model", key="selection_text", value=str(world_model.selection_text), confidence=0.9))
     if world_model.clipboard_text:
         facts.append(ObservedFact(source="world_model", key="clipboard_text", value=str(world_model.clipboard_text), confidence=0.9))
     return facts
+
+
+def _build_primary_anchor(*, proposal: StepProposal, world_model: WorldModel) -> TargetAnchor | None:
+    for action in proposal.actions:
+        if action.selector:
+            return TargetAnchor(kind="selector", value=action.selector, detail=action.type)
+        if action.title:
+            return TargetAnchor(kind="window", value=action.title, detail=action.type)
+        if action.text and action.type not in {"type", "press"}:
+            return TargetAnchor(kind="text", value=action.text[:240], detail=action.type, confidence=0.8)
+    if world_model.active_window_title:
+        return TargetAnchor(
+            kind="window",
+            value=str(world_model.active_window_title),
+            detail="active_window",
+            confidence=0.6,
+        )
+    browser_snapshot = world_model.browser_snapshot or {}
+    if browser_snapshot.get("url"):
+        return TargetAnchor(
+            kind="url",
+            value=str(browser_snapshot["url"]),
+            detail="browser_url",
+            confidence=0.7,
+        )
+    return None
+
+
+def _build_fallback_anchors(*, proposal: StepProposal, world_model: WorldModel) -> list[TargetAnchor]:
+    anchors: list[TargetAnchor] = []
+    if world_model.active_window_title:
+        anchors.append(
+            TargetAnchor(
+                kind="window",
+                value=str(world_model.active_window_title),
+                detail="active_window",
+                confidence=0.5,
+            )
+        )
+    browser_snapshot = world_model.browser_snapshot or {}
+    for key in ("title", "url"):
+        value = str(browser_snapshot.get(key) or "").strip()
+        if value:
+            anchors.append(
+                TargetAnchor(
+                    kind=key,
+                    value=value[:240],
+                    detail=f"browser_{key}",
+                    confidence=0.5,
+                )
+            )
+    for candidate in world_model.anchor_candidates[:4]:
+        anchors.append(
+            TargetAnchor(
+                kind="text",
+                value=str(candidate)[:240],
+                detail="anchor_candidate",
+                confidence=0.45,
+            )
+        )
+    deduped: list[TargetAnchor] = []
+    seen: set[tuple[str, str]] = set()
+    for item in anchors:
+        key = (item.kind, item.value)
+        if not item.value or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped[:6]
 
 
 def _completion_requirement(subgoal: Subgoal) -> EvidenceRequirement | None:

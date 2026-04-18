@@ -389,15 +389,18 @@ function WorkspacePage({ copy, authenticated, locale }) {
 function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
   const pageCopy = copy.pages.download;
   const canDownload = authReady && authState.authenticated;
+  const downloads = Array.isArray(siteConfig.downloads) && siteConfig.downloads.length
+    ? siteConfig.downloads
+    : [siteConfig.release];
   const unlockedBody = locale === "zh-CN"
     ? "桌面安装包现已可用。任务、截图、历史与配置仍保留在本地设备，不会上传到云端。"
     : "The desktop installer is ready. Tasks, screenshots, history, and config stay on your device and are not uploaded to the cloud.";
-  const packageMeta = [
-    { label: pageCopy.packageMeta.version, value: siteConfig.release.version },
-    { label: pageCopy.packageMeta.platform, value: siteConfig.release.platform },
-    { label: pageCopy.packageMeta.size, value: siteConfig.release.fileSize },
-    { label: pageCopy.packageMeta.format, value: siteConfig.release.packageType },
-  ];
+  const packageMeta = downloads.flatMap((item) => ([
+    { label: `${item.name} ${pageCopy.packageMeta.version}`, value: siteConfig.release.version },
+    { label: `${item.name} ${pageCopy.packageMeta.platform}`, value: item.platform },
+    { label: `${item.name} ${pageCopy.packageMeta.size}`, value: item.fileSize },
+    { label: `${item.name} ${pageCopy.packageMeta.format}`, value: item.packageType },
+  ]));
 
   return (
     <>
@@ -411,9 +414,11 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
             </div>
 
             <div className="button-row">
-              <a className="primary-button" href={siteConfig.release.protectedDownloadPath}>
-                {pageCopy.unlocked.primaryCta}
-              </a>
+              {downloads.map((item) => (
+                <a className="primary-button" href={item.protectedDownloadPath} key={item.id || item.name}>
+                  {locale === "zh-CN" ? `下载 ${item.name}` : `Download ${item.name}`}
+                </a>
+              ))}
             </div>
           </article>
         </section>
