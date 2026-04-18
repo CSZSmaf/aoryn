@@ -1,4 +1,4 @@
-const releaseVersion = "0.1.20";
+const releaseVersion = "0.1.21";
 
 const downloads = [
   {

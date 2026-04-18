@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from desktop_agent import browser_runtime
+from desktop_agent.browser_runtime import BrowserAction, BrowserObservation
 
 
 def test_resolve_installed_browser_prefers_adjacent_executable(monkeypatch):
@@ -59,3 +60,50 @@ def test_installed_browser_candidates_include_default_install_dir(monkeypatch):
         assert expected in candidates
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_browser_observation_round_trip_preserves_tabs_and_annotations():
+    payload = {
+        "runtime": "aoryn_browser",
+        "status": "ready",
+        "url": "https://aoryn.org",
+        "title": "Aoryn",
+        "text": "Browser",
+        "active_tab_id": "tab-1",
+        "current_internal_page": None,
+        "auth_pause_reason": None,
+        "tab_count": 2,
+        "tabs": [{"tab_id": "tab-1", "url": "https://aoryn.org", "is_active": True}],
+        "annotations": [{"tab_id": "tab-1", "annotation_id": "ann-1", "selector": "#main"}],
+        "permissions": [{"origin": "https://aoryn.org", "feature": "notifications", "decision": "allow"}],
+        "permission_requests": [{"request_id": "req-1", "origin": "https://aoryn.org", "feature": "camera"}],
+        "handoffs": [{"kind": "detected_auth", "reason": "Login flow requires human review.", "url": "https://aoryn.org/login"}],
+        "downloads": [],
+        "bookmarks": [],
+        "history": [],
+        "managed_by": "aoryn_browser",
+    }
+
+    observation = BrowserObservation.from_dict(payload)
+
+    assert observation.to_dict() == payload
+
+
+def test_browser_action_to_dict_includes_upload_fields():
+    action = BrowserAction(
+        action="upload",
+        selector="input[type=file]",
+        tab_id="tab-1",
+        path="C:/temp/demo.txt",
+        files=["C:/temp/demo.txt"],
+    )
+
+    assert action.to_dict() == {
+        "action": "upload",
+        "selector": "input[type=file]",
+        "value": None,
+        "url": None,
+        "tab_id": "tab-1",
+        "path": "C:/temp/demo.txt",
+        "files": ["C:/temp/demo.txt"],
+    }

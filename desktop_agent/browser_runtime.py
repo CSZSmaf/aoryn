@@ -27,10 +27,17 @@ class BrowserObservation:
     title: str | None = None
     text: str | None = None
     active_tab_id: str | None = None
+    current_internal_page: str | None = None
+    auth_pause_reason: str | None = None
     tab_count: int = 0
     downloads: list[dict[str, Any]] = field(default_factory=list)
     bookmarks: list[dict[str, Any]] = field(default_factory=list)
     history: list[dict[str, Any]] = field(default_factory=list)
+    tabs: list[dict[str, Any]] = field(default_factory=list)
+    annotations: list[dict[str, Any]] = field(default_factory=list)
+    permissions: list[dict[str, Any]] = field(default_factory=list)
+    permission_requests: list[dict[str, Any]] = field(default_factory=list)
+    handoffs: list[dict[str, Any]] = field(default_factory=list)
     managed_by: str = "aoryn_browser"
 
     @classmethod
@@ -42,10 +49,17 @@ class BrowserObservation:
             title=_optional_str(payload.get("title")),
             text=_optional_str(payload.get("text")),
             active_tab_id=_optional_str(payload.get("active_tab_id")),
+            current_internal_page=_optional_str(payload.get("current_internal_page")),
+            auth_pause_reason=_optional_str(payload.get("auth_pause_reason")),
             tab_count=max(0, int(payload.get("tab_count", 0) or 0)),
             downloads=[dict(item) for item in payload.get("downloads", []) or [] if isinstance(item, dict)],
             bookmarks=[dict(item) for item in payload.get("bookmarks", []) or [] if isinstance(item, dict)],
             history=[dict(item) for item in payload.get("history", []) or [] if isinstance(item, dict)],
+            tabs=[dict(item) for item in payload.get("tabs", []) or [] if isinstance(item, dict)],
+            annotations=[dict(item) for item in payload.get("annotations", []) or [] if isinstance(item, dict)],
+            permissions=[dict(item) for item in payload.get("permissions", []) or [] if isinstance(item, dict)],
+            permission_requests=[dict(item) for item in payload.get("permission_requests", []) or [] if isinstance(item, dict)],
+            handoffs=[dict(item) for item in payload.get("handoffs", []) or [] if isinstance(item, dict)],
             managed_by=str(payload.get("managed_by", "aoryn_browser")).strip() or "aoryn_browser",
         )
 
@@ -57,10 +71,17 @@ class BrowserObservation:
             "title": self.title,
             "text": self.text,
             "active_tab_id": self.active_tab_id,
+            "current_internal_page": self.current_internal_page,
+            "auth_pause_reason": self.auth_pause_reason,
             "tab_count": self.tab_count,
             "downloads": list(self.downloads),
             "bookmarks": list(self.bookmarks),
             "history": list(self.history),
+            "tabs": list(self.tabs),
+            "annotations": list(self.annotations),
+            "permissions": list(self.permissions),
+            "permission_requests": list(self.permission_requests),
+            "handoffs": list(self.handoffs),
             "managed_by": self.managed_by,
         }
 
@@ -72,6 +93,8 @@ class BrowserAction:
     value: str | None = None
     url: str | None = None
     tab_id: str | None = None
+    path: str | None = None
+    files: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +103,8 @@ class BrowserAction:
             "value": self.value,
             "url": self.url,
             "tab_id": self.tab_id,
+            "path": self.path,
+            "files": list(self.files or []),
         }
 
 
@@ -101,6 +126,15 @@ class BrowserRuntimeBridge:
     def open_tab(self, url: str | None = None) -> dict[str, Any]:
         return self._request_json("POST", "/open_tab", payload={"url": url} if url else {})
 
+    def open_internal_page(self, page: str) -> dict[str, Any]:
+        return self._request_json("POST", "/open_internal_page", payload={"page": page})
+
+    def switch_tab(self, tab_id: str) -> dict[str, Any]:
+        return self._request_json("POST", "/switch_tab", payload={"tab_id": tab_id})
+
+    def close_tab(self, tab_id: str | None = None) -> dict[str, Any]:
+        return self._request_json("POST", "/close_tab", payload={"tab_id": tab_id})
+
     def navigate(self, url: str, *, tab_id: str | None = None) -> dict[str, Any]:
         return self._request_json("POST", "/navigate", payload={"url": url, "tab_id": tab_id})
 
@@ -111,8 +145,31 @@ class BrowserRuntimeBridge:
     def query_accessibility(self) -> dict[str, Any]:
         return self._request_json("POST", "/query_accessibility", payload={})
 
-    def annotate_page(self, *, selector: str | None = None, label: str | None = None) -> dict[str, Any]:
-        return self._request_json("POST", "/annotate_page", payload={"selector": selector, "label": label})
+    def annotate_page(
+        self,
+        *,
+        selector: str | None = None,
+        label: str | None = None,
+        tab_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request_json(
+            "POST",
+            "/annotate_page",
+            payload={"selector": selector, "label": label, "tab_id": tab_id},
+        )
+
+    def list_tabs(self) -> dict[str, Any]:
+        return self._request_json("POST", "/list_tabs", payload={})
+
+    def list_annotations(self, *, tab_id: str | None = None) -> dict[str, Any]:
+        return self._request_json("POST", "/list_annotations", payload={"tab_id": tab_id})
+
+    def clear_annotations(self, *, tab_id: str | None = None, annotation_id: str | None = None) -> dict[str, Any]:
+        return self._request_json(
+            "POST",
+            "/clear_annotations",
+            payload={"tab_id": tab_id, "annotation_id": annotation_id},
+        )
 
     def perform_action(self, action: BrowserAction | dict[str, Any]) -> dict[str, Any]:
         payload = action.to_dict() if isinstance(action, BrowserAction) else dict(action)
@@ -135,8 +192,42 @@ class BrowserRuntimeBridge:
             },
         )
 
-    def collect_downloads(self) -> dict[str, Any]:
-        return self._request_json("POST", "/collect_downloads", payload={})
+    def collect_downloads(self, *, state: str | None = None) -> dict[str, Any]:
+        return self._request_json("POST", "/collect_downloads", payload={"state": state})
+
+    def wait_for_download(self, *, state: str = "completed", timeout_seconds: float = 12.0) -> dict[str, Any]:
+        return self._request_json(
+            "POST",
+            "/wait_for_download",
+            payload={"state": state, "timeout_seconds": timeout_seconds},
+        )
+
+    def list_permissions(self) -> dict[str, Any]:
+        return self._request_json("POST", "/list_permissions", payload={})
+
+    def list_permission_requests(self) -> dict[str, Any]:
+        return self._request_json("POST", "/list_permission_requests", payload={})
+
+    def decide_permission(
+        self,
+        *,
+        origin: str | None = None,
+        feature: str | None = None,
+        decision: str,
+        request_id: str | None = None,
+        remember: bool = True,
+    ) -> dict[str, Any]:
+        return self._request_json(
+            "POST",
+            "/decide_permission",
+            payload={
+                "origin": origin,
+                "feature": feature,
+                "decision": decision,
+                "request_id": request_id,
+                "remember": remember,
+            },
+        )
 
     def bookmark_page(self) -> dict[str, Any]:
         return self._request_json("POST", "/bookmark_page", payload={})
@@ -144,11 +235,17 @@ class BrowserRuntimeBridge:
     def pause_for_auth(self, *, reason: str | None = None) -> dict[str, Any]:
         return self._request_json("POST", "/pause_for_auth", payload={"reason": reason})
 
+    def resume_after_auth(self) -> dict[str, Any]:
+        return self._request_json("POST", "/resume_after_auth", payload={})
+
     def snapshot(self) -> dict[str, Any] | None:
         payload = self._request_json("GET", "/snapshot", ensure_running=False)
         if not isinstance(payload, dict):
             return None
         return payload
+
+    def session_state(self) -> dict[str, Any]:
+        return self._request_json("POST", "/get_session_state", payload={})
 
     def ensure_running(self) -> None:
         if self.status() is not None:
