@@ -6,6 +6,7 @@ def test_inno_setup_script_keeps_custom_install_and_user_data_policy():
     source = script.read_text(encoding="utf-8")
 
     assert r"DefaultDirName={localappdata}\Programs\{#AppName}" in source
+    assert '#define BrowserExeName "AorynBrowser.exe"' in source
     assert "UsePreviousAppDir=yes" in source
     assert "DisableDirPage=no" in source
     assert "This installer stays in current-user mode." in source
@@ -14,6 +15,7 @@ def test_inno_setup_script_keeps_custom_install_and_user_data_policy():
     assert "[UninstallDelete]" in source
     assert r'Name: "{userappdata}\Aoryn"; Check: ShouldRemoveUserData' in source
     assert r'Name: "{localappdata}\Aoryn"; Check: ShouldRemoveUserData' in source
+    assert r'Name: "{autoprograms}\{#AppName} Browser"; Filename: "{app}\{#BrowserExeName}"' in source
     assert "function ShouldRemoveUserData: Boolean;" in source
     assert "function UpgradeUninstallKeepUserDataSwitch(): string;" in source
     assert "function HasKeepUserDataSwitch(): Boolean;" in source

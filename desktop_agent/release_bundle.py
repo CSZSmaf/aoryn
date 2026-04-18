@@ -11,6 +11,7 @@ from desktop_agent.version import (
     APP_PUBLISHER,
     APP_RELEASE_ARCH,
     APP_VERSION,
+    browser_executable_name,
     checksums_file_name,
     portable_zip_file_name,
     release_manifest_file_name,
@@ -75,6 +76,7 @@ def build_release_manifest(
         "build_time_utc": datetime.now(timezone.utc).isoformat(),
         "distribution": {
             "primary_installer": installer_name,
+            "managed_browser_executable": browser_executable_name(),
             "portable_directory": release_dir_name,
             "portable_zip": portable_zip_name,
             "review_bundle": review_zip_name,

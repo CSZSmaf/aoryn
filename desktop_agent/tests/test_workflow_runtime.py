@@ -58,10 +58,13 @@ def test_capability_executor_prefers_browser_capability_for_web_subgoal():
     step = executor.propose_step(execution_state=state, world_model=world_model)
 
     assert step.capability == "browser_dom"
+    assert step.surface_kind == "managed_aoryn_browser"
     assert step.actions
     assert step.expected_evidence
     assert step.progress_signals
     assert step.repair_strategy
+    assert step.primary_anchor is not None
+    assert step.fallback_anchors
 
 
 def test_step_proposal_tracks_subgoal_completion_from_plan_result():

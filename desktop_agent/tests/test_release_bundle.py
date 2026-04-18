@@ -85,6 +85,7 @@ def test_build_release_artifacts_creates_review_bundle():
 
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         assert manifest["distribution"]["primary_installer"] == installer_path.name
+        assert manifest["distribution"]["managed_browser_executable"] == "AorynBrowser.exe"
         assert manifest["distribution"]["portable_zip"] == portable_zip.name
         assert manifest["distribution"]["source_snapshot"] == source_zip.name
         assert manifest["distribution"]["review_bundle"] == review_zip.name

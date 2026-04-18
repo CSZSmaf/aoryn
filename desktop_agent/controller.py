@@ -32,6 +32,11 @@ from desktop_agent.planner import (
 )
 from desktop_agent.runtime_paths import discover_default_config_path
 from desktop_agent.safety import ActionGuard, SafetyError
+from desktop_agent.surfaces import (
+    capture_user_desktop_session,
+    choose_surface_kind,
+    detect_user_input_preemption,
+)
 from desktop_agent.version import APP_NAME
 from desktop_agent.workflow import (
     ExecutionState,
@@ -213,6 +218,59 @@ class DesktopAgent:
                     execution_state.world_model = world_model
                     execution_state.updated_at = time.time()
 
+                if detect_user_input_preemption(
+                    config=self.config,
+                    execution_context=execution_state.app_context,
+                    session=world_model.user_desktop_session,
+                ):
+                    challenge_signal = HumanVerificationSignal(
+                        kind="user_preempted",
+                        summary="User activity detected. Pause automation and resume when ready.",
+                        detail=(
+                            "Aoryn noticed fresh user mouse or keyboard activity on the shared desktop. "
+                            "Automation paused so it does not fight for control."
+                        ),
+                        title=world_model.active_window_title,
+                    )
+                    plan = _build_human_handoff_plan(challenge_signal)
+                    self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
+                    self.logger.log_step(
+                        run_dir=run_dir,
+                        step_index=step_index,
+                        task=task,
+                        screenshot_path=screenshot_path,
+                        plan=plan,
+                        executed_actions=[],
+                        error=None,
+                        challenge=challenge_signal.to_dict(),
+                        captured_at=captured_at,
+                        environment=environment_payload,
+                        state=build_execution_plan_summary(execution_state),
+                        world_model=world_model.to_dict(),
+                        step_proposal=None,
+                        verification=None,
+                    )
+                    self._emit_progress(
+                        self._build_progress_payload(
+                            task=task,
+                            run_dir=run_dir,
+                            step_index=step_index,
+                            screenshot_path=screenshot_path,
+                            captured_at=captured_at,
+                            plan=plan,
+                            executed_actions=[],
+                            error=None,
+                            challenge=challenge_signal.to_dict(),
+                            started_at=started_at,
+                            environment=environment_payload,
+                            execution_state=execution_state,
+                            step_proposal=None,
+                            verification=None,
+                        )
+                    )
+                    history.append(challenge_signal.summary)
+                    break
+
                 observed_facts = self.capability_executor.observe(world_model)
                 world_model.facts = observed_facts
                 execution_state.facts = _merge_facts(execution_state.facts, observed_facts)
@@ -358,11 +416,15 @@ class DesktopAgent:
                     cancel_reason = "Stopped by user."
                     break
 
+                for action in safe_actions:
+                    action.target_scope = action.target_scope or step_proposal.surface_kind
                 self.executor.execute_many(
                     safe_actions,
                     pause_after_action=self.config.pause_after_action,
                     stop_requested=self._stop_requested,
                 )
+                execution_state.app_context["last_agent_action_at"] = time.time()
+                execution_state.current_surface_kind = step_proposal.surface_kind
                 recoverable_error_count = 0
                 captured_at = self._refresh_step_screenshot(screenshot_path) or captured_at
                 refreshed_screen_info = getattr(self.perception, "last_screen_info", None) or screen_info
@@ -755,6 +817,7 @@ class DesktopAgent:
         active_window_title = getattr(foreground, "title", None)
         foreground_window_handle = getattr(foreground, "handle", None)
         browser_snapshot = self.executor.browser_snapshot()
+        browser_observation = dict(browser_snapshot) if isinstance(browser_snapshot, dict) else None
         mock_state = getattr(self.executor, "state", None)
         active_app = _infer_active_app(
             active_window_title=active_window_title,
@@ -801,6 +864,13 @@ class DesktopAgent:
             structured_sources.append("clipboard")
         dom_available = bool(browser_snapshot and any(str(browser_snapshot.get(key) or "").strip() for key in ("url", "title", "text")))
         uia_available = bool(active_window_title and active_app not in {"browser"})
+        user_session = capture_user_desktop_session(environment=environment, focused_control=None)
+        surface_kind = choose_surface_kind(
+            config=self.config,
+            active_app=active_app,
+            browser_snapshot=browser_snapshot,
+            goal_type=None,
+        )
         anchor_candidates = _collect_anchor_candidates(
             active_window_title=active_window_title,
             browser_snapshot=browser_snapshot,
@@ -819,9 +889,13 @@ class DesktopAgent:
             visible_windows=visible_windows,
             active_app=active_app,
             active_window_title=active_window_title,
+            target_window_title=active_window_title,
             foreground_window_handle=foreground_window_handle,
             clipboard_text=clipboard_text,
             focused_control=None,
+            surface_kind=surface_kind,
+            surface_id=user_session.session_id if surface_kind == "current_user_desktop" else surface_kind,
+            session_id=user_session.session_id,
             dom_available=dom_available,
             uia_available=uia_available,
             structured_sources=structured_sources,
@@ -829,6 +903,8 @@ class DesktopAgent:
             anchor_candidates=anchor_candidates,
             selection_text=selection_text,
             file_observations=_infer_file_observations(mock_state, browser_snapshot),
+            browser_observation=browser_observation,
+            user_desktop_session=user_session,
             step_index=step_index,
             captured_at=captured_at,
         )
@@ -846,6 +922,7 @@ class DesktopAgent:
             task_graph=task_graph,
             world_model=world_model,
             app_context={"pending_repair": None},
+            current_surface_kind=world_model.surface_kind,
             started_at=time.time(),
             updated_at=time.time(),
         )

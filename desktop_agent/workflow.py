@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from desktop_agent.actions import Action, PlanResult
+from desktop_agent.surfaces import TargetAnchor, UserDesktopSession, normalize_surface_kind
 from desktop_agent.windows_env import DesktopEnvironment
 
 
@@ -175,6 +176,9 @@ class StepProposal:
     capability: str = "desktop_gui"
     requires_approval: bool = False
     target_scope: str | None = None
+    surface_kind: str = "current_user_desktop"
+    primary_anchor: TargetAnchor | None = None
+    fallback_anchors: list[TargetAnchor] = field(default_factory=list)
     rationale: str | None = None
     current_focus: str | None = None
     remaining_steps: list[str] = field(default_factory=list)
@@ -200,6 +204,7 @@ class StepProposal:
             capability=capability,
             requires_approval=requires_approval,
             target_scope=target_scope,
+            surface_kind="current_user_desktop",
             rationale=plan.reasoning,
             current_focus=plan.current_focus,
             remaining_steps=list(plan.remaining_steps),
@@ -225,6 +230,15 @@ class StepProposal:
             capability=str(payload.get("capability", "desktop_gui")).strip() or "desktop_gui",
             requires_approval=bool(payload.get("requires_approval", False)),
             target_scope=_optional_str(payload.get("target_scope")),
+            surface_kind=normalize_surface_kind(payload.get("surface_kind")),
+            primary_anchor=TargetAnchor.from_dict(payload["primary_anchor"])
+            if isinstance(payload.get("primary_anchor"), dict)
+            else None,
+            fallback_anchors=[
+                TargetAnchor.from_dict(item)
+                for item in payload.get("fallback_anchors", []) or []
+                if isinstance(item, dict)
+            ],
             rationale=_optional_str(payload.get("rationale")),
             current_focus=_optional_str(payload.get("current_focus")),
             remaining_steps=[str(item).strip() for item in payload.get("remaining_steps", []) or [] if str(item).strip()],
@@ -255,6 +269,9 @@ class StepProposal:
             "capability": self.capability,
             "requires_approval": self.requires_approval,
             "target_scope": self.target_scope,
+            "surface_kind": self.surface_kind,
+            "primary_anchor": self.primary_anchor.to_dict() if self.primary_anchor is not None else None,
+            "fallback_anchors": [item.to_dict() for item in self.fallback_anchors],
             "rationale": self.rationale,
             "current_focus": self.current_focus,
             "remaining_steps": list(self.remaining_steps),
@@ -473,10 +490,14 @@ class WorldModel:
     observations: list[str] = field(default_factory=list)
     active_app: str | None = None
     active_window_title: str | None = None
+    target_window_title: str | None = None
     foreground_window_handle: int | None = None
     focused_control: str | None = None
     clipboard_text: str | None = None
     active_driver: str | None = None
+    surface_kind: str = "current_user_desktop"
+    surface_id: str | None = None
+    session_id: str | None = None
     dom_available: bool = False
     uia_available: bool = False
     structured_sources: list[str] = field(default_factory=list)
@@ -484,6 +505,8 @@ class WorldModel:
     anchor_candidates: list[str] = field(default_factory=list)
     selection_text: str | None = None
     file_observations: list[dict[str, Any]] = field(default_factory=list)
+    browser_observation: dict[str, Any] | None = None
+    user_desktop_session: UserDesktopSession | None = None
     step_index: int = 0
     captured_at: float = field(default_factory=time.time)
 
@@ -499,10 +522,14 @@ class WorldModel:
             "observations": list(self.observations),
             "active_app": self.active_app,
             "active_window_title": self.active_window_title,
+            "target_window_title": self.target_window_title,
             "foreground_window_handle": self.foreground_window_handle,
             "focused_control": self.focused_control,
             "clipboard_text": self.clipboard_text,
             "active_driver": self.active_driver,
+            "surface_kind": self.surface_kind,
+            "surface_id": self.surface_id,
+            "session_id": self.session_id,
             "dom_available": self.dom_available,
             "uia_available": self.uia_available,
             "structured_sources": list(self.structured_sources),
@@ -510,6 +537,10 @@ class WorldModel:
             "anchor_candidates": list(self.anchor_candidates),
             "selection_text": self.selection_text,
             "file_observations": list(self.file_observations),
+            "browser_observation": self.browser_observation,
+            "user_desktop_session": self.user_desktop_session.to_dict()
+            if self.user_desktop_session is not None
+            else None,
             "step_index": self.step_index,
             "captured_at": self.captured_at,
         }
@@ -534,6 +565,7 @@ class ExecutionState:
     app_context: dict[str, Any] = field(default_factory=dict)
     last_progress_at: float | None = None
     repair_history: list[dict[str, Any]] = field(default_factory=list)
+    current_surface_kind: str = "current_user_desktop"
     completed: bool = False
     started_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -566,6 +598,7 @@ class ExecutionState:
             app_context=dict(payload.get("app_context", {}) or {}),
             last_progress_at=_optional_float(payload.get("last_progress_at")),
             repair_history=list(payload.get("repair_history", []) or []),
+            current_surface_kind=normalize_surface_kind(payload.get("current_surface_kind")),
             completed=bool(payload.get("completed", False)),
             started_at=float(payload.get("started_at", time.time()) or time.time()),
             updated_at=float(payload.get("updated_at", time.time()) or time.time()),
@@ -590,6 +623,7 @@ class ExecutionState:
             "app_context": dict(self.app_context),
             "last_progress_at": self.last_progress_at,
             "repair_history": list(self.repair_history),
+            "current_surface_kind": self.current_surface_kind,
             "completed": self.completed,
             "started_at": self.started_at,
             "updated_at": self.updated_at,
@@ -619,6 +653,7 @@ def build_execution_plan_summary(state: ExecutionState) -> dict[str, Any]:
         "app_context": dict(state.app_context),
         "last_progress_at": state.last_progress_at,
         "repair_history": list(state.repair_history[-10:]),
+        "current_surface_kind": state.current_surface_kind,
         "updated_at": state.updated_at,
     }
 

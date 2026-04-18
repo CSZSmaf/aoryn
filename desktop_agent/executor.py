@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from desktop_agent.actions import Action
+from desktop_agent.browser_runtime import BrowserRuntimeBridge, BrowserRuntimeError
 from desktop_agent.browser_dom import BrowserDOMError, PlaywrightBrowserSession, dom_backend_status
 from desktop_agent.capabilities import CapabilityExecutor
 from desktop_agent.config import AgentConfig
@@ -118,6 +119,7 @@ class RealDesktopExecutor(ActionExecutor):
         super().__init__()
         self.config = config
         self.dom_session = None
+        self.managed_browser = BrowserRuntimeBridge(config) if config.managed_browser_enabled else None
         self._last_dom_extract: str | None = None
 
     def execute(self, action: Action) -> None:
@@ -157,19 +159,34 @@ class RealDesktopExecutor(ActionExecutor):
                     clicks=action.clicks,
                 )
             elif action.type == "browser_open":
-                self._open_browser_target(action.text or "")
+                self._open_browser_target(action.text or "", target_scope=action.target_scope)
             elif action.type == "browser_search":
-                self._search_in_browser(action.text or "")
+                self._search_in_browser(action.text or "", target_scope=action.target_scope)
             elif action.type == "browser_dom_click":
-                self._dom_click(text=action.text, selector=action.selector)
+                self._dom_click(text=action.text, selector=action.selector, target_scope=action.target_scope)
             elif action.type == "browser_dom_fill":
-                self._dom_fill(value=action.text or "", selector=action.selector, label=action.target_scope)
+                self._dom_fill(
+                    value=action.text or "",
+                    selector=action.selector,
+                    label=action.target_scope,
+                    target_scope=action.target_scope,
+                )
             elif action.type == "browser_dom_select":
-                self._dom_select(value=action.text or "", selector=action.selector, label=action.target_scope)
+                self._dom_select(
+                    value=action.text or "",
+                    selector=action.selector,
+                    label=action.target_scope,
+                    target_scope=action.target_scope,
+                )
             elif action.type == "browser_dom_wait":
-                self._dom_wait(text=action.text, selector=action.selector, seconds=action.seconds)
+                self._dom_wait(
+                    text=action.text,
+                    selector=action.selector,
+                    seconds=action.seconds,
+                    target_scope=action.target_scope,
+                )
             elif action.type == "browser_dom_extract":
-                self._dom_extract(text=action.text, selector=action.selector)
+                self._dom_extract(text=action.text, selector=action.selector, target_scope=action.target_scope)
             elif action.type == "uia_invoke":
                 self._uia_invoke(title=action.title, selector=action.selector, text=action.text)
             elif action.type == "uia_set_value":
@@ -247,9 +264,15 @@ class RealDesktopExecutor(ActionExecutor):
         if not (resolved_app.lower() == "browser" and self._prefers_dom_navigation()):
             self._wait_for_window(wait_query, self.config.window_match_timeout)
 
-    def _open_browser_target(self, target: str) -> None:
-        self._prepare_for_browser_task()
+    def _open_browser_target(self, target: str, *, target_scope: str | None = None) -> None:
+        if (target_scope or "").strip().lower() != "managed_aoryn_browser":
+            self._prepare_for_browser_task()
         normalized = self.config.normalize_browser_url(target)
+        if self._attempt_managed_browser(
+            lambda bridge: bridge.navigate(normalized),
+            action_scope=target_scope,
+        ):
+            return
         if self._attempt_dom_navigation(lambda session: session.open_url(normalized)):
             return
         browser_target = self.config.app_launch_map.get("browser")
@@ -269,34 +292,101 @@ class RealDesktopExecutor(ActionExecutor):
             return
         raise ExecutionError(f"Failed to open browser target: {fallback_target}")
 
-    def _search_in_browser(self, query: str) -> None:
-        self._prepare_for_browser_task()
+    def _search_in_browser(self, query: str, *, target_scope: str | None = None) -> None:
+        if (target_scope or "").strip().lower() != "managed_aoryn_browser":
+            self._prepare_for_browser_task()
+        if self._attempt_managed_browser(
+            lambda bridge: bridge.navigate(self.config.build_browser_search_url(query)),
+            action_scope=target_scope,
+        ):
+            return
         if self._attempt_dom_navigation(lambda session: session.search(query)):
             return
         self._open_browser_target(self.config.build_browser_search_url(query))
 
-    def _dom_click(self, *, text: str | None, selector: str | None) -> None:
-        self._prepare_for_browser_task()
+    def _dom_click(self, *, text: str | None, selector: str | None, target_scope: str | None = None) -> None:
+        if (target_scope or "").strip().lower() != "managed_aoryn_browser":
+            self._prepare_for_browser_task()
+        if selector and self._attempt_managed_browser(
+            lambda bridge: bridge.perform_action({"action": "click", "selector": selector}),
+            action_scope=target_scope,
+        ):
+            return
         session = self._get_dom_session(required=True)
         session.click(text=text, selector=selector)
 
-    def _dom_fill(self, *, value: str, selector: str | None, label: str | None) -> None:
-        self._prepare_for_browser_task()
+    def _dom_fill(
+        self,
+        *,
+        value: str,
+        selector: str | None,
+        label: str | None,
+        target_scope: str | None = None,
+    ) -> None:
+        if (target_scope or "").strip().lower() != "managed_aoryn_browser":
+            self._prepare_for_browser_task()
+        if selector and self._attempt_managed_browser(
+            lambda bridge: bridge.perform_action({"action": "fill", "selector": selector, "value": value}),
+            action_scope=target_scope,
+        ):
+            return
         session = self._get_dom_session(required=True)
         session.fill(value=value, text=label, selector=selector)
 
-    def _dom_select(self, *, value: str, selector: str | None, label: str | None) -> None:
-        self._prepare_for_browser_task()
+    def _dom_select(
+        self,
+        *,
+        value: str,
+        selector: str | None,
+        label: str | None,
+        target_scope: str | None = None,
+    ) -> None:
+        if (target_scope or "").strip().lower() != "managed_aoryn_browser":
+            self._prepare_for_browser_task()
+        if selector and self._attempt_managed_browser(
+            lambda bridge: bridge.perform_action({"action": "select", "selector": selector, "value": value}),
+            action_scope=target_scope,
+        ):
+            return
         session = self._get_dom_session(required=True)
         session.select(value=value, text=label, selector=selector)
 
-    def _dom_wait(self, *, text: str | None, selector: str | None, seconds: float | None) -> None:
-        self._prepare_for_browser_task()
+    def _dom_wait(
+        self,
+        *,
+        text: str | None,
+        selector: str | None,
+        seconds: float | None,
+        target_scope: str | None = None,
+    ) -> None:
+        if (target_scope or "").strip().lower() != "managed_aoryn_browser":
+            self._prepare_for_browser_task()
+        if self._attempt_managed_browser(
+            lambda bridge: bridge.wait_for_state(
+                selector=selector,
+                text=text,
+                timeout_seconds=seconds or self.config.browser_dom_timeout,
+            ),
+            action_scope=target_scope,
+            selector=selector,
+        ):
+            return
         session = self._get_dom_session(required=True)
         session.wait_for(text=text, selector=selector, timeout_seconds=seconds)
 
-    def _dom_extract(self, *, text: str | None, selector: str | None) -> None:
-        self._prepare_for_browser_task()
+    def _dom_extract(
+        self,
+        *,
+        text: str | None,
+        selector: str | None,
+        target_scope: str | None = None,
+    ) -> None:
+        if (target_scope or "").strip().lower() != "managed_aoryn_browser":
+            self._prepare_for_browser_task()
+        if self._attempt_managed_browser_query(selector=selector, action_scope=target_scope):
+            payload = self.managed_browser.query_dom(selector=selector, include_text=True) if self.managed_browser else {}
+            self._last_dom_extract = str(payload.get("text") or payload.get("value") or "").strip() or None
+            return
         session = self._get_dom_session(required=True)
         extracted = session.extract(text=text, selector=selector)
         self._last_dom_extract = extracted
@@ -507,6 +597,33 @@ class RealDesktopExecutor(ActionExecutor):
                 raise ExecutionError(str(exc)) from exc
             return False
 
+    def _attempt_managed_browser(self, operation, *, action_scope: str | None, selector: str | None = None) -> bool:
+        if self.managed_browser is None:
+            return False
+        if (action_scope or "").strip().lower() != "managed_aoryn_browser":
+            return False
+        if selector is not None and not selector.strip():
+            return False
+        try:
+            self.managed_browser.ensure_running()
+            operation(self.managed_browser)
+            return True
+        except BrowserRuntimeError:
+            return False
+
+    def _attempt_managed_browser_query(self, *, selector: str | None = None, action_scope: str | None = None) -> bool:
+        if self.managed_browser is None:
+            return False
+        if (action_scope or "").strip().lower() != "managed_aoryn_browser":
+            return False
+        if selector is None or not selector.strip():
+            return False
+        try:
+            self.managed_browser.ensure_running()
+            return True
+        except BrowserRuntimeError:
+            return False
+
     def _reset_dom_session(self) -> None:
         if self.dom_session is not None:
             try:
@@ -516,6 +633,13 @@ class RealDesktopExecutor(ActionExecutor):
         self.dom_session = None
 
     def browser_snapshot(self) -> dict[str, str | None] | None:
+        if self.managed_browser is not None:
+            try:
+                snapshot = self.managed_browser.snapshot()
+            except BrowserRuntimeError:
+                snapshot = None
+            if isinstance(snapshot, dict) and any(str(snapshot.get(key) or "").strip() for key in ("url", "title", "text")):
+                return snapshot
         if self.dom_session is None:
             return None
         snapshot = getattr(self.dom_session, "snapshot", None)

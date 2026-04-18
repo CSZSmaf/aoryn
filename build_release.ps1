@@ -8,7 +8,7 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     throw "Python was not found in PATH."
 }
 
-$appInfoJson = python -c "import json; from desktop_agent.version import APP_NAME, APP_PUBLISHER, APP_VERSION, checksums_file_name, installer_file_name, portable_zip_file_name, release_dir_name, release_manifest_file_name, review_zip_file_name, source_zip_file_name; print(json.dumps({'name': APP_NAME, 'publisher': APP_PUBLISHER, 'version': APP_VERSION, 'release_dir_name': release_dir_name(), 'installer_file_name': installer_file_name(), 'portable_zip_file_name': portable_zip_file_name(), 'review_zip_file_name': review_zip_file_name(), 'source_zip_file_name': source_zip_file_name(), 'release_manifest_file_name': release_manifest_file_name(), 'checksums_file_name': checksums_file_name()}))"
+$appInfoJson = python -c "import json; from desktop_agent.version import APP_BROWSER_NAME, APP_NAME, APP_PUBLISHER, APP_VERSION, browser_executable_name, checksums_file_name, installer_file_name, portable_zip_file_name, release_dir_name, release_manifest_file_name, review_zip_file_name, source_zip_file_name; print(json.dumps({'name': APP_NAME, 'browser_name': APP_BROWSER_NAME, 'publisher': APP_PUBLISHER, 'version': APP_VERSION, 'release_dir_name': release_dir_name(), 'browser_executable_name': browser_executable_name(), 'installer_file_name': installer_file_name(), 'portable_zip_file_name': portable_zip_file_name(), 'review_zip_file_name': review_zip_file_name(), 'source_zip_file_name': source_zip_file_name(), 'release_manifest_file_name': release_manifest_file_name(), 'checksums_file_name': checksums_file_name()}))"
 if (-not $appInfoJson) {
     throw "Could not read version metadata from desktop_agent.version."
 }
@@ -18,6 +18,7 @@ $releaseRoot = Join-Path $projectRoot "release"
 $releaseDir = Join-Path $releaseRoot $app.release_dir_name
 $installerScript = Join-Path $projectRoot "installer\\Aoryn.iss"
 $distDir = Join-Path $projectRoot ("dist\\{0}" -f $app.name)
+$browserExePath = Join-Path $projectRoot ("dist\\{0}" -f $app.browser_executable_name)
 $installerPath = Join-Path $releaseRoot $app.installer_file_name
 $portableZipPath = Join-Path $releaseRoot $app.portable_zip_file_name
 $reviewZipPath = Join-Path $releaseRoot $app.review_zip_file_name
@@ -59,9 +60,13 @@ powershell -ExecutionPolicy Bypass -File .\build_windows_exe.ps1
 if (-not (Test-Path $distDir)) {
     throw "Expected PyInstaller output was not found: $distDir"
 }
+if (-not (Test-Path $browserExePath)) {
+    throw "Expected browser executable output was not found: $browserExePath"
+}
 
 New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
 Copy-Item -Path $distDir -Destination $releaseDir -Recurse -Force
+Copy-Item -Path $browserExePath -Destination (Join-Path $releaseDir $app.browser_executable_name) -Force
 
 & $iscc.Source `
   "/DAppName=$($app.name)" `

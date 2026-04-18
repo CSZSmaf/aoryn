@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 
 APP_NAME = "Aoryn"
+APP_BROWSER_NAME = "AorynBrowser"
 APP_VERSION = "0.1.19"
 APP_PUBLISHER = "Aoryn"
 APP_ID = "Aoryn.Desktop.Shell"
@@ -47,6 +48,10 @@ def installer_file_name() -> str:
 
 def portable_zip_file_name() -> str:
     return f"{release_dir_name()}.zip"
+
+
+def browser_executable_name() -> str:
+    return f"{APP_BROWSER_NAME}.exe"
 
 
 def review_zip_file_name() -> str:
