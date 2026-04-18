@@ -7,12 +7,16 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from desktop_agent.version import (
+    APP_BROWSER_DISPLAY_NAME,
     APP_NAME,
     APP_PUBLISHER,
     APP_RELEASE_ARCH,
     APP_VERSION,
-    browser_executable_name,
+    browser_installer_file_name,
+    browser_portable_zip_file_name,
+    browser_release_dir_name,
     checksums_file_name,
+    installer_file_name,
     portable_zip_file_name,
     release_manifest_file_name,
     review_zip_file_name,
@@ -61,8 +65,11 @@ def iter_source_snapshot_files(project_root: Path) -> list[Path]:
 def build_release_manifest(
     *,
     release_dir_name: str,
+    browser_release_dir_name: str,
     installer_name: str,
+    browser_installer_name: str,
     portable_zip_name: str,
+    browser_portable_zip_name: str,
     source_zip_name: str,
     review_zip_name: str,
     checksums_name: str,
@@ -70,21 +77,25 @@ def build_release_manifest(
 ) -> dict[str, object]:
     return {
         "app_name": APP_NAME,
+        "browser_name": APP_BROWSER_DISPLAY_NAME,
         "publisher": APP_PUBLISHER,
         "version": APP_VERSION,
         "platform": APP_RELEASE_ARCH,
         "build_time_utc": datetime.now(timezone.utc).isoformat(),
         "distribution": {
             "primary_installer": installer_name,
-            "managed_browser_executable": browser_executable_name(),
+            "browser_installer": browser_installer_name,
             "portable_directory": release_dir_name,
+            "browser_portable_directory": browser_release_dir_name,
             "portable_zip": portable_zip_name,
+            "browser_portable_zip": browser_portable_zip_name,
             "review_bundle": review_zip_name,
             "source_snapshot": source_zip_name,
         },
         "install_policy": {
             "custom_install_dir": True,
-            "default_install_dir": rf"%LOCALAPPDATA%\Programs\{APP_NAME}",
+            "desktop_default_install_dir": rf"%LOCALAPPDATA%\Programs\{APP_NAME}",
+            "browser_default_install_dir": rf"%LOCALAPPDATA%\Programs\{APP_BROWSER_DISPLAY_NAME}",
             "config_dir": rf"%APPDATA%\{APP_NAME}",
             "data_dir": rf"%LOCALAPPDATA%\{APP_NAME}",
             "run_root": rf"%LOCALAPPDATA%\{APP_NAME}\runs",
@@ -114,7 +125,9 @@ def build_release_manifest(
         },
         "review_bundle_contents": [
             installer_name,
+            browser_installer_name,
             portable_zip_name,
+            browser_portable_zip_name,
             source_zip_name,
             manifest_name,
             checksums_name,
@@ -129,19 +142,30 @@ def build_release_artifacts(
     project_root: Path,
     release_root: Path,
     release_dir: Path,
+    browser_release_dir: Path,
     installer_path: Path,
+    browser_installer_path: Path,
 ) -> dict[str, object]:
     release_root.mkdir(parents=True, exist_ok=True)
     portable_zip_path = release_root / portable_zip_file_name()
+    browser_portable_zip_path = release_root / browser_portable_zip_file_name()
     source_zip_path = release_root / source_zip_file_name()
     review_zip_path = release_root / review_zip_file_name()
     manifest_path = release_root / release_manifest_file_name()
     checksums_path = release_root / checksums_file_name()
 
-    for target in (portable_zip_path, source_zip_path, review_zip_path, manifest_path, checksums_path):
+    for target in (
+        portable_zip_path,
+        browser_portable_zip_path,
+        source_zip_path,
+        review_zip_path,
+        manifest_path,
+        checksums_path,
+    ):
         target.unlink(missing_ok=True)
 
     zip_directory(release_dir, portable_zip_path, root_name=release_dir.name)
+    zip_directory(browser_release_dir, browser_portable_zip_path, root_name=browser_release_dir.name)
     zip_paths(
         source_zip_path,
         (
@@ -152,8 +176,11 @@ def build_release_artifacts(
 
     manifest = build_release_manifest(
         release_dir_name=release_dir.name,
+        browser_release_dir_name=browser_release_dir.name,
         installer_name=installer_path.name,
+        browser_installer_name=browser_installer_path.name,
         portable_zip_name=portable_zip_path.name,
+        browser_portable_zip_name=browser_portable_zip_path.name,
         source_zip_name=source_zip_path.name,
         review_zip_name=review_zip_path.name,
         checksums_name=checksums_path.name,
@@ -163,7 +190,9 @@ def build_release_artifacts(
 
     checksum_entries = [
         installer_path,
+        browser_installer_path,
         portable_zip_path,
+        browser_portable_zip_path,
         source_zip_path,
         manifest_path,
         project_root / "README.md",
@@ -175,7 +204,9 @@ def build_release_artifacts(
         review_zip_path,
         [
             (installer_path, Path(installer_path.name)),
+            (browser_installer_path, Path(browser_installer_path.name)),
             (portable_zip_path, Path(portable_zip_path.name)),
+            (browser_portable_zip_path, Path(browser_portable_zip_path.name)),
             (source_zip_path, Path(source_zip_path.name)),
             (manifest_path, Path(manifest_path.name)),
             (checksums_path, Path(checksums_path.name)),
@@ -186,8 +217,11 @@ def build_release_artifacts(
 
     return {
         "installer": str(installer_path),
+        "browser_installer": str(browser_installer_path),
         "portable_directory": str(release_dir),
+        "browser_portable_directory": str(browser_release_dir),
         "portable_zip": str(portable_zip_path),
+        "browser_portable_zip": str(browser_portable_zip_path),
         "source_zip": str(source_zip_path),
         "review_zip": str(review_zip_path),
         "manifest": str(manifest_path),

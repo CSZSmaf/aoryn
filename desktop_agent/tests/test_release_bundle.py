@@ -6,6 +6,9 @@ from zipfile import ZipFile
 
 from desktop_agent.release_bundle import build_release_artifacts, iter_source_snapshot_files
 from desktop_agent.version import (
+    browser_installer_file_name,
+    browser_portable_zip_file_name,
+    browser_release_dir_name,
     checksums_file_name,
     installer_file_name,
     portable_zip_file_name,
@@ -46,14 +49,19 @@ def test_build_release_artifacts_creates_review_bundle():
     project_root = Path("test_artifacts") / f"release_bundle_build_{uuid4().hex}"
     release_root = project_root / "release"
     release_dir = release_root / release_dir_name()
+    browser_release_dir = release_root / browser_release_dir_name()
     installer_path = release_root / installer_file_name()
+    browser_installer_path = release_root / browser_installer_file_name()
 
     (project_root / "desktop_agent").mkdir(parents=True)
     release_dir.mkdir(parents=True)
+    browser_release_dir.mkdir(parents=True)
     (release_dir / "Aoryn.exe").write_bytes(b"exe")
+    (browser_release_dir / "AorynBrowser.exe").write_bytes(b"browser exe")
     (release_dir / "_internal").mkdir()
     (release_dir / "_internal" / "payload.txt").write_text("payload", encoding="utf-8")
     installer_path.write_bytes(b"installer")
+    browser_installer_path.write_bytes(b"browser installer")
     (project_root / "README.md").write_text("cn readme", encoding="utf-8")
     (project_root / "README.en.md").write_text("en readme", encoding="utf-8")
     (project_root / "desktop_agent" / "app.py").write_text("print('hello')\n", encoding="utf-8")
@@ -65,19 +73,24 @@ def test_build_release_artifacts_creates_review_bundle():
             project_root=project_root,
             release_root=release_root,
             release_dir=release_dir,
+            browser_release_dir=browser_release_dir,
             installer_path=installer_path,
+            browser_installer_path=browser_installer_path,
         )
 
         portable_zip = release_root / portable_zip_file_name()
+        browser_portable_zip = release_root / browser_portable_zip_file_name()
         source_zip = release_root / source_zip_file_name()
         review_zip = release_root / review_zip_file_name()
         manifest_path = release_root / release_manifest_file_name()
         checksums_path = release_root / checksums_file_name()
 
         assert Path(payload["portable_zip"]) == portable_zip
+        assert Path(payload["browser_portable_zip"]) == browser_portable_zip
         assert Path(payload["source_zip"]) == source_zip
         assert Path(payload["review_zip"]) == review_zip
         assert portable_zip.exists()
+        assert browser_portable_zip.exists()
         assert source_zip.exists()
         assert review_zip.exists()
         assert manifest_path.exists()
@@ -85,15 +98,18 @@ def test_build_release_artifacts_creates_review_bundle():
 
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         assert manifest["distribution"]["primary_installer"] == installer_path.name
-        assert manifest["distribution"]["managed_browser_executable"] == "AorynBrowser.exe"
+        assert manifest["distribution"]["browser_installer"] == browser_installer_path.name
         assert manifest["distribution"]["portable_zip"] == portable_zip.name
+        assert manifest["distribution"]["browser_portable_zip"] == browser_portable_zip.name
         assert manifest["distribution"]["source_snapshot"] == source_zip.name
         assert manifest["distribution"]["review_bundle"] == review_zip.name
         assert "runs" in manifest["source_snapshot_policy"]["excluded_directories"]
 
         checksums = checksums_path.read_text(encoding="utf-8")
         assert installer_path.name in checksums
+        assert browser_installer_path.name in checksums
         assert portable_zip.name in checksums
+        assert browser_portable_zip.name in checksums
         assert source_zip.name in checksums
         assert manifest_path.name in checksums
 
@@ -108,7 +124,9 @@ def test_build_release_artifacts_creates_review_bundle():
         with ZipFile(review_zip) as archive:
             review_members = set(archive.namelist())
             assert installer_path.name in review_members
+            assert browser_installer_path.name in review_members
             assert portable_zip.name in review_members
+            assert browser_portable_zip.name in review_members
             assert source_zip.name in review_members
             assert manifest_path.name in review_members
             assert checksums_path.name in review_members

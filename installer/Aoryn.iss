@@ -10,9 +10,6 @@
 #ifndef AppExeName
   #define AppExeName "Aoryn.exe"
 #endif
-#ifndef BrowserExeName
-  #define BrowserExeName "AorynBrowser.exe"
-#endif
 #ifndef ReleaseSourceDir
   #define ReleaseSourceDir "..\\dist\\Aoryn"
 #endif
@@ -69,7 +66,6 @@ Root: HKCU; Subkey: "Software\Aoryn\DesktopInstaller"; ValueType: string; ValueN
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
-Name: "{autoprograms}\{#AppName} Browser"; Filename: "{app}\{#BrowserExeName}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]

@@ -5,9 +5,11 @@ from pathlib import Path
 
 APP_NAME = "Aoryn"
 APP_BROWSER_NAME = "AorynBrowser"
-APP_VERSION = "0.1.19"
+APP_BROWSER_DISPLAY_NAME = "Aoryn Browser"
+APP_VERSION = "0.1.20"
 APP_PUBLISHER = "Aoryn"
 APP_ID = "Aoryn.Desktop.Shell"
+APP_BROWSER_ID = "Aoryn.Browser.Shell"
 APP_RELEASE_ARCH = "win64"
 
 
@@ -52,6 +54,22 @@ def portable_zip_file_name() -> str:
 
 def browser_executable_name() -> str:
     return f"{APP_BROWSER_NAME}.exe"
+
+
+def browser_install_dir_name() -> str:
+    return APP_BROWSER_DISPLAY_NAME
+
+
+def browser_release_dir_name() -> str:
+    return f"{APP_BROWSER_NAME}-{APP_VERSION}-{APP_RELEASE_ARCH}"
+
+
+def browser_installer_file_name() -> str:
+    return f"{APP_BROWSER_NAME}-Setup-{APP_VERSION}.exe"
+
+
+def browser_portable_zip_file_name() -> str:
+    return f"{browser_release_dir_name()}.zip"
 
 
 def review_zip_file_name() -> str:

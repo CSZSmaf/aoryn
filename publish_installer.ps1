@@ -27,31 +27,58 @@ if (-not $SkipBuild) {
     powershell -ExecutionPolicy Bypass -File .\build_release.ps1
 }
 
-$appInfoJson = python -c "import json; from desktop_agent.version import installer_file_name; print(json.dumps({'installer_file_name': installer_file_name()}))"
+$appInfoJson = python -c "import json; from desktop_agent.version import browser_installer_file_name, installer_file_name; print(json.dumps({'installer_file_name': installer_file_name(), 'browser_installer_file_name': browser_installer_file_name()}))"
 if (-not $appInfoJson) {
     throw "Could not read installer metadata."
 }
 
 $app = $appInfoJson | ConvertFrom-Json
 $installerPath = Join-Path $projectRoot ("release\\{0}" -f $app.installer_file_name)
+$browserInstallerPath = Join-Path $projectRoot ("release\\{0}" -f $app.browser_installer_file_name)
 if (-not (Test-Path $installerPath)) {
     throw "Installer not found: $installerPath"
 }
+if (-not (Test-Path $browserInstallerPath)) {
+    throw "Browser installer not found: $browserInstallerPath"
+}
 
-$publishArgs = @(
+$desktopPublishArgs = @(
     ".\scripts\publish_installer.py",
     "--installer-path",
     $installerPath
 )
 
+if ($ProxyUrl) {
+    $desktopPublishArgs += "--proxy"
+    $desktopPublishArgs += $ProxyUrl
+}
+
 if (-not $SkipPagesSync -and $env:AORYN_CF_API_TOKEN) {
-    $publishArgs += "--sync-pages-download-settings"
-    $publishArgs += "--retry-pages-deployment"
+    $desktopPublishArgs += "--sync-pages-download-settings"
+}
+
+python @desktopPublishArgs
+
+$browserPublishArgs = @(
+    ".\scripts\publish_installer.py",
+    "--installer-path",
+    $browserInstallerPath,
+    "--latest-key",
+    "latest/AorynBrowser-Setup-latest.exe",
+    "--pages-key-env",
+    "AORYN_WINDOWS_BROWSER_INSTALLER_KEY",
+    "--pages-url-env",
+    "AORYN_WINDOWS_BROWSER_INSTALLER_URL"
+)
+
+if (-not $SkipPagesSync -and $env:AORYN_CF_API_TOKEN) {
+    $browserPublishArgs += "--sync-pages-download-settings"
+    $browserPublishArgs += "--retry-pages-deployment"
 }
 
 if ($ProxyUrl) {
-    $publishArgs += "--proxy"
-    $publishArgs += $ProxyUrl
+    $browserPublishArgs += "--proxy"
+    $browserPublishArgs += $ProxyUrl
 }
 
-python @publishArgs
+python @browserPublishArgs

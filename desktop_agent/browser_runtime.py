@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from typing import Any
 
 from desktop_agent.config import AgentConfig
 from desktop_agent.runtime_paths import local_data_root
+from desktop_agent.version import APP_BROWSER_NAME, browser_executable_name, browser_install_dir_name
 
 
 class BrowserRuntimeError(RuntimeError):
@@ -171,9 +173,11 @@ class BrowserRuntimeBridge:
 
     def _resolve_launch_command(self) -> list[str]:
         if getattr(sys, "frozen", False):
-            exe_path = Path(sys.executable).resolve().with_name("AorynBrowser.exe")
-            if not exe_path.exists():
-                raise BrowserRuntimeError(f"Managed browser executable was not found: {exe_path}")
+            exe_path = _resolve_installed_browser_executable()
+            if exe_path is None:
+                raise BrowserRuntimeError(
+                    "Managed browser executable was not found. Install Aoryn Browser or place AorynBrowser.exe next to Aoryn.exe."
+                )
             command = [str(exe_path)]
         else:
             browser_entry = Path(__file__).resolve().parents[1] / "run_browser.py"
@@ -257,6 +261,53 @@ def _import_requests():
     except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
         raise BrowserRuntimeError("The requests package is required for the browser runtime bridge.") from exc
     return requests
+
+
+def _resolve_installed_browser_executable() -> Path | None:
+    adjacent = Path(sys.executable).resolve().with_name(browser_executable_name())
+    if adjacent.exists():
+        return adjacent
+
+    for candidate in _installed_browser_candidates():
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _installed_browser_candidates() -> list[Path]:
+    candidates: list[Path] = []
+
+    registry_dir = _browser_registry_install_dir()
+    if registry_dir is not None:
+        candidates.append(registry_dir / browser_executable_name())
+
+    local_appdata = Path(
+        os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+    )
+    candidates.append(local_appdata / "Programs" / browser_install_dir_name() / browser_executable_name())
+    candidates.append(local_appdata / "Programs" / APP_BROWSER_NAME / browser_executable_name())
+    return candidates
+
+
+def _browser_registry_install_dir() -> Path | None:
+    if not sys.platform.startswith("win"):
+        return None
+
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Aoryn\BrowserInstaller") as key:
+            install_dir, _ = winreg.QueryValueEx(key, "InstallDir")
+    except OSError:
+        return None
+
+    normalized = str(install_dir or "").strip()
+    if not normalized:
+        return None
+    return Path(normalized)
 
 
 def _optional_str(value: Any) -> str | None:
