@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 APP_NAME = "Aoryn"
-APP_VERSION = "0.1.18"
+APP_VERSION = "0.1.19"
 APP_PUBLISHER = "Aoryn"
 APP_ID = "Aoryn.Desktop.Shell"
 APP_RELEASE_ARCH = "win64"

@@ -1065,6 +1065,9 @@ await runTest("custom select refreshed shell still renders trigger and menu mark
 
   const wrapper = {
     innerHTML: "",
+    querySelector() {
+      return null;
+    },
     classList: {
       toggle() {},
       contains(className) {
@@ -1089,4 +1092,43 @@ await runTest("custom select refreshed shell still renders trigger and menu mark
   assert.match(wrapper.innerHTML, /custom-select__trigger/);
   assert.match(wrapper.innerHTML, /custom-select__menu/);
   assert.match(wrapper.innerHTML, /custom-select__option is-selected/);
+});
+
+await runTest("custom select preserves menu scroll while the shell refreshes", async () => {
+  const context = createHarness();
+  context.__appTest.state.openCustomSelectId = "availableModels";
+
+  const previousMenu = { scrollTop: 132 };
+  const nextMenu = { scrollTop: 0 };
+  let queryCount = 0;
+  const wrapper = {
+    innerHTML: "",
+    querySelector(selector) {
+      if (selector !== ".custom-select__menu") return null;
+      queryCount += 1;
+      return queryCount === 1 ? previousMenu : nextMenu;
+    },
+    classList: {
+      toggle() {},
+      contains(className) {
+        return className === "custom-select";
+      },
+    },
+  };
+  const select = {
+    id: "availableModels",
+    options: [
+      { value: "gpt-5-chat", textContent: "gpt-5-chat" },
+      { value: "claude-opus-4-6", textContent: "claude-opus-4-6" },
+    ],
+    selectedIndex: 0,
+    value: "gpt-5-chat",
+    disabled: false,
+    nextElementSibling: wrapper,
+  };
+
+  context.__appTest.originals.syncCustomSelect(select);
+
+  assert.equal(context.__appTest.state.customSelectMenuState.availableModels.scrollTop, 132);
+  assert.equal(nextMenu.scrollTop, 132);
 });

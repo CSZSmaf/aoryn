@@ -842,6 +842,70 @@ def test_dashboard_task_route_merges_runtime_preferences_with_request_overrides(
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_dashboard_resume_route_merges_runtime_preferences_with_request_overrides(monkeypatch):
+    temp_root = Path(__file__).resolve().parents[2] / ".pytest-local" / f"aoryn-dashboard-resume-runtime-{uuid4().hex}"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    config_path = temp_root / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    app.runtime_preferences.update(
+        config_overrides={
+            "model_provider": "openai_compatible",
+            "model_base_url": "https://runtime.example.com/v1",
+        }
+    )
+    captured: dict[str, object] = {}
+
+    def _resume(**kwargs):
+        captured.update(kwargs)
+        return DashboardJob(
+            job_id="job-resume",
+            task="resume the interrupted browser task",
+            planner_mode="auto",
+            dry_run=False,
+            max_steps=None,
+            pause_after_action=None,
+            resume_run_id=kwargs["run_id"],
+            config_overrides=dict(kwargs.get("config_overrides") or {}),
+        )
+
+    monkeypatch.setattr(app.queue, "resume", _resume)
+
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/runs/run-human-1/resume",
+            data=json.dumps(
+                {
+                    "config_overrides": {
+                        "model_base_url": " https://override.example.com/v1 ",
+                    },
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 202
+            assert payload["id"] == "job-resume"
+            assert payload["resume_run_id"] == "run-human-1"
+
+        assert captured["run_id"] == "run-human-1"
+        assert captured["config_overrides"] == {
+            "model_provider": "openai_compatible",
+            "model_base_url": "https://override.example.com/v1",
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_dashboard_system_paths_and_open_path(monkeypatch):
     temp_root = Path(__file__).resolve().parents[2] / ".pytest-local" / f"aoryn-dashboard-paths-{uuid4().hex}"
     temp_root.mkdir(parents=True, exist_ok=True)

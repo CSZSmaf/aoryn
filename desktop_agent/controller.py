@@ -36,6 +36,7 @@ from desktop_agent.version import APP_NAME
 from desktop_agent.workflow import (
     ExecutionState,
     StepProposal,
+    Subgoal,
     VerificationResult,
     WorldModel,
     build_execution_plan_summary,
@@ -60,6 +61,15 @@ class AgentRunResult:
     requires_human: bool = False
     interruption_kind: str | None = None
     interruption_reason: str | None = None
+
+
+@dataclass(slots=True)
+class ResumeRunContext:
+    task: str
+    run_dir: Path
+    started_at: float
+    step_offset: int
+    execution_state: ExecutionState | None = None
 
 
 class DesktopAgent:
@@ -96,39 +106,48 @@ class DesktopAgent:
             driver_registry=self.driver_registry,
         )
 
-    def run(self, task: str) -> AgentRunResult:
-        run_dir = self.logger.create_run_dir(task)
-        started_at = time.time()
+    def run(
+        self,
+        task: str,
+        *,
+        run_dir: Path | None = None,
+        execution_state: ExecutionState | None = None,
+        started_at: float | None = None,
+        step_offset: int = 0,
+        history: list[str] | None = None,
+    ) -> AgentRunResult:
+        run_dir = run_dir or self.logger.create_run_dir(task)
+        started_at = float(started_at) if isinstance(started_at, (int, float)) else time.time()
         self._emit_progress(
             {
                 "task": task,
                 "run_dir": str(run_dir),
                 "run_id": run_dir.name,
-                "steps": 0,
+                "steps": max(0, int(step_offset)),
                 "latest_screenshot": None,
                 "latest_summary": None,
                 "latest_actions": [],
                 "started_at": started_at,
             }
         )
-        history: list[str] = []
+        history = list(history or (execution_state.memory if execution_state is not None else []))
         completed = False
         error_message: str | None = None
         cancelled = False
         cancel_reason: str | None = None
-        step_count = 0
+        step_count = max(0, int(step_offset))
         challenge_signal: HumanVerificationSignal | None = None
         last_step_signature: str | None = None
         repeated_plan_count = 0
         recoverable_error_count = 0
-        execution_state: ExecutionState | None = None
 
-        for step_index in range(1, self.config.max_steps + 1):
+        for relative_step_index in range(1, self.config.max_steps + 1):
             if self._stop_requested():
                 cancelled = True
                 cancel_reason = "Stopped by user."
                 break
 
+            step_index = step_offset + relative_step_index
             step_count = step_index
             screenshot_path = run_dir / f"step_{step_index:02d}.{self.config.screenshot_format}"
             plan: PlanResult | None = None
@@ -136,6 +155,7 @@ class DesktopAgent:
             safe_actions: list[Action] = []
             verification: VerificationResult | None = None
             world_model: WorldModel | None = None
+            recovery_mode: str | None = None
 
             try:
                 screen_info = self.perception.capture(screenshot_path)
@@ -221,10 +241,11 @@ class DesktopAgent:
                 else:
                     repeated_plan_count = 1
                     last_step_signature = plan_signature
-                if repeated_plan_count >= 3:
+                if repeated_plan_count >= 3 and execution_state.stuck_rounds >= 2:
                     error_message = "Detected the same plan repeatedly. Task stopped to avoid an execution loop."
                     verification = VerificationResult(
                         success=False,
+                        status="failed",
                         evidence=[],
                         failure_kind="goal_ambiguous",
                         message=error_message,
@@ -283,6 +304,7 @@ class DesktopAgent:
                         error_message = "The requested high-risk step was rejected by the user."
                         verification = VerificationResult(
                             success=False,
+                            status="failed",
                             evidence=[],
                             failure_kind="approval_rejected",
                             message=error_message,
@@ -404,8 +426,12 @@ class DesktopAgent:
                 execution_state.last_verification = verification
                 execution_state.updated_at = time.time()
                 current_subgoal.attempts += 1
+                subgoal_completed_now = step_proposal.completes_subgoal or _verification_completed_subgoal(verification)
 
-                if verification.success and step_proposal.completes_subgoal:
+                if verification.status == "success" and subgoal_completed_now:
+                    execution_state.last_progress_at = time.time()
+                    execution_state.stuck_rounds = 0
+                    execution_state.app_context.pop("pending_repair", None)
                     if step_proposal.target_scope == "task":
                         for subgoal in execution_state.task_graph.subgoals:
                             if subgoal.status != "completed":
@@ -417,12 +443,23 @@ class DesktopAgent:
                         execution_state.completed = True
                     else:
                         execution_state.task_graph.mark_completed(current_subgoal.id, evidence=verification.to_dict())
-                elif verification.success:
+                elif verification.status == "success":
+                    execution_state.last_progress_at = time.time()
+                    execution_state.stuck_rounds = 0
+                    execution_state.app_context.pop("pending_repair", None)
                     current_subgoal.notes.append("Progress verified, but the subgoal is not complete yet.")
+                    current_subgoal.status = "pending"
+                elif verification.status == "partial_progress":
+                    execution_state.last_progress_at = time.time()
+                    execution_state.stuck_rounds = 0
+                    execution_state.app_context.pop("pending_repair", None)
+                    current_subgoal.notes.append(verification.message or "Partial progress observed.")
+                    current_subgoal.status = "pending"
                 else:
                     if step_proposal.capability and step_proposal.capability not in current_subgoal.failed_capabilities:
                         current_subgoal.failed_capabilities.append(step_proposal.capability)
                     current_subgoal.status = "blocked"
+                    execution_state.stuck_rounds += 1
                     execution_state.failures.append(
                         {
                             "subgoal_id": current_subgoal.id,
@@ -431,6 +468,18 @@ class DesktopAgent:
                             "step": step_index,
                         }
                     )
+                    recovery_mode = _schedule_recovery(
+                        execution_state=execution_state,
+                        subgoal=current_subgoal,
+                        step_proposal=step_proposal,
+                        verification=verification,
+                        step_index=step_index,
+                    )
+                    if recovery_mode == "repair":
+                        current_subgoal.status = "pending"
+                    elif recovery_mode == "replan":
+                        current_subgoal.status = "pending"
+                        last_step_signature = None
 
                 if execution_state.task_graph.is_complete():
                     completed = True
@@ -447,7 +496,7 @@ class DesktopAgent:
                     screenshot_path=screenshot_path,
                     plan=plan,
                     executed_actions=safe_actions,
-                    error=None if verification.success else verification.message,
+                    error=None if verification.status in {"success", "partial_progress"} else verification.message,
                     challenge=None,
                     captured_at=captured_at,
                     environment=_build_environment_payload(refreshed_screen_info),
@@ -465,7 +514,7 @@ class DesktopAgent:
                         captured_at=captured_at,
                         plan=plan,
                         executed_actions=safe_actions,
-                        error=None if verification.success else verification.message,
+                        error=None if verification.status in {"success", "partial_progress"} else verification.message,
                         challenge=None,
                         started_at=started_at,
                         environment=_build_environment_payload(refreshed_screen_info),
@@ -482,17 +531,26 @@ class DesktopAgent:
 
                 if completed:
                     break
-                if not step_proposal.actions and not verification.success:
+                if not step_proposal.actions and verification.status == "failed":
                     error_message = "Planner returned no executable actions before the task could finish."
                     break
-                if not verification.success:
-                    if current_subgoal.attempts <= max(1, current_subgoal.retry_budget):
+                if verification.status == "failed":
+                    if repeated_plan_count >= 3 and execution_state.stuck_rounds >= 2:
+                        error_message = "Detected the same plan repeatedly. Task stopped to avoid an execution loop."
+                        break
+                    if recovery_mode in {"repair", "replan"}:
+                        recoverable_error_count += 1
+                        continue
+                    if current_subgoal.can_retry():
                         recoverable_error_count += 1
                         current_subgoal.status = "pending"
                         continue
+                    if execution_state.stuck_rounds >= 3:
+                        error_message = f"Subgoal became stuck after repeated failed attempts: {current_subgoal.title}"
+                        break
                     error_message = verification.message or f"Subgoal failed: {current_subgoal.title}"
                     break
-                current_subgoal.status = "pending" if not step_proposal.completes_subgoal else current_subgoal.status
+                current_subgoal.status = "pending" if not subgoal_completed_now else current_subgoal.status
             except ExecutionCancelled as exc:
                 cancelled = True
                 cancel_reason = str(exc) or "Stopped by user."
@@ -538,19 +596,36 @@ class DesktopAgent:
             except (PlannerError, SafetyError, ExecutionError, PerceptionError) as exc:
                 step_error = str(exc)
                 recoverable = self._is_recoverable_error(exc)
+                verification = VerificationResult(
+                    success=False,
+                    status="failed",
+                    evidence=[],
+                    failure_kind="transient_failure" if recoverable else "blocked_by_ui",
+                    message=step_error,
+                )
                 if execution_state is not None and execution_state.current_subgoal() is not None:
                     current_subgoal = execution_state.current_subgoal()
                     current_subgoal.attempts += 1
                     if step_proposal is not None and step_proposal.capability not in current_subgoal.failed_capabilities:
                         current_subgoal.failed_capabilities.append(step_proposal.capability)
                     current_subgoal.status = "pending"
+                    execution_state.last_verification = verification
+                    execution_state.stuck_rounds += 1
                     execution_state.failures.append(
                         {
                             "subgoal_id": current_subgoal.id,
-                            "failure_kind": "transient_failure" if recoverable else "blocked_by_ui",
+                            "failure_kind": verification.failure_kind,
                             "message": step_error,
                             "step": step_index,
                         }
+                    )
+                    recovery_mode = _schedule_recovery(
+                        execution_state=execution_state,
+                        subgoal=current_subgoal,
+                        step_proposal=step_proposal,
+                        verification=verification,
+                        step_index=step_index,
+                        recoverable=recoverable,
                     )
                 fallback_plan = PlanResult(
                     status_summary="Execution failed for this step.",
@@ -582,6 +657,7 @@ class DesktopAgent:
                     state=build_execution_plan_summary(execution_state) if execution_state is not None else None,
                     world_model=world_model.to_dict() if world_model is not None else None,
                     step_proposal=step_proposal.to_dict() if step_proposal is not None else None,
+                    verification=verification.to_dict(),
                 )
                 self._emit_progress(
                     self._build_progress_payload(
@@ -598,7 +674,7 @@ class DesktopAgent:
                         environment=None,
                         execution_state=execution_state,
                         step_proposal=step_proposal,
-                        verification=None,
+                        verification=verification,
                     )
                 )
                 history.append(
@@ -610,6 +686,9 @@ class DesktopAgent:
                 )
                 if execution_state is not None:
                     execution_state.memory = history[-8:]
+                if recovery_mode in {"repair", "replan"}:
+                    recoverable_error_count += 1
+                    continue
                 if (
                     recoverable
                     and self.config.replan_on_recoverable_error
@@ -674,6 +753,7 @@ class DesktopAgent:
         environment = getattr(screen_info, "effective_environment", None) or getattr(screen_info, "environment", None)
         foreground = getattr(environment, "foreground_window", None) if environment is not None else None
         active_window_title = getattr(foreground, "title", None)
+        foreground_window_handle = getattr(foreground, "handle", None)
         browser_snapshot = self.executor.browser_snapshot()
         mock_state = getattr(self.executor, "state", None)
         active_app = _infer_active_app(
@@ -681,29 +761,81 @@ class DesktopAgent:
             browser_snapshot=browser_snapshot,
         )
         clipboard_text = None
+        selection_text = None
+        current_buffer_text = None
+        last_interaction_text = None
         if mock_state is not None and (self.config.dry_run or isinstance(self.executor, MockExecutor)):
             active_app = getattr(mock_state, "active_app", None) or active_app
             active_window_title = _mock_window_title(mock_state) or active_window_title
             clipboard_text = getattr(mock_state, "clipboard_text", None)
+            selection_text = getattr(mock_state, "last_extracted_text", None)
+            if active_app:
+                current_buffer_text = getattr(mock_state, "text_buffers", {}).get(active_app)
+            browser_clicks = list(getattr(mock_state, "browser_dom_clicks", []) or [])
+            if browser_clicks:
+                last_interaction_text = str(browser_clicks[-1]).strip() or None
         else:
             if not active_window_title and mock_state is not None:
                 active_window_title = _mock_window_title(mock_state)
             if active_app is None and mock_state is not None:
                 active_app = getattr(mock_state, "active_app", None)
+            if mock_state is not None:
+                selection_text = getattr(mock_state, "last_extracted_text", None)
+                if active_app:
+                    current_buffer_text = getattr(mock_state, "text_buffers", {}).get(active_app)
+                browser_clicks = list(getattr(mock_state, "browser_dom_clicks", []) or [])
+                if browser_clicks:
+                    last_interaction_text = str(browser_clicks[-1]).strip() or None
+        if not selection_text and current_buffer_text:
+            selection_text = current_buffer_text
         visible_windows = [item.to_dict() for item in getattr(environment, "visible_windows", [])] if environment else []
+        downloads = []
+        if isinstance(browser_snapshot, dict) and isinstance(browser_snapshot.get("downloads"), list):
+            downloads = [dict(item) for item in browser_snapshot.get("downloads", []) if isinstance(item, dict)]
+        structured_sources: list[str] = []
+        if browser_snapshot:
+            structured_sources.append("browser_dom")
+        if environment is not None:
+            structured_sources.append("windows_env")
+        if clipboard_text:
+            structured_sources.append("clipboard")
+        dom_available = bool(browser_snapshot and any(str(browser_snapshot.get(key) or "").strip() for key in ("url", "title", "text")))
+        uia_available = bool(active_window_title and active_app not in {"browser"})
+        anchor_candidates = _collect_anchor_candidates(
+            active_window_title=active_window_title,
+            browser_snapshot=browser_snapshot,
+            visible_windows=visible_windows,
+            selection_text=selection_text or current_buffer_text or last_interaction_text,
+        )
+        if last_interaction_text:
+            cleaned_interaction = " ".join(str(last_interaction_text).split()).strip()
+            if cleaned_interaction and cleaned_interaction not in anchor_candidates:
+                anchor_candidates.append(cleaned_interaction)
         world_model = WorldModel(
             screenshot_path=screenshot_path,
             environment=environment,
             browser_snapshot=browser_snapshot,
+            downloads=downloads,
             visible_windows=visible_windows,
             active_app=active_app,
             active_window_title=active_window_title,
+            foreground_window_handle=foreground_window_handle,
             clipboard_text=clipboard_text,
+            focused_control=None,
+            dom_available=dom_available,
+            uia_available=uia_available,
+            structured_sources=structured_sources,
+            visual_sources=["screenshot"],
+            anchor_candidates=anchor_candidates,
+            selection_text=selection_text,
+            file_observations=_infer_file_observations(mock_state, browser_snapshot),
             step_index=step_index,
             captured_at=captured_at,
         )
         driver = self.driver_registry.detect(world_model)
         world_model.active_driver = driver.name if driver is not None else None
+        if world_model.active_driver:
+            world_model.structured_sources.append(f"driver:{world_model.active_driver}")
         return world_model
 
     def _initialize_execution_state(self, *, task: str, run_dir: Path, world_model: WorldModel) -> ExecutionState:
@@ -713,6 +845,7 @@ class DesktopAgent:
             run_id=run_dir.name,
             task_graph=task_graph,
             world_model=world_model,
+            app_context={"pending_repair": None},
             started_at=time.time(),
             updated_at=time.time(),
         )
@@ -901,10 +1034,10 @@ def _build_step_history_entry(step: StepProposal, verification: VerificationResu
     if executed_actions:
         action_notes = ", ".join(_summarize_action(action) for action in executed_actions)
         lines.append(f"Executed actions: {action_notes}")
-    lines.append(f"Verification: {'passed' if verification.success else 'failed'}")
+    lines.append(f"Verification: {verification.status}")
     if verification.message:
         lines.append(f"Verification detail: {verification.message}")
-    lines.append(f"Task complete in this round: {'yes' if step.completes_subgoal and verification.success else 'no'}")
+    lines.append(f"Task complete in this round: {'yes' if step.completes_subgoal and verification.status == 'success' else 'no'}")
     return "\n".join(lines)
 
 
@@ -1000,6 +1133,138 @@ def _build_error_history_entry(
     lines.append(f"Error: {error}")
     lines.append("Task complete in this round: no")
     return "\n".join(lines)
+
+
+def _count_subgoal_recovery(execution_state: ExecutionState, subgoal_id: str, mode: str) -> int:
+    count = 0
+    for item in execution_state.repair_history:
+        if str(item.get("subgoal_id")) == subgoal_id and str(item.get("mode")) == mode:
+            count += 1
+    return count
+
+
+def _schedule_recovery(
+    *,
+    execution_state: ExecutionState,
+    subgoal: Subgoal,
+    step_proposal: StepProposal | None,
+    verification: VerificationResult,
+    step_index: int,
+    recoverable: bool = False,
+) -> str | None:
+    if verification.failure_kind in {"requires_auth", "requires_human", "approval_rejected"}:
+        execution_state.app_context.pop("pending_repair", None)
+        return None
+
+    repair_attempts = _count_subgoal_recovery(execution_state, subgoal.id, "repair")
+    replan_attempts = _count_subgoal_recovery(execution_state, subgoal.id, "replan")
+    capability_name = step_proposal.capability if step_proposal is not None else None
+
+    if repair_attempts < 2:
+        execution_state.app_context["pending_repair"] = {
+            "subgoal_id": subgoal.id,
+            "failure_kind": verification.failure_kind,
+            "capability": capability_name,
+            "recoverable": recoverable,
+            "step_index": step_index,
+        }
+        execution_state.repair_history.append(
+            {
+                "subgoal_id": subgoal.id,
+                "mode": "repair",
+                "failure_kind": verification.failure_kind,
+                "capability": capability_name,
+                "message": verification.message,
+                "step": step_index,
+                "created_at": time.time(),
+            }
+        )
+        return "repair"
+
+    if replan_attempts < 1:
+        execution_state.app_context.pop("pending_repair", None)
+        subgoal.failed_capabilities.clear()
+        execution_state.repair_history.append(
+            {
+                "subgoal_id": subgoal.id,
+                "mode": "replan",
+                "failure_kind": verification.failure_kind,
+                "capability": capability_name,
+                "message": verification.message,
+                "step": step_index,
+                "created_at": time.time(),
+            }
+        )
+        return "replan"
+
+    execution_state.app_context.pop("pending_repair", None)
+    return None
+
+
+def _verification_completed_subgoal(verification: VerificationResult | None) -> bool:
+    if verification is None or verification.status != "success":
+        return False
+    for item in verification.evidence:
+        if str(item.get("scope")) == "subgoal_completion" and bool(item.get("satisfied")):
+            return True
+    return False
+
+
+def _collect_anchor_candidates(
+    *,
+    active_window_title: str | None,
+    browser_snapshot: dict[str, Any] | None,
+    visible_windows: list[dict[str, Any]],
+    selection_text: str | None,
+) -> list[str]:
+    anchors: list[str] = []
+    if active_window_title:
+        anchors.append(str(active_window_title))
+    if browser_snapshot:
+        for key in ("title", "url", "text"):
+            value = str(browser_snapshot.get(key) or "").strip()
+            if value:
+                anchors.append(value[:200])
+    for item in visible_windows[:6]:
+        title = str(item.get("title") or "").strip()
+        if title:
+            anchors.append(title)
+    if selection_text:
+        anchors.append(str(selection_text)[:200])
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in anchors:
+        cleaned = " ".join(str(item).split()).strip()
+        lowered = cleaned.lower()
+        if not cleaned or lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(cleaned)
+    return deduped[:10]
+
+
+def _infer_file_observations(mock_state, browser_snapshot: dict[str, Any] | None) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    if isinstance(browser_snapshot, dict):
+        for item in browser_snapshot.get("downloads", []) or []:
+            if isinstance(item, dict):
+                observations.append(dict(item))
+    for attr_name in ("saved_paths", "downloaded_files"):
+        values = getattr(mock_state, attr_name, None) if mock_state is not None else None
+        if isinstance(values, list):
+            for item in values:
+                text = str(item).strip()
+                if text:
+                    observations.append({"path": text})
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in observations:
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
 
 
 def _merge_facts(existing, observed):
@@ -1137,6 +1402,63 @@ def load_agent_config(
     return config
 
 
+def _resolve_resume_run_dir(run_root: Path, run_id: str) -> Path:
+    normalized_run_id = str(run_id or "").strip()
+    if not normalized_run_id or "/" in normalized_run_id or "\\" in normalized_run_id:
+        raise RuntimeError("Run not found.")
+    run_dir = (run_root / normalized_run_id).resolve()
+    try:
+        run_dir.relative_to(run_root.resolve())
+    except ValueError as exc:
+        raise RuntimeError("Run not found.") from exc
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise RuntimeError("Run not found.")
+    return run_dir
+
+
+def _load_resume_context(run_root: Path, run_id: str) -> ResumeRunContext:
+    run_dir = _resolve_resume_run_dir(run_root, run_id)
+    summary_path = run_dir / "summary.json"
+    if not summary_path.exists():
+        raise RuntimeError("Run summary is missing.")
+    try:
+        summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Run summary could not be read.") from exc
+
+    task = str(summary_payload.get("task", "")).strip() or run_dir.name
+    started_at_value = summary_payload.get("started_at")
+    started_at = float(started_at_value) if isinstance(started_at_value, (int, float)) else time.time()
+
+    latest_step = 0
+    for step_path in run_dir.glob("step_*.json"):
+        stem = step_path.stem
+        try:
+            latest_step = max(latest_step, int(stem.split("_", 1)[1]))
+        except (IndexError, ValueError):
+            continue
+    summary_steps = int(summary_payload.get("steps", 0) or 0)
+    step_offset = max(summary_steps, latest_step)
+
+    execution_state: ExecutionState | None = None
+    state_path = run_dir / "state.json"
+    if state_path.exists():
+        try:
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Saved execution state could not be read.") from exc
+        if isinstance(state_payload, dict) and state_payload:
+            execution_state = ExecutionState.from_dict(state_payload)
+
+    return ResumeRunContext(
+        task=task,
+        run_dir=run_dir,
+        started_at=started_at,
+        step_offset=step_offset,
+        execution_state=execution_state,
+    )
+
+
 def run_task(
     task: str,
     *,
@@ -1167,6 +1489,46 @@ def run_task(
         decision_callback=decision_callback,
     )
     return agent.run(task)
+
+
+def resume_task(
+    run_id: str,
+    *,
+    config_path: str | Path | None = None,
+    planner_mode: str | None = None,
+    dry_run: bool | None = None,
+    real_mode: bool = False,
+    max_steps: int | None = None,
+    pause_after_action: float | None = None,
+    config_overrides: dict[str, Any] | None = None,
+    stop_requested: Callable[[], bool] | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    decision_callback: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+) -> AgentRunResult:
+    config = load_agent_config(
+        config_path=config_path,
+        planner_mode=planner_mode,
+        dry_run=dry_run,
+        real_mode=real_mode,
+        max_steps=max_steps,
+        pause_after_action=pause_after_action,
+        config_overrides=config_overrides,
+    )
+    resume_context = _load_resume_context(config.run_root, run_id)
+    agent = build_agent(
+        config,
+        stop_requested=stop_requested,
+        progress_callback=progress_callback,
+        decision_callback=decision_callback,
+    )
+    return agent.run(
+        resume_context.task,
+        run_dir=resume_context.run_dir,
+        execution_state=resume_context.execution_state,
+        started_at=resume_context.started_at,
+        step_offset=resume_context.step_offset,
+        history=list(resume_context.execution_state.memory) if resume_context.execution_state is not None else None,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

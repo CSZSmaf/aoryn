@@ -345,43 +345,64 @@ class TaskGraphPlanner:
             raw_subgoals = [task.strip()]
 
         subgoals: list[Subgoal] = []
+        dependencies: dict[str, list[str]] = {}
+        previous_subgoal_id: str | None = None
         for index, item in enumerate(raw_subgoals, start=1):
             title = item.strip()
             if not title:
                 continue
+            subgoal_id = f"subgoal_{index:02d}"
+            goal_type = _infer_goal_type(title)
+            prerequisites = [previous_subgoal_id] if previous_subgoal_id else []
             subgoals.append(
                 Subgoal(
-                    id=f"subgoal_{index:02d}",
+                    id=subgoal_id,
                     title=title,
+                    goal=title,
+                    goal_type=goal_type,
                     success_condition=_build_subgoal_success_condition(title, world_model=world_model),
+                    prerequisites=prerequisites,
+                    fallback_goal=_build_fallback_goal(title, goal_type),
                     capability_preference=_infer_capability_preference(title, world_model=world_model),
                     risk_level=_infer_subgoal_risk(title),
                     retry_budget=max(1, int(self.config.max_subgoal_retries or 1)),
+                    max_attempts=max(2, int(self.config.max_subgoal_retries or 1) + 1),
+                    completion_evidence=_infer_completion_evidence(title, goal_type=goal_type, world_model=world_model),
                 )
             )
+            dependencies[subgoal_id] = list(prerequisites)
+            previous_subgoal_id = subgoal_id
 
         if not subgoals:
             subgoals.append(
                 Subgoal(
                     id="subgoal_01",
                     title=task.strip() or "Complete the task.",
+                    goal=task.strip() or "Complete the task.",
+                    goal_type="handoff",
                     success_condition="Confirm that the requested task is completed.",
+                    completion_evidence={"kind": "state_change", "detail": "Confirm the requested outcome is visible."},
                     retry_budget=max(1, int(self.config.max_subgoal_retries or 1)),
+                    max_attempts=max(2, int(self.config.max_subgoal_retries or 1) + 1),
                 )
             )
+            dependencies["subgoal_01"] = []
 
         success_criteria = [item.success_condition for item in subgoals]
         constraints = [
             "Use guarded actions only.",
             "Switch capability when verification repeatedly fails.",
+            "Only mark subgoals complete when completion evidence is satisfied.",
         ]
         risk_points = [item.title for item in subgoals if item.risk_level in {"high", "critical"}]
         return TaskGraph(
             task=task.strip(),
             subgoals=subgoals,
+            dependencies=dependencies,
             success_criteria=success_criteria,
             constraints=constraints,
             risk_points=risk_points,
+            completion_summary=_build_completion_summary(task, subgoals),
         )
 
 
@@ -630,6 +651,126 @@ def _build_subgoal_success_condition(title: str, *, world_model: WorldModel | No
     if world_model is not None and world_model.active_window_title:
         return f"Verify that progress is visible in {world_model.active_window_title} after: {normalized}"
     return f"Verify that the subgoal is completed: {normalized}"
+
+
+def _infer_goal_type(title: str) -> str:
+    lowered = title.strip().lower()
+    mapping = (
+        ("navigate", ("open ", "launch ", "visit ", "go to", "navigate", "search", "搜索", "打开", "启动", "访问")),
+        ("locate", ("find", "locate", "look for", "查找", "定位")),
+        ("read", ("read", "review", "inspect", "look at", "阅读", "查看")),
+        ("extract", ("extract", "collect", "capture", "record", "summarize", "提取", "收集", "记录", "总结")),
+        ("transform", ("transform", "edit", "clean", "sort", "filter", "compare", "calculate", "compute", "evaluate", "整理", "编辑", "排序", "筛选", "比较", "计算")),
+        ("fill", ("type", "fill", "enter", "input", "paste", "输入", "填写", "粘贴")),
+        ("confirm", ("click", "select", "choose", "confirm", "approve", "submit", "点击", "选择", "确认", "提交")),
+        ("transfer", ("copy", "move", "send", "share", "复制", "移动", "发送")),
+        ("save", ("save", "download", "upload", "export", "bookmark", "收藏", "保存", "下载", "上传", "导出")),
+    )
+    for goal_type, keywords in mapping:
+        if any(keyword in lowered for keyword in keywords):
+            return goal_type
+    return "handoff"
+
+
+def _build_fallback_goal(title: str, goal_type: str) -> str:
+    if goal_type == "navigate":
+        return f"Re-open or refocus the target destination for: {title}"
+    if goal_type in {"fill", "confirm"}:
+        return f"Relocate the target control before retrying: {title}"
+    if goal_type in {"extract", "read"}:
+        return f"Recover the relevant page, window, or selection for: {title}"
+    if goal_type == "save":
+        return f"Verify the target path and save location for: {title}"
+    return f"Re-establish the prerequisites for: {title}"
+
+
+def _infer_completion_evidence(
+    title: str,
+    *,
+    goal_type: str,
+    world_model: WorldModel | None = None,
+) -> dict[str, str]:
+    lowered = title.strip().lower()
+    if goal_type == "navigate":
+        if app_name := _extract_target_app_name(title):
+            return {"kind": "active_app_is", "value": app_name, "detail": f"The target application becomes active for: {title}"}
+        if browser_target := _extract_browser_target(title):
+            evidence_kind = "browser_text_contains" if any(token in lowered for token in ("search", "搜索")) else "browser_url_contains"
+            return {"kind": evidence_kind, "value": browser_target, "detail": f"The browser reflects the requested destination for: {title}"}
+        if any(token in lowered for token in ("shopping", "results", "search", "browser", "website", "web", "网页", "网站", "搜索", "购物")):
+            return {"kind": "browser_available", "detail": f"A browser destination is visible after: {title}"}
+        if any(token in lowered for token in ("browser", "website", "web", "search", "visit", "网页", "网站", "搜索", "访问")):
+            return {"kind": "browser_available", "detail": f"A browser destination is visible after: {title}"}
+        return {"kind": "window_contains", "value": _clean_sub_goal_part(title), "detail": f"The target window is visible for: {title}"}
+    if goal_type in {"read", "extract", "transform"}:
+        if content_hint := _extract_content_hint(title):
+            return {"kind": "fact_contains", "value": content_hint, "detail": f"Structured facts should confirm visible progress for: {title}"}
+        return {"kind": "fact_contains", "value": title, "detail": f"Structured facts should confirm visible progress for: {title}"}
+    if goal_type == "fill":
+        if content_hint := _extract_content_hint(title):
+            return {"kind": "fact_contains", "value": content_hint, "detail": f"The intended input should be visible for: {title}"}
+        return {"kind": "clipboard_or_input_changed", "detail": f"The intended input is visible for: {title}"}
+    if goal_type == "save":
+        return {"kind": "file_observation", "detail": f"A file or saved artifact is observed for: {title}"}
+    if goal_type == "confirm":
+        return {"kind": "state_change", "detail": f"The target control or page state changes for: {title}"}
+    if world_model is not None and world_model.active_window_title:
+        return {"kind": "window_contains", "value": world_model.active_window_title, "detail": f"Visible progress persists in {world_model.active_window_title}."}
+    return {"kind": "state_change", "detail": f"Visible state changes confirm: {title}"}
+
+
+def _build_completion_summary(task: str, subgoals: list[Subgoal]) -> str:
+    if not subgoals:
+        return f"Complete the task: {task.strip()}"
+    joined = "; ".join(f"{item.id}: {item.success_condition}" for item in subgoals)
+    return f"Task complete when every subgoal satisfies its success condition. {joined}"
+
+
+def _extract_target_app_name(title: str) -> str | None:
+    lowered = title.strip().lower()
+    app_aliases = {
+        "notepad": ("notepad", "记事本"),
+        "calculator": ("calculator", "calc", "计算器"),
+        "explorer": ("explorer", "file explorer", "资源管理器"),
+        "browser": ("browser", "edge", "chrome", "firefox", "浏览器"),
+        "vscode": ("visual studio code", "vscode", "cursor"),
+        "excel": ("excel",),
+        "powerpoint": ("powerpoint", "ppt"),
+        "word": ("word",),
+    }
+    for app_name, keywords in app_aliases.items():
+        if any(keyword in lowered for keyword in keywords):
+            return app_name
+    return None
+
+
+def _extract_browser_target(title: str) -> str | None:
+    stripped = title.strip()
+    if match := re.search(r"https?://[^\s]+", stripped, re.I):
+        return match.group(0).rstrip(".,;)")
+    if match := re.search(r"(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s]*)?", stripped, re.I):
+        return match.group(0).rstrip(".,;)")
+    if match := re.search(r"(?:search\s+for|搜索)\s+(?P<query>.+)$", stripped, re.I):
+        query = _clean_sub_goal_part(match.group("query"))
+        return query.split()[0] if query else None
+    return None
+
+
+def _extract_content_hint(title: str) -> str | None:
+    stripped = title.strip()
+    patterns = (
+        re.compile(r"^(?:type|fill|enter|input|paste|calculate|compute|evaluate)\s+(?P<content>.+)$", re.I),
+        re.compile(r"^(?:输入|填写|粘贴|计算)\s*(?P<content>.+)$"),
+        re.compile(r"^(?:search\s+for|find|look\s+for)\s+(?P<content>.+)$", re.I),
+    )
+    for pattern in patterns:
+        match = pattern.match(stripped)
+        if not match:
+            continue
+        content = _clean_sub_goal_part(match.group("content"))
+        if content:
+            return content[:120]
+    return None
 
 
 def _infer_capability_preference(title: str, *, world_model: WorldModel | None = None) -> str | None:

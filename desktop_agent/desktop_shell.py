@@ -284,6 +284,8 @@ if QApplication is not None:
             on_stop_task,
             on_submit_text,
             on_continue_follow_up,
+            on_resume_run,
+            on_decide_job,
         ) -> None:
             flags = (
                 Qt.WindowType.Window
@@ -304,6 +306,9 @@ if QApplication is not None:
             self._allow_close = False
             self._active_job: dict[str, Any] | None = None
             self._follow_up_draft = ""
+            self._resume_run_id: str | None = None
+            self._resume_task = ""
+            self._resume_reason = ""
             self._waiting_status = ""
             self._started_at: float | None = None
             self._drag_global: QPoint | None = None
@@ -313,6 +318,8 @@ if QApplication is not None:
             self._on_stop_task = on_stop_task
             self._on_submit_text = on_submit_text
             self._on_continue_follow_up = on_continue_follow_up
+            self._on_resume_run = on_resume_run
+            self._on_decide_job = on_decide_job
 
             self._timer = QTimer(self)
             self._timer.setInterval(1000)
@@ -364,7 +371,7 @@ if QApplication is not None:
 
             self.stop_button = QPushButton("停止", self.card)
             self.stop_button.setObjectName("floatingDangerButton")
-            self.stop_button.clicked.connect(self._on_stop_task)
+            self.stop_button.clicked.connect(self._handle_stop_action)
             card_layout.addWidget(self.stop_button, 0, Qt.AlignmentFlag.AlignRight)
 
             self.open_button = QPushButton("打开", self.card)
@@ -484,6 +491,9 @@ if QApplication is not None:
         def show_idle(self, *, status: str = f"{APP_NAME} 就绪") -> None:  # pragma: no cover - GUI runtime behavior
             self._active_job = None
             self._follow_up_draft = ""
+            self._resume_run_id = None
+            self._resume_task = ""
+            self._resume_reason = ""
             self._waiting_status = status
             self._started_at = None
             self._timer.stop()
@@ -500,6 +510,9 @@ if QApplication is not None:
         def show_waiting_follow_up(self, draft: str, *, status: str = "下一条任务已排队") -> None:  # pragma: no cover
             self._active_job = None
             self._follow_up_draft = draft
+            self._resume_run_id = None
+            self._resume_task = ""
+            self._resume_reason = ""
             self._waiting_status = status
             self._started_at = None
             self._timer.stop()
@@ -509,9 +522,34 @@ if QApplication is not None:
             self.show()
             self.raise_()
 
+        def show_resume_prompt(
+            self,
+            *,
+            run_id: str,
+            task: str,
+            reason: str = "",
+            status: str = "Resume when the manual check is done.",
+        ) -> None:  # pragma: no cover - GUI runtime behavior
+            self._active_job = None
+            self._follow_up_draft = ""
+            self._resume_run_id = str(run_id or "").strip() or None
+            self._resume_task = str(task or "").strip()
+            self._resume_reason = str(reason or "").strip()
+            self._waiting_status = status
+            self._started_at = None
+            self._timer.stop()
+            self.timer_label.setText("--")
+            self.input_line.clear()
+            self._apply_layout_state()
+            self.show()
+            self.raise_()
+
         def update_active_job(self, active_job: dict[str, Any] | None, follow_up_draft: str) -> None:  # pragma: no cover
             self._active_job = active_job
             self._follow_up_draft = follow_up_draft
+            self._resume_run_id = None
+            self._resume_task = ""
+            self._resume_reason = ""
             self._waiting_status = ""
             result = active_job.get("result") if isinstance(active_job, dict) else {}
             started_at = result.get("started_at") or active_job.get("started_at") if isinstance(result, dict) else active_job.get("started_at")
@@ -534,7 +572,29 @@ if QApplication is not None:
             self.input_line.clear()
 
         def _handle_continue_follow_up(self) -> None:  # pragma: no cover - GUI runtime behavior
+            if self._is_approval_job():
+                self._on_decide_job("approve")
+                return
+            if self._resume_run_id:
+                self._on_resume_run(self._resume_run_id)
+                return
             self._on_continue_follow_up()
+
+        def _handle_stop_action(self) -> None:  # pragma: no cover - GUI runtime behavior
+            if self._is_approval_job():
+                self._on_decide_job("reject")
+                return
+            self._on_stop_task()
+
+        def _is_approval_job(self) -> bool:
+            active = self._active_job or {}
+            if not active:
+                return False
+            if str(active.get("status") or "").strip().lower() == "approval":
+                return True
+            result = active.get("result") if isinstance(active, dict) else {}
+            pending_decision = result.get("pending_decision") if isinstance(result, dict) else None
+            return isinstance(pending_decision, dict) and bool(pending_decision)
 
         def _refresh_timer_label(self) -> None:  # pragma: no cover - GUI runtime behavior
             if self._started_at is None:
@@ -561,10 +621,11 @@ if QApplication is not None:
             active = self._active_job or {}
             has_job = bool(self._active_job)
             has_follow_up = bool(self._follow_up_draft)
+            has_resume_prompt = bool(self._resume_run_id)
             stop_requested = bool(active.get("cancel_requested")) if has_job else False
             show_input = has_job or has_follow_up
 
-            width = self._ACTIVE_WIDTH if show_input else self._IDLE_WIDTH
+            width = self._ACTIVE_WIDTH if (show_input or has_resume_prompt) else self._IDLE_WIDTH
             self.setFixedSize(width, self._WINDOW_HEIGHT)
             self.card.setFixedSize(width, self._WINDOW_HEIGHT)
             self._apply_window_shape()
@@ -573,6 +634,13 @@ if QApplication is not None:
                 title = str(active.get("task") or "正在执行任务")
                 if stop_requested:
                     title = f"正在停止 · {title}"
+            elif has_resume_prompt:
+                title = self._resume_reason or self._waiting_status or "Manual verification paused"
+                if self._resume_task:
+                    title = f"Resume: {self._resume_task}"
+            elif has_resume_prompt:
+                self.input_line.clear()
+                self.continue_button.setText("Resume")
             elif has_follow_up:
                 title = self._waiting_status or "下一条任务已排队"
             else:
@@ -583,7 +651,7 @@ if QApplication is not None:
             self.stop_button.setVisible(has_job)
             self.stop_button.setEnabled(has_job and not stop_requested)
             self.stop_button.setText("停止中…" if stop_requested else "停止")
-            self.continue_button.setVisible(not has_job and has_follow_up)
+            self.continue_button.setVisible((not has_job and has_follow_up) or has_resume_prompt)
             self.input_line.setVisible(show_input)
             self.submit_button.setVisible(show_input)
 
@@ -598,6 +666,70 @@ if QApplication is not None:
             else:
                 self.input_line.clear()
                 self.input_line.setPlaceholderText("输入任务…")
+
+
+        def _apply_layout_state(self) -> None:  # pragma: no cover - GUI runtime behavior
+            active = self._active_job or {}
+            has_job = bool(self._active_job)
+            has_follow_up = bool(self._follow_up_draft)
+            has_resume_prompt = bool(self._resume_run_id)
+            is_approval = self._is_approval_job()
+            stop_requested = bool(active.get("cancel_requested")) if has_job else False
+            show_input = (has_job and not is_approval) or has_follow_up
+
+            width = self._ACTIVE_WIDTH if (show_input or has_resume_prompt) else self._IDLE_WIDTH
+            self.setFixedSize(width, self._WINDOW_HEIGHT)
+            self.card.setFixedSize(width, self._WINDOW_HEIGHT)
+            self._apply_window_shape()
+
+            if is_approval:
+                result = active.get("result") if isinstance(active, dict) else {}
+                pending_decision = result.get("pending_decision") if isinstance(result, dict) else None
+                title = "Approval needed"
+                if isinstance(pending_decision, dict):
+                    title = str(pending_decision.get("summary") or pending_decision.get("reason") or title)
+            elif has_job:
+                title = str(active.get("task") or "Running task")
+                if stop_requested:
+                    title = f"Stopping | {title}"
+            elif has_resume_prompt:
+                title = self._resume_reason or self._waiting_status or "Manual verification paused"
+                if self._resume_task:
+                    title = f"Resume: {self._resume_task}"
+            elif has_follow_up:
+                title = self._waiting_status or "Queued follow-up task"
+            else:
+                title = self._waiting_status or f"{APP_NAME} ready"
+            self.task_label.setText(title[:42])
+
+            self.timer_label.setVisible(has_job and not is_approval)
+            self.stop_button.setVisible(has_job)
+            self.stop_button.setEnabled(has_job and not stop_requested)
+            self.stop_button.setText("Reject" if is_approval else ("Stopping" if stop_requested else "Stop"))
+            self.continue_button.setVisible(is_approval or (not has_job and has_follow_up) or has_resume_prompt)
+            self.input_line.setVisible(show_input)
+            self.submit_button.setVisible(show_input)
+
+            if is_approval:
+                self.input_line.clear()
+                self.continue_button.setText("Approve")
+            elif has_job:
+                self.submit_button.setText("Queue")
+                self.input_line.setPlaceholderText("Add the next task")
+                self.continue_button.setText("Continue")
+            elif has_resume_prompt:
+                self.input_line.clear()
+                self.continue_button.setText("Resume")
+            elif has_follow_up:
+                self.submit_button.setText("Update")
+                self.input_line.setPlaceholderText("Update the queued follow-up")
+                self.continue_button.setText("Continue")
+                if not self.input_line.text().strip():
+                    self.input_line.setText(self._follow_up_draft)
+            else:
+                self.input_line.clear()
+                self.input_line.setPlaceholderText("Enter a task")
+                self.continue_button.setText("Continue")
 
 
 class DesktopShellController:
@@ -628,10 +760,15 @@ class DesktopShellController:
             on_stop_task=self._stop_active_task,
             on_submit_text=self._submit_or_stage_follow_up,
             on_continue_follow_up=self._continue_follow_up,
+            on_resume_run=self._resume_interrupted_run,
+            on_decide_job=self._decide_active_job,
         )
         self.floating.move(24, 120)
         self.current_active_job_id: str | None = None
         self.current_active_job: dict[str, Any] | None = None
+        self.paused_run_id: str | None = None
+        self.paused_task = ""
+        self.paused_reason = ""
         self.follow_up_draft = ""
         self.auto_collapsed_for_current_job = False
         self.success_feedback_deadline = 0.0
@@ -665,6 +802,20 @@ class DesktopShellController:
         self.server.shutdown()
         self.server.server_close()
 
+    def _clear_paused_run(self) -> None:
+        self.paused_run_id = None
+        self.paused_task = ""
+        self.paused_reason = ""
+
+    def _show_paused_run_prompt(self) -> None:  # pragma: no cover - GUI runtime behavior
+        if not self.paused_run_id:
+            return
+        self.floating.show_resume_prompt(
+            run_id=self.paused_run_id,
+            task=self.paused_task,
+            reason=self.paused_reason,
+        )
+
     def refresh_overview(self) -> None:  # pragma: no cover - exercised through runtime UI
         try:
             payload = requests.get(f"{self.base_url}/api/overview", timeout=1.5).json()
@@ -681,14 +832,15 @@ class DesktopShellController:
         jobs = payload.get("jobs") or []
 
         if active_job:
+            self._clear_paused_run()
             self.current_active_job = active_job
             active_job_id = str(active_job.get("id") or "")
             if active_job_id and active_job_id != self.current_active_job_id:
                 self.current_active_job_id = active_job_id
                 self.auto_collapsed_for_current_job = True
                 self._hide_main_window_for_floating()
-            if self.main_window.isVisible():
-                self.floating.hide_floating()
+            elif self.main_window.isVisible():
+                self._hide_main_window_for_floating()
             else:
                 self.floating.update_active_job(active_job, self.follow_up_draft)
             return
@@ -699,9 +851,16 @@ class DesktopShellController:
             self.current_active_job = None
             self.current_active_job_id = None
 
+        if self.paused_run_id:
+            if self.main_window.isVisible():
+                self._hide_main_window_for_floating()
+            else:
+                self._show_paused_run_prompt()
+            return
+
         if self.follow_up_draft:
             if self.main_window.isVisible():
-                self.floating.hide_floating()
+                self._hide_main_window_for_floating()
             else:
                 self.floating.show_waiting_follow_up(self.follow_up_draft)
             return
@@ -742,6 +901,48 @@ class DesktopShellController:
         self.success_feedback_deadline = time.time() + 3.0
         if not self.main_window.isVisible():
             self.floating.show_idle(status="任务完成")
+
+    def _handle_finished_job(self, job: dict[str, Any] | None) -> None:  # pragma: no cover - GUI runtime behavior
+        result = job.get("result") if isinstance(job, dict) else {}
+        run_id = result.get("run_id") if isinstance(result, dict) else None
+        if job and job.get("requires_human"):
+            self.last_finished_run_id = str(run_id or "") or None
+            self.paused_run_id = self.last_finished_run_id
+            self.paused_task = str(job.get("task") or result.get("task") or "")
+            self.paused_reason = str(job.get("interruption_reason") or result.get("interruption_reason") or "")
+            if self.main_window.isVisible():
+                self._hide_main_window_for_floating()
+            else:
+                self._show_paused_run_prompt()
+            return
+
+        if job and job.get("status") in {"failed", "attention"}:
+            self._clear_paused_run()
+            self.last_finished_run_id = str(run_id or "") or None
+            if self.main_window.isVisible():
+                self._hide_main_window_for_floating()
+            else:
+                self.floating.show_idle(status="Task needs review")
+            return
+
+        if job and (job.get("cancelled") or job.get("status") == "cancelled" or (isinstance(result, dict) and result.get("cancelled"))):
+            self._clear_paused_run()
+            self.last_finished_run_id = str(run_id or "") or self.last_finished_run_id
+            self.success_feedback_deadline = time.time() + 3.0
+            if not self.main_window.isVisible():
+                self.floating.show_idle(status="Task stopped")
+            return
+
+        if self.follow_up_draft:
+            self._clear_paused_run()
+            if not self.main_window.isVisible():
+                self.floating.show_waiting_follow_up(self.follow_up_draft, status="Ready to continue")
+            return
+
+        self._clear_paused_run()
+        self.success_feedback_deadline = time.time() + 3.0
+        if not self.main_window.isVisible():
+            self.floating.show_idle(status="Task complete")
 
     def _build_tray(self):  # pragma: no cover - GUI runtime behavior
         tray = QSystemTrayIcon(QIcon(str(self.icons_root / "app-icon-64.png")), self.qt_app)
@@ -799,6 +1000,21 @@ class DesktopShellController:
             return
         if self.success_feedback_deadline and time.time() < self.success_feedback_deadline:
             self.floating.show_idle(status="任务完成")
+            return
+        self.floating.show_idle()
+
+    def _show_floating_for_current_state(self) -> None:  # pragma: no cover - GUI runtime behavior
+        if self.current_active_job:
+            self.floating.update_active_job(self.current_active_job, self.follow_up_draft)
+            return
+        if self.paused_run_id:
+            self._show_paused_run_prompt()
+            return
+        if self.follow_up_draft:
+            self.floating.show_waiting_follow_up(self.follow_up_draft)
+            return
+        if self.success_feedback_deadline and time.time() < self.success_feedback_deadline:
+            self.floating.show_idle(status="Task complete")
             return
         self.floating.show_idle()
 
@@ -874,6 +1090,51 @@ class DesktopShellController:
             return response.ok
         except Exception:
             return False
+
+    def _resume_interrupted_run(self, run_id: str | None = None) -> bool:  # pragma: no cover - GUI runtime behavior
+        target_run_id = str(run_id or self.paused_run_id or "").strip()
+        if not target_run_id:
+            return False
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/runs/{target_run_id}/resume",
+                json={
+                    "config_overrides": self._read_runtime_preferences(),
+                },
+                timeout=2.0,
+            )
+        except Exception:
+            return False
+        if not response.ok:
+            return False
+        payload = response.json() if response.content else {}
+        if isinstance(payload, dict):
+            self.current_active_job = payload
+            self.current_active_job_id = str(payload.get("id") or "") or self.current_active_job_id
+        self._clear_paused_run()
+        self.success_feedback_deadline = 0
+        self._hide_main_window_for_floating()
+        return True
+
+    def _decide_active_job(self, decision: str) -> bool:  # pragma: no cover - GUI runtime behavior
+        active_job_id = str(self.current_active_job_id or (self.current_active_job or {}).get("id") or "").strip()
+        if not active_job_id:
+            return False
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/jobs/{active_job_id}/decision",
+                json={"decision": str(decision or "").strip().lower()},
+                timeout=2.0,
+            )
+        except Exception:
+            return False
+        if not response.ok:
+            return False
+        payload = response.json() if response.content else {}
+        if isinstance(payload, dict) and self.current_active_job:
+            self.current_active_job = {**self.current_active_job, **payload}
+        self._hide_main_window_for_floating()
+        return True
 
     def _submit_or_stage_follow_up(self, text: str) -> None:  # pragma: no cover - GUI runtime behavior
         if self.current_active_job_id:

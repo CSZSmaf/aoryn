@@ -30,7 +30,7 @@ from desktop_agent.chat_support import (
     sanitize_assistant_chat_text,
     sanitize_chat_messages,
 )
-from desktop_agent.controller import discover_config_path, load_agent_config, run_task
+from desktop_agent.controller import discover_config_path, load_agent_config, resume_task, run_task
 from desktop_agent.history import list_runs, load_run_details, resolve_artifact_path
 from desktop_agent.provider_tools import (
     ProviderModelEntry,
@@ -72,6 +72,7 @@ class DashboardJob:
     dry_run: bool
     max_steps: int | None
     pause_after_action: float | None
+    resume_run_id: str | None = None
     config_overrides: dict[str, Any] = field(default_factory=dict)
     status: str = "queued"
     created_at: float = field(default_factory=time.time)
@@ -95,6 +96,7 @@ class DashboardJob:
             "dry_run": self.dry_run,
             "max_steps": self.max_steps,
             "pause_after_action": self.pause_after_action,
+            "resume_run_id": self.resume_run_id,
             "config_overrides": self.config_overrides,
             "status": self.status,
             "created_at": self.created_at,
@@ -173,6 +175,54 @@ class TaskQueue:
         thread.start()
         return job
 
+    def resume(
+        self,
+        *,
+        run_id: str,
+        config_overrides: dict[str, Any] | None = None,
+    ) -> DashboardJob:
+        clean_run_id = str(run_id or "").strip()
+        if not clean_run_id:
+            raise ValueError("Run id is required.")
+
+        with self.lock:
+            if self.active_job_id is not None:
+                raise RuntimeError("Another task is running. Please wait for it to finish.")
+
+            config = load_agent_config(self.config_path)
+            details = load_run_details(config.run_root, clean_run_id)
+            if details is None:
+                raise RuntimeError("Run not found.")
+            if bool(details.get("completed")):
+                raise RuntimeError("This run is already complete.")
+            if not bool(details.get("requires_human")):
+                raise RuntimeError("This run is not waiting for manual continuation.")
+
+            resolved_overrides = dict(config_overrides or {})
+            job = DashboardJob(
+                job_id=uuid.uuid4().hex[:12],
+                task=str(details.get("task") or clean_run_id),
+                planner_mode=str(details.get("planner_mode") or "auto"),
+                dry_run=bool(details.get("dry_run")),
+                max_steps=None,
+                pause_after_action=None,
+                resume_run_id=clean_run_id,
+                config_overrides=resolved_overrides,
+            )
+            self.jobs[job.job_id] = job
+            self.cancel_events[job.job_id] = threading.Event()
+            self.decision_events[job.job_id] = threading.Event()
+            self.active_job_id = job.job_id
+
+        thread = threading.Thread(
+            target=self._run_job,
+            args=(job.job_id,),
+            name=f"desktop-agent-job-{job.job_id}",
+            daemon=True,
+        )
+        thread.start()
+        return job
+
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self.lock:
             job = self.jobs.get(job_id)
@@ -234,8 +284,9 @@ class TaskQueue:
             cancel_event = self.cancel_events.get(job_id)
 
         try:
-            result = run_task(
-                job.task,
+            runner = resume_task if job.resume_run_id else run_task
+            result = runner(
+                job.resume_run_id or job.task,
                 config_path=self.config_path,
                 planner_mode=job.planner_mode,
                 dry_run=job.dry_run,
@@ -915,6 +966,18 @@ class DashboardApp:
                     except (RuntimeError, ValueError) as exc:
                         return self._send_error(HTTPStatus.CONFLICT, str(exc))
                     return self._send_json(job, status=HTTPStatus.ACCEPTED)
+
+                if path.startswith("/api/runs/") and path.endswith("/resume"):
+                    run_id = path.removeprefix("/api/runs/").removesuffix("/resume").strip("/")
+                    try:
+                        resolved_overrides = app._resolve_request_config_overrides(body.get("config_overrides"))
+                        job = app.queue.resume(
+                            run_id=run_id,
+                            config_overrides=resolved_overrides,
+                        )
+                    except (RuntimeError, ValueError) as exc:
+                        return self._send_error(HTTPStatus.CONFLICT, str(exc))
+                    return self._send_json(job.to_dict(), status=HTTPStatus.ACCEPTED)
 
                 if path == "/api/chat":
                     try:

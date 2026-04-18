@@ -112,8 +112,28 @@ class CapabilityAdapter:
     def observe(self, world_model: WorldModel) -> list[ObservedFact]:
         return []
 
+    def extract_anchors(self, world_model: WorldModel) -> list[str]:
+        anchors: list[str] = []
+        if world_model.active_window_title:
+            anchors.append(str(world_model.active_window_title))
+        for fact in world_model.facts:
+            if fact.value:
+                anchors.append(str(fact.value))
+        return anchors[:8]
+
     def can_handle(self, subgoal: Subgoal, world_model: WorldModel) -> float:
         return 0.0
+
+    def plan_step(
+        self,
+        *,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        execution_state: ExecutionState,
+        config: AgentConfig,
+        planner,
+    ) -> StepProposal | None:
+        return None
 
     def propose_step(
         self,
@@ -124,7 +144,13 @@ class CapabilityAdapter:
         config: AgentConfig,
         planner,
     ) -> StepProposal | None:
-        return None
+        return self.plan_step(
+            subgoal=subgoal,
+            world_model=world_model,
+            execution_state=execution_state,
+            config=config,
+            planner=planner,
+        )
 
     def build_expected_evidence(
         self,
@@ -192,9 +218,55 @@ class CapabilityAdapter:
                         required=False,
                     )
                 )
-        if not evidence and actions:
-            evidence.append(EvidenceRequirement(kind="action_executed", detail="The guarded action should execute without errors."))
         return evidence
+
+    def build_progress_signals(
+        self,
+        *,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        actions: list[Action],
+    ) -> list[str]:
+        signals = [subgoal.success_condition]
+        if world_model.active_window_title:
+            signals.append(world_model.active_window_title)
+        for action in actions:
+            target = action.selector or action.text or action.title or action.app
+            if target:
+                signals.append(str(target))
+        return [item for item in signals if item][:6]
+
+    def plan_repair(
+        self,
+        *,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        execution_state: ExecutionState,
+        previous_step: StepProposal | None,
+        verification: VerificationResult | None,
+        config: AgentConfig,
+    ) -> StepProposal | None:
+        if verification is not None and verification.failure_kind == "blocked_by_ui":
+            focus_target = world_model.active_window_title or (previous_step.current_focus if previous_step else None)
+            if focus_target:
+                action = Action.from_dict({"type": "focus_window", "title": focus_target})
+                return StepProposal(
+                    intent=f"Refocus the target window before retrying: {subgoal.title}",
+                    actions=[action],
+                    expected_evidence=[
+                        EvidenceRequirement(
+                            kind="window_contains",
+                            value=focus_target,
+                            detail="The target window should become active again.",
+                        )
+                    ],
+                    progress_signals=[focus_target],
+                    repair_strategy=["retry_with_fresh_observation"],
+                    risk_level="low",
+                    capability=self.name,
+                    current_focus=focus_target,
+                )
+        return None
 
     def verify_step(
         self,
@@ -206,6 +278,7 @@ class CapabilityAdapter:
     ) -> VerificationResult:
         evidence_results: list[dict[str, Any]] = []
         all_required_satisfied = True
+        any_satisfied = False
         for requirement in step.expected_evidence:
             satisfied = _evaluate_evidence(requirement, after)
             evidence_results.append(
@@ -217,14 +290,50 @@ class CapabilityAdapter:
                     "satisfied": satisfied,
                 }
             )
+            any_satisfied = any_satisfied or satisfied
             if requirement.required and not satisfied:
                 all_required_satisfied = False
 
-        if all_required_satisfied:
-            return VerificationResult(success=True, evidence=evidence_results, message="Evidence requirements were satisfied.")
+        completion_requirement = _completion_requirement(subgoal)
+        completion_satisfied = True
+        if completion_requirement is not None:
+            completion_satisfied = _evaluate_completion_evidence(
+                requirement=completion_requirement,
+                before=before,
+                after=after,
+            )
+            evidence_results.append(
+                {
+                    "kind": completion_requirement.kind,
+                    "value": completion_requirement.value,
+                    "detail": completion_requirement.detail,
+                    "required": True,
+                    "satisfied": completion_satisfied,
+                    "scope": "subgoal_completion",
+                }
+            )
+
+        if all_required_satisfied and completion_satisfied:
+            return VerificationResult(
+                success=True,
+                status="success",
+                evidence=evidence_results,
+                message="Evidence requirements were satisfied.",
+            )
+
+        progress_detected = any_satisfied or _detect_progress_signals(step.progress_signals, before=before, after=after)
+        if progress_detected:
+            return VerificationResult(
+                success=False,
+                status="partial_progress",
+                evidence=evidence_results,
+                failure_kind="transient_failure" if completion_satisfied else "goal_ambiguous",
+                message=f"Observed partial progress for {subgoal.title}, but completion evidence is still missing.",
+            )
 
         return VerificationResult(
             success=False,
+            status="failed",
             evidence=evidence_results,
             failure_kind="capability_mismatch",
             message=f"Could not verify subgoal progress for {subgoal.title}.",
@@ -244,7 +353,18 @@ class BrowserDOMCapability(CapabilityAdapter):
             facts.append(ObservedFact(source=self.name, key="url", value=str(browser_snapshot["url"])))
         if browser_snapshot.get("title"):
             facts.append(ObservedFact(source=self.name, key="title", value=str(browser_snapshot["title"])))
+        if browser_snapshot.get("text"):
+            facts.append(ObservedFact(source=self.name, key="text", value=str(browser_snapshot["text"])[:400], confidence=0.8))
         return facts
+
+    def extract_anchors(self, world_model: WorldModel) -> list[str]:
+        browser_snapshot = world_model.browser_snapshot or {}
+        anchors: list[str] = []
+        for key in ("title", "url", "text"):
+            value = str(browser_snapshot.get(key) or "").strip()
+            if value:
+                anchors.append(value[:200])
+        return anchors[:6]
 
     def can_handle(self, subgoal: Subgoal, world_model: WorldModel) -> float:
         text = _normalize_text(subgoal.title)
@@ -304,6 +424,56 @@ class BrowserDOMCapability(CapabilityAdapter):
             )
         return None
 
+    def plan_repair(
+        self,
+        *,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        execution_state: ExecutionState,
+        previous_step: StepProposal | None,
+        verification: VerificationResult | None,
+        config: AgentConfig,
+    ) -> StepProposal | None:
+        browser_snapshot = world_model.browser_snapshot or {}
+        if verification is not None and verification.failure_kind == "stale_target":
+            target = None
+            for action in (previous_step.actions if previous_step is not None else []):
+                target = action.selector or action.text or target
+                if target:
+                    break
+            if target:
+                action = Action.from_dict({"type": "browser_dom_wait", "selector": target if target.startswith(("#", ".", "[")) else None, "text": None if target.startswith(("#", ".", "[")) else target, "seconds": config.browser_dom_timeout})
+                return StepProposal(
+                    intent=f"Wait for the browser target to become stable again: {subgoal.title}",
+                    actions=[action],
+                    expected_evidence=[EvidenceRequirement(kind="browser_available", detail="A live browser DOM should be available.")],
+                    progress_signals=[target],
+                    repair_strategy=["re-anchor_target", "retry_with_fresh_observation"],
+                    risk_level="low",
+                    capability=self.name,
+                    current_focus=subgoal.title,
+                )
+        if not browser_snapshot.get("url"):
+            action = Action.from_dict({"type": "open_app_if_needed", "app": "browser"})
+            return StepProposal(
+                intent=f"Re-open the browser context for: {subgoal.title}",
+                actions=[action],
+                expected_evidence=[EvidenceRequirement(kind="active_app_is", value="browser", detail="The browser should be active.")],
+                progress_signals=[subgoal.title],
+                repair_strategy=["refresh_dom_context", "retry_with_fresh_observation"],
+                risk_level="low",
+                capability=self.name,
+                current_focus=subgoal.title,
+            )
+        return super().plan_repair(
+            subgoal=subgoal,
+            world_model=world_model,
+            execution_state=execution_state,
+            previous_step=previous_step,
+            verification=verification,
+            config=config,
+        )
+
 
 class ClipboardCapability(CapabilityAdapter):
     name = "clipboard"
@@ -335,7 +505,13 @@ class ClipboardCapability(CapabilityAdapter):
             intent=f"Use the clipboard to progress: {subgoal.title}",
             actions=actions,
             capability=self.name,
-            expected_evidence=[EvidenceRequirement(kind="action_executed", detail="The clipboard shortcut should execute.")],
+            expected_evidence=[
+                EvidenceRequirement(
+                    kind="clipboard_or_input_changed",
+                    detail="Clipboard or focused input state should change after the shortcut.",
+                    required=False,
+                )
+            ],
             risk_level=infer_step_risk_level(subgoal.title, actions),
             current_focus=subgoal.title,
         )
@@ -371,6 +547,14 @@ class WindowsUIACapability(CapabilityAdapter):
         if world_model.active_window_title and world_model.active_app not in {"browser"}:
             return 0.55
         return 0.15
+
+    def extract_anchors(self, world_model: WorldModel) -> list[str]:
+        anchors = super().extract_anchors(world_model)
+        for item in world_model.uia_tree[:6]:
+            name = str(item.get("name") or item.get("title") or "").strip()
+            if name:
+                anchors.append(name)
+        return anchors[:8]
 
 
 class GuardedShellRecipeCapability(CapabilityAdapter):
@@ -428,7 +612,13 @@ class GuardedShellRecipeCapability(CapabilityAdapter):
         return StepProposal(
             intent=f"Request a guarded shell recipe for: {subgoal.title}",
             actions=[action],
-            expected_evidence=[EvidenceRequirement(kind="action_executed", detail="The shell recipe should complete successfully.")],
+            expected_evidence=[
+                EvidenceRequirement(
+                    kind="file_observation",
+                    detail="A file-system side effect or saved artifact should be observed after the recipe.",
+                    required=False,
+                )
+            ],
             risk_level="high",
             capability=self.name,
             requires_approval=True,
@@ -457,31 +647,66 @@ class CapabilityRegistry:
             return list(self.capabilities)
         return [capability for capability in self.capabilities if capability.name in allowed]
 
+    def rank(
+        self,
+        *,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        config: AgentConfig,
+        execution_state: ExecutionState | None = None,
+        driver_registry: DriverRegistry | None = None,
+    ) -> list[tuple[CapabilityAdapter, float]]:
+        candidates = self.enabled(config)
+        driver = driver_registry.detect(world_model) if driver_registry is not None else None
+        preferred = set(driver.preferred_capabilities()) if driver is not None else set()
+        completion_kind = _completion_requirement_kind(subgoal)
+        ranked: list[tuple[CapabilityAdapter, float]] = []
+        for capability in candidates:
+            score = capability.can_handle(subgoal, world_model)
+            if capability.name == subgoal.capability_preference:
+                score += 0.2
+            if capability.name in preferred:
+                score += 0.15
+            if completion_kind and _capability_supports_evidence(capability.name, completion_kind):
+                score += 0.12
+            if _capability_prefers_structured(capability.name):
+                structured_bonus = 0.1 if world_model.structured_sources else -0.05
+                score += structured_bonus
+            if capability.name in subgoal.failed_capabilities:
+                score -= 0.25
+            if execution_state is not None:
+                recent_results = execution_state.capability_failures.get(_failure_key(subgoal.id, capability.name), [])[-3:]
+                recent_failures = sum(1 for item in recent_results if item in {"failed", "partial_progress"})
+                if recent_failures >= 2:
+                    score -= 0.45
+                elif recent_failures == 1:
+                    score -= 0.15
+                if recent_results and recent_results[-1] == "success":
+                    score += 0.08
+            ranked.append((capability, score))
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        if ranked:
+            return ranked
+        fallback = candidates[-1] if candidates else DesktopGUICapability()
+        return [(fallback, fallback.can_handle(subgoal, world_model))]
+
     def select(
         self,
         *,
         subgoal: Subgoal,
         world_model: WorldModel,
         config: AgentConfig,
+        execution_state: ExecutionState | None = None,
         driver_registry: DriverRegistry | None = None,
     ) -> CapabilityAdapter:
-        candidates = self.enabled(config)
-        driver = driver_registry.detect(world_model) if driver_registry is not None else None
-        preferred = set(driver.preferred_capabilities()) if driver is not None else set()
-        best_score = -1.0
-        best = candidates[-1] if candidates else DesktopGUICapability()
-        for capability in candidates:
-            if capability.name in subgoal.failed_capabilities:
-                continue
-            score = capability.can_handle(subgoal, world_model)
-            if capability.name == subgoal.capability_preference:
-                score += 0.2
-            if capability.name in preferred:
-                score += 0.15
-            if score > best_score:
-                best_score = score
-                best = capability
-        return best
+        ranked = self.rank(
+            subgoal=subgoal,
+            world_model=world_model,
+            config=config,
+            execution_state=execution_state,
+            driver_registry=driver_registry,
+        )
+        return ranked[0][0]
 
 
 @dataclass(slots=True)
@@ -492,7 +717,7 @@ class CapabilityExecutor:
     driver_registry: DriverRegistry | None = None
 
     def observe(self, world_model: WorldModel) -> list[ObservedFact]:
-        facts: list[ObservedFact] = []
+        facts: list[ObservedFact] = _world_model_facts(world_model)
         if self.driver_registry is not None:
             facts.extend(self.driver_registry.describe(world_model))
         for capability in self.registry.enabled(self.config):
@@ -507,6 +732,22 @@ class CapabilityExecutor:
             subgoal=subgoal,
             world_model=world_model,
             config=self.config,
+            execution_state=None,
+            driver_registry=self.driver_registry,
+        )
+
+    def rank_capabilities(
+        self,
+        *,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        execution_state: ExecutionState,
+    ) -> list[tuple[CapabilityAdapter, float]]:
+        return self.registry.rank(
+            subgoal=subgoal,
+            world_model=world_model,
+            config=self.config,
+            execution_state=execution_state,
             driver_registry=self.driver_registry,
         )
 
@@ -515,15 +756,38 @@ class CapabilityExecutor:
         if subgoal is None:
             return StepProposal(intent="Task already complete.", actions=[], capability="desktop_gui")
 
-        capability = self.choose_capability(subgoal=subgoal, world_model=world_model)
-        proposal = capability.propose_step(
+        pending_repair = execution_state.app_context.get("pending_repair")
+        if isinstance(pending_repair, dict) and str(pending_repair.get("subgoal_id")) == subgoal.id:
+            repair_proposal = self.propose_repair(
+                execution_state=execution_state,
+                world_model=world_model,
+                previous_step=execution_state.last_step,
+                verification=execution_state.last_verification,
+            )
+            if repair_proposal is not None:
+                return repair_proposal
+
+        ranked_capabilities = self.rank_capabilities(
             subgoal=subgoal,
             world_model=world_model,
             execution_state=execution_state,
-            config=self.config,
-            planner=self.planner,
         )
+        selected_capability = ranked_capabilities[0][0]
+        capability = selected_capability
+        proposal: StepProposal | None = None
+        for candidate, _score in ranked_capabilities:
+            capability = candidate
+            proposal = candidate.propose_step(
+                subgoal=subgoal,
+                world_model=world_model,
+                execution_state=execution_state,
+                config=self.config,
+                planner=self.planner,
+            )
+            if proposal is not None:
+                break
         if proposal is None:
+            capability = selected_capability
             plan, target_scope = self._plan_with_fallback(
                 subgoal=subgoal,
                 world_model=world_model,
@@ -550,12 +814,92 @@ class CapabilityExecutor:
                 world_model=world_model,
                 actions=proposal.actions,
             )
+        driver = self.driver_registry.detect(world_model) if self.driver_registry is not None else None
+        if driver is not None:
+            proposal.expected_evidence = _merge_evidence_requirements(
+                proposal.expected_evidence,
+                driver.verification_hints(world_model),
+            )
+        if not proposal.progress_signals:
+            proposal.progress_signals = capability.build_progress_signals(
+                subgoal=subgoal,
+                world_model=world_model,
+                actions=proposal.actions,
+            )
+        if not proposal.repair_strategy:
+            proposal.repair_strategy = _default_repair_strategy(subgoal=subgoal, proposal=proposal)
+        if not proposal.cost_hint:
+            proposal.cost_hint = _estimate_cost_hint(proposal.actions)
         proposal.requires_approval = proposal.requires_approval or approval_required_for_policy(
             self.config.approval_policy,
             proposal.risk_level,
             proposal.actions,
         )
         proposal.current_focus = proposal.current_focus or subgoal.title
+        return proposal
+
+    def propose_repair(
+        self,
+        *,
+        execution_state: ExecutionState,
+        world_model: WorldModel,
+        previous_step: StepProposal | None,
+        verification: VerificationResult | None,
+    ) -> StepProposal | None:
+        subgoal = execution_state.current_subgoal()
+        if subgoal is None:
+            return None
+        if verification is not None and verification.failure_kind in {"requires_auth", "requires_human"}:
+            return None
+
+        ranked_capabilities = self.rank_capabilities(
+            subgoal=subgoal,
+            world_model=world_model,
+            execution_state=execution_state,
+        )
+        primary = next((item for item, _score in ranked_capabilities if item.name == (previous_step.capability if previous_step else "")), None)
+        if primary is None:
+            primary = ranked_capabilities[0][0] if ranked_capabilities else DesktopGUICapability()
+
+        proposal = primary.plan_repair(
+            subgoal=subgoal,
+            world_model=world_model,
+            execution_state=execution_state,
+            previous_step=previous_step,
+            verification=verification,
+            config=self.config,
+        )
+        if proposal is None and verification is not None and verification.failure_kind in {"capability_mismatch", "goal_ambiguous"}:
+            for candidate, _score in ranked_capabilities:
+                if previous_step is not None and candidate.name == previous_step.capability:
+                    continue
+                proposal = candidate.propose_step(
+                    subgoal=subgoal,
+                    world_model=world_model,
+                    execution_state=execution_state,
+                    config=self.config,
+                    planner=self.planner,
+                )
+                if proposal is not None:
+                    proposal.repair_strategy = proposal.repair_strategy or ["switch_capability", "retry_with_fresh_observation"]
+                    break
+        if proposal is None:
+            return None
+        if not proposal.expected_evidence:
+            proposal.expected_evidence = primary.build_expected_evidence(
+                subgoal=subgoal,
+                world_model=world_model,
+                actions=proposal.actions,
+            )
+        if not proposal.progress_signals:
+            proposal.progress_signals = primary.build_progress_signals(
+                subgoal=subgoal,
+                world_model=world_model,
+                actions=proposal.actions,
+            )
+        if not proposal.repair_strategy:
+            proposal.repair_strategy = ["retry_with_fresh_observation"]
+        proposal.cost_hint = proposal.cost_hint or _estimate_cost_hint(proposal.actions)
         return proposal
 
     def verify_step(
@@ -568,20 +912,25 @@ class CapabilityExecutor:
     ) -> VerificationResult:
         subgoal = execution_state.current_subgoal()
         if subgoal is None:
-            return VerificationResult(success=True, evidence=[], message="No current subgoal remained.")
+            return VerificationResult(success=True, status="success", evidence=[], message="No current subgoal remained.")
         capability = next(
             (item for item in self.registry.enabled(self.config) if item.name == step.capability),
             DesktopGUICapability(),
         )
         result = capability.verify_step(subgoal=subgoal, step=step, before=before, after=after)
-        if result.success:
-            return result
-        if not step.expected_evidence and step.actions:
-            return VerificationResult(
-                success=True,
-                evidence=result.evidence,
-                message="The step executed without a stronger verification signal.",
-            )
+        execution_state.evidence_ledger.append(
+            {
+                "subgoal_id": subgoal.id,
+                "capability": step.capability,
+                "status": result.status,
+                "evidence": list(result.evidence),
+                "message": result.message,
+                "verified_at": result.verified_at,
+            }
+        )
+        failure_history = execution_state.capability_failures.setdefault(_failure_key(subgoal.id, step.capability), [])
+        failure_history.append(result.status)
+        del failure_history[:-6]
         return result
 
     def build_pending_decision(self, *, step: StepProposal, subgoal: Subgoal) -> PendingDecision:
@@ -679,6 +1028,144 @@ def build_capability_registry() -> CapabilityRegistry:
     return registry
 
 
+def _failure_key(subgoal_id: str, capability_name: str) -> str:
+    return f"{subgoal_id}:{capability_name}"
+
+
+def _world_model_facts(world_model: WorldModel) -> list[ObservedFact]:
+    facts: list[ObservedFact] = []
+    if world_model.active_app:
+        facts.append(ObservedFact(source="world_model", key="active_app", value=str(world_model.active_app)))
+    if world_model.active_window_title:
+        facts.append(ObservedFact(source="world_model", key="active_window", value=str(world_model.active_window_title)))
+    if world_model.selection_text:
+        facts.append(ObservedFact(source="world_model", key="selection_text", value=str(world_model.selection_text), confidence=0.9))
+    if world_model.clipboard_text:
+        facts.append(ObservedFact(source="world_model", key="clipboard_text", value=str(world_model.clipboard_text), confidence=0.9))
+    return facts
+
+
+def _completion_requirement(subgoal: Subgoal) -> EvidenceRequirement | None:
+    payload = subgoal.completion_evidence
+    if not isinstance(payload, dict) or not payload:
+        return None
+    return EvidenceRequirement.from_dict(payload)
+
+
+def _completion_requirement_kind(subgoal: Subgoal) -> str | None:
+    requirement = _completion_requirement(subgoal)
+    if requirement is None:
+        return None
+    return requirement.kind
+
+
+def _merge_evidence_requirements(
+    primary: list[EvidenceRequirement],
+    secondary: list[EvidenceRequirement],
+) -> list[EvidenceRequirement]:
+    merged = list(primary)
+    seen = {(item.kind, item.value, item.selector, item.detail) for item in merged}
+    for item in secondary:
+        key = (item.kind, item.value, item.selector, item.detail)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def _default_repair_strategy(*, subgoal: Subgoal, proposal: StepProposal) -> list[str]:
+    if proposal.capability == "browser_dom":
+        return ["refresh_dom_context", "re-anchor_target", "retry_with_fresh_observation"]
+    if proposal.capability in {"windows_uia", "desktop_gui"}:
+        return ["refocus_window", "re-anchor_target", "retry_with_fresh_observation"]
+    if subgoal.goal_type == "save":
+        return ["verify_target_path", "retry_with_fresh_observation"]
+    return ["retry_with_fresh_observation", "switch_capability"]
+
+
+def _estimate_cost_hint(actions: list[Action]) -> str:
+    if len(actions) >= 4:
+        return "high"
+    if len(actions) >= 2:
+        return "medium"
+    return "low"
+
+
+def _capability_supports_evidence(capability_name: str, evidence_kind: str) -> bool:
+    mapping = {
+        "browser_dom": {"browser_url_contains", "browser_title_contains", "browser_text_contains", "browser_available"},
+        "filesystem": {"file_observation"},
+        "clipboard": {"clipboard_or_input_changed"},
+        "windows_uia": {"window_contains", "state_change"},
+        "desktop_gui": {"window_contains", "state_change"},
+        "office_com": {"fact_contains", "window_contains", "state_change"},
+        "guarded_shell_recipe": {"file_observation", "state_change"},
+    }
+    supported = mapping.get(capability_name, set())
+    return evidence_kind in supported
+
+
+def _capability_prefers_structured(capability_name: str) -> bool:
+    return capability_name in {"browser_dom", "windows_uia", "filesystem", "office_com", "guarded_shell_recipe"}
+
+
+def _evaluate_completion_evidence(
+    *,
+    requirement: EvidenceRequirement,
+    before: WorldModel,
+    after: WorldModel,
+) -> bool:
+    if _evaluate_evidence(requirement, after):
+        return True
+    if requirement.kind in {"state_change", "clipboard_or_input_changed"}:
+        return _infer_world_progress(before, after)
+    if requirement.kind == "file_observation":
+        return bool(after.file_observations or after.downloads)
+    return False
+
+
+def _detect_progress_signals(signals: list[str], *, before: WorldModel, after: WorldModel) -> bool:
+    normalized_signals = [_normalize_text(item) for item in signals if _normalize_text(item)]
+    haystacks = [
+        _normalize_text(after.active_window_title),
+        _normalize_text(after.active_app),
+        _normalize_text(after.clipboard_text),
+        _normalize_text((after.browser_snapshot or {}).get("url")),
+        _normalize_text((after.browser_snapshot or {}).get("title")),
+        _normalize_text((after.browser_snapshot or {}).get("text")),
+        " ".join(_normalize_text(item) for item in after.anchor_candidates if _normalize_text(item)),
+        " ".join(_normalize_text(item.value) for item in after.facts if _normalize_text(item.value)),
+    ]
+    if any(signal and any(signal in haystack for haystack in haystacks if haystack) for signal in normalized_signals):
+        return True
+    return _infer_world_progress(before, after)
+
+
+def _infer_world_progress(before: WorldModel, after: WorldModel) -> bool:
+    if _normalize_text(before.active_window_title) != _normalize_text(after.active_window_title):
+        return True
+    if _normalize_text(before.active_app) != _normalize_text(after.active_app):
+        return True
+    if _normalize_text(before.clipboard_text) != _normalize_text(after.clipboard_text):
+        return True
+    if _normalize_text(before.selection_text) != _normalize_text(after.selection_text):
+        return True
+    before_browser = before.browser_snapshot or {}
+    after_browser = after.browser_snapshot or {}
+    if _normalize_text(before_browser.get("url")) != _normalize_text(after_browser.get("url")):
+        return True
+    if _normalize_text(before_browser.get("text")) != _normalize_text(after_browser.get("text")):
+        return True
+    if tuple(_normalize_text(item) for item in before.anchor_candidates) != tuple(_normalize_text(item) for item in after.anchor_candidates):
+        return True
+    if len(after.facts) != len(before.facts):
+        return True
+    if len(after.file_observations) != len(before.file_observations):
+        return True
+    return False
+
+
 def _evaluate_evidence(requirement: EvidenceRequirement, world_model: WorldModel) -> bool:
     kind = requirement.kind
     expected = _normalize_text(requirement.value)
@@ -703,6 +1190,12 @@ def _evaluate_evidence(requirement: EvidenceRequirement, world_model: WorldModel
         return bool(expected) and expected in browser_text
     if kind == "browser_available":
         return bool(browser_url or browser_title or browser_text)
+    if kind == "clipboard_or_input_changed":
+        return bool(_normalize_text(world_model.clipboard_text) or browser_text)
+    if kind == "file_observation":
+        return bool(world_model.file_observations or world_model.downloads)
+    if kind == "state_change":
+        return False
     if kind == "fact_contains":
         for fact in world_model.facts:
             haystack = _normalize_text(f"{fact.key} {fact.value}")

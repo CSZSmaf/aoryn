@@ -1,4 +1,4 @@
-const releaseVersion = "0.1.18";
+const releaseVersion = "0.1.19";
 
 export const siteConfig = {
   siteName: "Aoryn",

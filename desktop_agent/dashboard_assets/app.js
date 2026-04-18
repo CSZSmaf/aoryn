@@ -234,6 +234,7 @@ const state = {
   runtimePreferencesSyncTimer: 0,
   sendShortcut: "enter",
   openCustomSelectId: null,
+  customSelectMenuState: {},
   providerInspectionBusy: false,
   providerInspectionSignature: "",
   providerInspectionToken: 0,
@@ -2407,6 +2408,13 @@ function syncCustomSelect(select) {
   const wrapper = select.nextElementSibling;
   if (!wrapper || !wrapper.classList.contains("custom-select")) return;
 
+  const previousMenu = wrapper.querySelector(".custom-select__menu");
+  if (previousMenu && select.id) {
+    state.customSelectMenuState[select.id] = {
+      scrollTop: previousMenu.scrollTop,
+    };
+  }
+
   const selectedOption = select.options[select.selectedIndex] || select.options[0] || null;
   const selectedLabel = selectedOption ? selectedOption.textContent.trim() : tr("未选择", "Not selected");
   const isOpen = state.openCustomSelectId === select.id;
@@ -2451,6 +2459,12 @@ function syncCustomSelect(select) {
         .join("")}
     </div>
   `;
+
+  const nextMenu = wrapper.querySelector(".custom-select__menu");
+  const preservedState = select.id ? state.customSelectMenuState[select.id] : null;
+  if (isOpen && nextMenu && preservedState && Number.isFinite(preservedState.scrollTop)) {
+    nextMenu.scrollTop = Math.max(0, Number(preservedState.scrollTop) || 0);
+  }
 }
 
 function fillSelect(select, items, selectedValue) {
@@ -2566,6 +2580,13 @@ function openCustomSelect(selectId, options = {}) {
 function closeCustomSelect({ restoreFocus = false } = {}) {
   const targetId = state.openCustomSelectId;
   if (!targetId) return;
+  const wrapper = document.getElementById(targetId)?.nextElementSibling;
+  const menu = wrapper?.querySelector?.(".custom-select__menu");
+  if (menu) {
+    state.customSelectMenuState[targetId] = {
+      scrollTop: menu.scrollTop,
+    };
+  }
   state.openCustomSelectId = null;
   syncCustomSelects();
   if (restoreFocus) {

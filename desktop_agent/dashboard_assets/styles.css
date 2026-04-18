@@ -4638,6 +4638,8 @@ body {
 .custom-select__menu {
   top: calc(100% + 10px);
   padding: 10px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border: 1px solid rgba(19, 41, 34, 0.08);
   border-radius: 22px;
   background:
