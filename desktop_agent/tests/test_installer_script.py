@@ -79,6 +79,7 @@ def test_browser_inno_setup_script_publishes_standalone_browser_installer():
     assert '#define ProductName "Aoryn Browser"' in source
     assert '#define AppExeName "AorynBrowser.exe"' in source
     assert '#define InstallDirName "Aoryn Browser"' in source
+    assert r"SetupIconFile=..\desktop_agent\dashboard_assets\icons\aoryn-browser.ico" in source
     assert r"DefaultDirName={localappdata}\Programs\{#InstallDirName}" in source
     assert r'Subkey: "Software\Aoryn\BrowserInstaller"' in source
     assert r'Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\{#AppExeName}"' in source

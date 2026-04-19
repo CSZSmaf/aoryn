@@ -6,7 +6,7 @@ from pathlib import Path
 APP_NAME = "Aoryn"
 APP_BROWSER_NAME = "AorynBrowser"
 APP_BROWSER_DISPLAY_NAME = "Aoryn Browser"
-APP_VERSION = "0.1.21"
+APP_VERSION = "0.1.22"
 APP_PUBLISHER = "Aoryn"
 APP_ID = "Aoryn.Desktop.Shell"
 APP_BROWSER_ID = "Aoryn.Browser.Shell"

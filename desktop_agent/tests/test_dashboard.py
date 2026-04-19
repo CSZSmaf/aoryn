@@ -1283,15 +1283,27 @@ def test_dashboard_serves_help_route():
         with urllib.request.urlopen(f"{base_url}/api/help?locale=zh-CN") as response:
             payload = json.loads(response.read().decode("utf-8"))
             assert response.status == 200
-            assert payload["title"] == "开发者文档"
+            assert payload["title"] == "帮助中心"
             assert payload["locale"] == "zh-CN"
-            assert "开发者文档" in payload["markdown"]
+            assert payload["audience"] == "user"
+            assert "第一次使用" in payload["markdown"]
+            assert "本地优先" in payload["markdown"]
 
         with urllib.request.urlopen(f"{base_url}/api/help?locale=en-US") as response:
             payload = json.loads(response.read().decode("utf-8"))
             assert response.status == 200
-            assert payload["title"] == "Developer Docs"
+            assert payload["title"] == "Help Center"
             assert payload["locale"] == "en-US"
+            assert payload["audience"] == "user"
+            assert "First run" in payload["markdown"]
+            assert "Advanced Docs" in payload["markdown"]
+
+        with urllib.request.urlopen(f"{base_url}/api/help?locale=en-US&audience=developer") as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+            assert payload["title"] == "Advanced Docs"
+            assert payload["locale"] == "en-US"
+            assert payload["audience"] == "developer"
             assert "Developer Guide" in payload["markdown"]
     finally:
         server.shutdown()
@@ -1312,6 +1324,10 @@ def test_chat_frontend_assets_include_avatar_timer_and_katex_hooks():
     assert '"/api/system/open-path"' in app_source or "'/api/system/open-path'" in app_source
     assert '"/api/system/environment-check"' in app_source or "'/api/system/environment-check'" in app_source
     assert "environment-check-grid" in app_source
+    assert "openDeveloperDocsButton" in app_source
+    assert "Help Center" in app_source
+    assert "Run starter task" in app_source
+    assert "Finish one successful run in four steps." in app_source
     assert "assistant-pending-badge" in styles_source
     assert "assistant-avatar" in styles_source
     assert "assistant-math--katex" in styles_source
@@ -2415,16 +2431,27 @@ def test_dashboard_serves_help_route():
         with urllib.request.urlopen(f"{base_url}/api/help?locale=zh-CN") as response:
             payload = json.loads(response.read().decode("utf-8"))
             assert response.status == 200
-            assert payload["title"] == "开发者文档"
+            assert payload["title"] == "帮助中心"
             assert payload["locale"] == "zh-CN"
-            assert "开发者文档" in payload["markdown"]
+            assert payload["audience"] == "user"
+            assert "第一次使用" in payload["markdown"]
             assert "本地优先" in payload["markdown"]
 
         with urllib.request.urlopen(f"{base_url}/api/help?locale=en-US") as response:
             payload = json.loads(response.read().decode("utf-8"))
             assert response.status == 200
-            assert payload["title"] == "Developer Docs"
+            assert payload["title"] == "Help Center"
             assert payload["locale"] == "en-US"
+            assert payload["audience"] == "user"
+            assert "First run" in payload["markdown"]
+            assert "Advanced Docs" in payload["markdown"]
+
+        with urllib.request.urlopen(f"{base_url}/api/help?locale=en-US&audience=developer") as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+            assert payload["title"] == "Advanced Docs"
+            assert payload["locale"] == "en-US"
+            assert payload["audience"] == "developer"
             assert "Developer Guide" in payload["markdown"]
             assert '"Send to Agent"' in payload["markdown"]
     finally:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from uuid import uuid4
@@ -9,6 +10,7 @@ from desktop_agent.browser_runtime import BrowserRuntimeError
 from desktop_agent.config import AgentConfig
 from desktop_agent.aoryn_browser import (
     DEFAULT_BROWSER_HOMEPAGE,
+    build_browser_assistant_setup_snapshot,
     build_browser_ai_setup_summary,
     build_internal_page_html,
     build_browser_assistant_user_message,
@@ -28,6 +30,7 @@ from desktop_agent.aoryn_browser import (
     save_browser_state,
     write_browser_json_response,
 )
+from desktop_agent.runtime_paths import runtime_preferences_path_for
 
 
 def test_normalize_browser_target_supports_internal_urls_hosts_and_search_queries():
@@ -113,7 +116,7 @@ def test_build_internal_page_html_renders_home_and_download_entries():
     assert "aoryn://history" in document
 
 
-def test_build_internal_page_html_home_uses_service_console_language():
+def test_build_internal_page_html_home_is_blank():
     title, document = build_internal_page_html(
         "home",
         assistant_setup={"status": "Ready", "provider_label": "Local LM Studio", "model_display": "auto"},
@@ -131,11 +134,16 @@ def test_build_internal_page_html_home_uses_service_console_language():
         ),
     )
 
-    assert title == "Home"
-    assert "Managed browser runtime for Aoryn tasks." in document
-    assert "Runtime console" in document
-    assert "/perform_action" in document
-    assert "Aoryn Docs" in document
+    assert title == ""
+    assert 'id="new-tab-search"' in document
+    assert 'id="new-tab-search-input"' in document
+    assert 'name="query"' in document
+    assert 'action="aoryn://focus-address"' in document
+    assert 'window.location.href = "aoryn://focus-address?query="' in document
+    assert "Managed browser runtime for Aoryn tasks." not in document
+    assert "Runtime Overview" not in document
+    assert "aoryn://history" not in document
+    assert "tblr-home-stage" not in document
 
 
 def test_build_internal_page_html_runtime_renders_service_console():
@@ -157,8 +165,8 @@ def test_build_internal_page_html_runtime_renders_service_console():
         ),
     )
 
-    assert title == "Runtime"
-    assert "Control surface for the desktop app." in document
+    assert title == "Runtime Overview"
+    assert "Browser runtime for the desktop workbench." in document
     assert "http://127.0.0.1:38991" in document
     assert "/get_session_state" in document
     assert "paused for auth" in document.lower()
@@ -182,7 +190,7 @@ def test_build_internal_page_html_setup_renders_effective_ai_configuration():
         },
     )
 
-    assert title == "AI Setup"
+    assert title == "Browser Setup"
     assert "Local LM Studio" in document
     assert "runtime-preferences.json" in document
     assert "qwen/qwen3-14b" in document
@@ -321,6 +329,53 @@ def test_build_browser_ai_setup_summary_reports_missing_api_key_for_hosted_provi
     assert summary["browser_channel_label"] == "Microsoft Edge"
 
 
+def test_build_browser_assistant_setup_snapshot_avoids_dashboard_meta_and_runtime_probe(monkeypatch):
+    import desktop_agent.dashboard as dashboard_module
+
+    temp_root = Path("test_artifacts") / f"aoryn_browser_setup_snapshot_{uuid4().hex}"
+    prefs_path = None
+    try:
+        temp_root.mkdir(parents=True)
+        config_path = temp_root / "config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model_provider: lmstudio_local",
+                    "model_base_url: http://127.0.0.1:1234/v1",
+                    "model_name: auto",
+                    "browser_headless: false",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        prefs_path = runtime_preferences_path_for(config_path)
+        prefs_path.write_text(
+            json.dumps({"config_overrides": {"browser_channel": "msedge"}, "ui_preferences": {"onboarding_completed": False}}),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(
+            dashboard_module.DashboardApp,
+            "meta",
+            lambda self: (_ for _ in ()).throw(AssertionError("browser setup snapshot should not call DashboardApp.meta")),
+        )
+        monkeypatch.setattr(
+            dashboard_module,
+            "browser_runtime_status",
+            lambda config: (_ for _ in ()).throw(AssertionError("browser setup snapshot should not probe browser runtime status")),
+        )
+
+        snapshot = build_browser_assistant_setup_snapshot(config_path)
+
+        assert snapshot["summary"]["provider_label"] == "Local LM Studio"
+        assert snapshot["effective"]["browser_channel"] == "msedge"
+        assert snapshot["runtime_preferences_path"] == str(prefs_path)
+    finally:
+        if prefs_path is not None:
+            prefs_path.unlink(missing_ok=True)
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_build_browser_service_summary_exposes_runtime_routes_and_counts():
     summary = build_browser_service_summary(
         base_url="http://127.0.0.1:38991",
@@ -405,7 +460,7 @@ def test_browser_window_runtime_accessor_survives_runtime_reference_assignment()
         profile.setCachePath(str(temp_root / "cache"))
         window = browser_module.BrowserWindow(
             profile=profile,
-            icon_path=Path("desktop_agent") / "dashboard_assets" / "icons" / "aoryn-app.ico",
+            icon_path=Path("desktop_agent") / "dashboard_assets" / "icons" / "aoryn-browser.ico",
             homepage_url=DEFAULT_BROWSER_HOMEPAGE,
             search_url="https://www.google.com/search?q={query}",
         )
@@ -413,6 +468,119 @@ def test_browser_window_runtime_accessor_survives_runtime_reference_assignment()
         window._browser_runtime_ref = runtime_ref  # type: ignore[attr-defined]
 
         assert window._browser_runtime() is runtime_ref  # type: ignore[attr-defined]
+    finally:
+        try:
+            if window is not None:
+                window.close()
+        except Exception:
+            pass
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_browser_window_assistant_dock_toggle_smoke():
+    if browser_module.QApplication is None:
+        return
+
+    app = browser_module.QApplication.instance() or browser_module.QApplication([])
+    temp_root = Path("test_artifacts") / f"aoryn_browser_window_toggle_{uuid4().hex}"
+    window = None
+    try:
+        temp_root.mkdir(parents=True)
+        profile = browser_module.QWebEngineProfile(f"test-{uuid4().hex}", app)
+        profile.setPersistentStoragePath(str(temp_root / "storage"))
+        profile.setCachePath(str(temp_root / "cache"))
+        window = browser_module.BrowserWindow(
+            profile=profile,
+            icon_path=Path("desktop_agent") / "dashboard_assets" / "icons" / "aoryn-browser.ico",
+            homepage_url=DEFAULT_BROWSER_HOMEPAGE,
+            search_url="https://www.google.com/search?q={query}",
+        )
+        window.show()
+        home_view = browser_module.QWidget(window)
+        tab_id = "home-tab"
+        window._tab_refs.append(  # type: ignore[attr-defined]
+            browser_module._BrowserTab(  # type: ignore[attr-defined]
+                tab_id=tab_id,
+                view=home_view,
+                internal_page="home",
+                display_url=DEFAULT_BROWSER_HOMEPAGE,
+            )
+        )
+        index = window.tabs.addTab(home_view, "")
+        window.tabs.setCurrentIndex(index)
+        window._update_tab_title(tab_id, "")
+        window._sync_address_bar()
+        app.processEvents()
+
+        assert window.address_bar.placeholderText() == "Search or enter address"
+        assert window.address_bar.text() == ""
+        assert bool(window.address_bar.alignment() & browser_module.Qt.AlignmentFlag.AlignVCenter)
+        assert window.tabs.tabText(0) == ""
+        assert not window.tabs.tabBar().isVisible()
+        assert not window.tab_strip.isVisible()
+        assert window.windowTitle() == f"{browser_module.APP_NAME} Browser"
+        assert not window.windowIcon().isNull()
+        assert not window.back_button.icon().isNull()
+        assert not window.forward_button.icon().isNull()
+        assert not window.reload_button.icon().isNull()
+        assert not window.home_button.icon().isNull()
+        assert not window.new_tab_button.icon().isNull()
+        assert not window.menu_button.icon().isNull()
+        assert window.assistant_dock.isHidden()
+        assert not window.assistant_toggle_button.isChecked()
+
+        second_view = browser_module.QWidget(window)
+        second_tab_id = "docs-tab"
+        window._tab_refs.append(  # type: ignore[attr-defined]
+            browser_module._BrowserTab(  # type: ignore[attr-defined]
+                tab_id=second_tab_id,
+                view=second_view,
+                internal_page=None,
+                display_url="https://docs.aoryn.org/browser",
+            )
+        )
+        window.tabs.addTab(second_view, "docs.aoryn.org")
+        window._update_tab_title(second_tab_id, "docs.aoryn.org")
+        window._sync_tab_chrome()
+        app.processEvents()
+
+        assert window.tab_strip.isVisible()
+        assert window.tab_strip.count() == 2
+        assert window.tab_strip.tabText(0) == "New Tab"
+        assert window.tab_strip.tabText(1) == "docs.aoryn.org"
+
+        diagnostics_action = next((action for action in window._browser_menu.actions() if action.menu() and action.text() == "Diagnostics"), None)
+        assert diagnostics_action is not None
+        diagnostics_menu = diagnostics_action.menu()
+        assert diagnostics_menu is not None
+        diagnostics_labels = [action.text() for action in diagnostics_menu.actions()]
+        assert "Browser Setup" in diagnostics_labels
+        assert "Runtime Overview" in diagnostics_labels
+
+        captured: dict[str, str | None] = {}
+
+        def _capture_navigate(url: str, *, tab_id: str | None = None):
+            captured["url"] = url
+            captured["tab_id"] = tab_id
+            return {"url": url, "tab_id": tab_id}
+
+        window.navigate = _capture_navigate  # type: ignore[method-assign]
+        window._open_internal_target(tab_id, "aoryn://focus-address?query=docs.aoryn.org")
+
+        assert window.address_bar.text() == "docs.aoryn.org"
+        assert captured == {"url": "docs.aoryn.org", "tab_id": None}
+
+        window._toggle_assistant_panel()
+        app.processEvents()
+
+        assert not window.assistant_dock.isHidden()
+        assert window.assistant_toggle_button.isChecked()
+
+        window._toggle_assistant_panel()
+        app.processEvents()
+
+        assert window.assistant_dock.isHidden()
+        assert not window.assistant_toggle_button.isChecked()
     finally:
         try:
             if window is not None:

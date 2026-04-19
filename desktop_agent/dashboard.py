@@ -882,7 +882,8 @@ class DashboardApp:
                 if path == "/api/help":
                     params = parse_qs(parsed.query)
                     locale = params.get("locale", ["zh-CN"])[0]
-                    return self._send_json(app.help_content(locale=locale))
+                    audience = params.get("audience", ["user"])[0]
+                    return self._send_json(app.help_content(locale=locale, audience=audience))
                 if path == "/api/overview":
                     return self._send_json(app.overview())
                 if path == "/api/jobs":
@@ -1293,40 +1294,40 @@ class DashboardApp:
                 {"value": "firefox", "label": "Mozilla Firefox"},
             ],
             "presets": [
-                {"id": "visit_docs", "label": "Visit Docs", "task": "visit openai.com/docs"},
-                {"id": "dom_follow_up", "label": "DOM Follow-up", "task": "visit openai.com and click login"},
-                {"id": "shopping_search", "label": "Shopping Search", "task": "shop for high-value men's pants on amazon"},
+                {"id": "visit_docs", "label": "Open Docs", "task": "visit openai.com/docs"},
+                {"id": "dom_follow_up", "label": "Open and Continue", "task": "visit openai.com and click login"},
+                {"id": "shopping_search", "label": "Find a Product", "task": "shop for high-value men's pants on amazon"},
             ],
             "workflow_recipes": [
                 {
                     "id": "ordered_browser_task",
-                    "label": "Ordered Browser Task",
+                    "label": "Open, Click, Continue",
                     "task": "visit openai.com and click login and then type your email",
-                    "hint": "Put the goal first, then order follow-up actions so the planner can keep moving without repeating the entry step.",
+                    "hint": "Start with the page you want, then list the next action so Aoryn can keep moving without repeating the first step.",
                 },
                 {
                     "id": "shopping_refine",
-                    "label": "Style + Color Refine",
+                    "label": "Filter and Refine",
                     "task": "shop for high-value men's pants on amazon and filter by style and choose black and sort by price low to high",
-                    "hint": "Useful for validating chained shopping plans where filters, color selection, and sorting happen step by step.",
+                    "hint": "Useful when you want Aoryn to narrow a page step by step instead of comparing everything at once.",
                 },
                 {
                     "id": "shopping_compare",
-                    "label": "Top-Rated Compare",
+                    "label": "Shortlist and Compare",
                     "task": "shop for high-value men's pants on amazon and sort by customer review and filter by price range",
-                    "hint": "Good for narrowing the result set before you compare products or continue with a manual decision.",
+                    "hint": "Good for reducing a long result list before you pause and review the best options.",
                 },
                 {
                     "id": "login_flow",
-                    "label": "Login Flow",
+                    "label": "Login Warm-up",
                     "task": "visit openai.com and click login",
-                    "hint": "Great for testing a two-step browser workflow with DOM follow-up.",
+                    "hint": "A low-risk first browser task that confirms page opening, clicking, and DOM follow-up are working.",
                 },
                 {
                     "id": "provider_check",
-                    "label": "Provider Check",
+                    "label": "Docs Check",
                     "task": "visit platform.openai.com/docs and click API reference",
-                    "hint": "Useful for validating provider links and docs-oriented navigation.",
+                    "hint": "Useful for checking provider links, docs navigation, and model setup before a longer run.",
                 },
             ],
             "documentation_links": [
@@ -1354,12 +1355,26 @@ class DashboardApp:
             ],
         }
 
-    def help_content(self, *, locale: str = "zh-CN") -> dict[str, Any]:
+    def help_content(self, *, locale: str = "zh-CN", audience: str = "user") -> dict[str, Any]:
         normalized_locale = normalize_help_locale(locale)
+        normalized_audience = _normalize_help_audience(audience)
         return {
-            "title": f"{APP_NAME} Help Center" if normalized_locale == "en-US" else f"{APP_NAME} 帮助中心",
+            "title": (
+                "Advanced Docs"
+                if normalized_locale == "en-US" and normalized_audience == "developer"
+                else "高级文档"
+                if normalized_audience == "developer"
+                else "Help Center"
+                if normalized_locale == "en-US"
+                else "帮助中心"
+            ),
             "locale": normalized_locale,
-            "markdown": load_help_markdown(resolve_help_path(normalized_locale)),
+            "audience": normalized_audience,
+            "markdown": (
+                load_help_markdown(resolve_help_path(normalized_locale))
+                if normalized_audience == "developer"
+                else _build_user_help_markdown(normalized_locale)
+            ),
         }
 
     def overview(self) -> dict[str, Any]:
@@ -1986,13 +2001,8 @@ class DashboardApp:
         return self._resolve_chat_model_selection(config_overrides=config_overrides)[0]
 
 
-def _dashboard_help_content(self: DashboardApp, *, locale: str = "zh-CN") -> dict[str, Any]:
-    normalized_locale = normalize_help_locale(locale)
-    return {
-        "title": "Developer Docs" if normalized_locale == "en-US" else "开发者文档",
-        "locale": normalized_locale,
-        "markdown": load_help_markdown(resolve_help_path(normalized_locale)),
-    }
+def _dashboard_help_content(self: DashboardApp, *, locale: str = "zh-CN", audience: str = "user") -> dict[str, Any]:
+    return _dashboard_help_content_clean(self, locale=locale, audience=audience)
 
 
 DashboardApp.help_content = _dashboard_help_content
@@ -2269,12 +2279,111 @@ def _dashboard_chat_reply_stream(
 DashboardApp.chat_reply_stream = _dashboard_chat_reply_stream
 
 
-def _dashboard_help_content_clean(self: DashboardApp, *, locale: str = "zh-CN") -> dict[str, Any]:
+def _normalize_help_audience(audience: str | None) -> str:
+    return "developer" if str(audience or "").strip().lower() == "developer" else "user"
+
+
+def _build_user_help_markdown(locale: str) -> str:
+    if normalize_help_locale(locale) == "en-US":
+        return f"""# {APP_NAME} Help Center
+
+## First run
+
+- Install the desktop app, launch it, and stay in the main workbench for your first task.
+- Use the four-step onboarding flow to pick a model path, confirm the environment, run a starter task, and review the timeline.
+- Your account is only used for identity and download access. The desktop app does not require another sign-in gate after installation.
+
+## Model and browser setup
+
+- Choose **Local LM Studio** when you want a local-first model path on the same machine.
+- Choose **Hosted / compatible API** when you want to connect an OpenAI-compatible endpoint with your own key.
+- Browser settings, model settings, and display correction all live in local runtime preferences so the browser and desktop runs stay aligned.
+
+## How to write a good task
+
+- Start with the goal first, then list the next concrete action if it matters.
+- Keep one task focused on one outcome such as opening a page, checking a status, or narrowing a shortlist.
+- Mention constraints that matter, like account context, price range, color, or the exact page to open.
+- When a task is risky, ask Aoryn to pause for review before final submission or confirmation.
+
+## Common failures and recovery
+
+- If model checks fail, open **Settings** and confirm provider, base URL, model name, and API key.
+- If the browser is visible but clicks are not progressing, run the environment check and then try a shorter starter task.
+- If a task pauses for human review, open the timeline or browser handoff view, make the decision, and continue from the current state.
+- If a run stops midway, reopen it from history and resume instead of starting the whole flow again.
+
+## Privacy and local data boundary
+
+- Aoryn keeps task history, screenshots, browser state, settings, and local diagnostics on your device.
+- Cloud services only hold the minimum identity and download access data needed for the website.
+- Removing the app does not automatically delete your local work history unless you choose to remove local data too.
+
+## Need advanced docs?
+
+- Open **Advanced Docs** from the settings panel when you want developer-facing setup notes and deeper implementation details.
+"""
+
+    return f"""# {APP_NAME} 帮助中心
+
+## 第一次使用
+
+- 安装桌面版后直接进入工作台，从第一条任务开始，不需要再次登录。
+- 按四步引导完成首次启动：选择模型路径、检查环境、运行推荐任务、查看结果时间线。
+- 账号只负责身份和下载权限，不负责同步你的本地任务数据。
+
+## 模型与浏览器设置
+
+- 想走本地优先路径时，优先选择 **Local LM Studio**。
+- 想接入托管模型时，可以选择 **Hosted / compatible API** 并填写你自己的 Key。
+- 浏览器、模型和显示修正都会写入本地运行时偏好，保证浏览器工作流和桌面任务共用同一套设置。
+
+## 如何提交好任务
+
+- 先写目标，再补充下一步关键动作。
+- 一条任务只聚焦一个结果，比如打开页面、检查状态、筛选候选项。
+- 把真正重要的限制条件写清楚，比如账号环境、价格范围、颜色、目标页面。
+- 涉及提交、确认或高风险操作时，明确要求先暂停给你复核。
+
+## 常见失败与恢复
+
+- 如果模型检查失败，先打开 **设置** 确认 provider、Base URL、模型名和 API key。
+- 如果浏览器能打开但流程没有继续，先运行环境检查，再尝试一条更短的推荐起步任务。
+- 如果任务进入人工复核，去时间线或浏览器接力页完成决策，再从当前状态继续。
+- 如果运行中途停止，优先从历史记录恢复，而不是从头重来。
+
+## 隐私与本地数据边界
+
+- 任务历史、截图、浏览器状态、设置和本地诊断都保留在你的设备上。
+- 云端只保存网站登录和下载权限所需的最少身份数据。
+- 卸载应用时，只有在你明确选择删除时，本地工作数据才会一起移除。
+
+## 需要高级文档？
+
+- 想看开发者向的配置说明或更底层的实现细节时，可以在设置里打开 **高级文档**。
+"""
+
+
+def _dashboard_help_content_clean(self: DashboardApp, *, locale: str = "zh-CN", audience: str = "user") -> dict[str, Any]:
     normalized_locale = normalize_help_locale(locale)
+    normalized_audience = _normalize_help_audience(audience)
     return {
-        "title": "Developer Docs" if normalized_locale == "en-US" else "开发者文档",
+        "title": (
+            "Advanced Docs"
+            if normalized_locale == "en-US" and normalized_audience == "developer"
+            else "高级文档"
+            if normalized_audience == "developer"
+            else "Help Center"
+            if normalized_locale == "en-US"
+            else "帮助中心"
+        ),
         "locale": normalized_locale,
-        "markdown": load_help_markdown(resolve_help_path(normalized_locale)),
+        "audience": normalized_audience,
+        "markdown": (
+            load_help_markdown(resolve_help_path(normalized_locale))
+            if normalized_audience == "developer"
+            else _build_user_help_markdown(normalized_locale)
+        ),
     }
 
 

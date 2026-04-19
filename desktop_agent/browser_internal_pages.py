@@ -5,12 +5,12 @@ from typing import Any
 
 INTERNAL_PAGE_TITLES = {
     "home": "Home",
-    "runtime": "Runtime",
-    "setup": "AI Setup",
+    "runtime": "Runtime Overview",
+    "setup": "Browser Setup",
     "history": "History",
     "bookmarks": "Bookmarks",
     "downloads": "Downloads",
-    "permissions": "Permissions",
+    "permissions": "Review Queue",
 }
 
 
@@ -29,6 +29,8 @@ def build_internal_page_html(
 ) -> tuple[str, str]:
     page = (page_name or "home").strip().lower()
     title = INTERNAL_PAGE_TITLES.get(page, "Home")
+    if page == "home":
+        return "", _build_blank_home_document()
     history = list(history or [])
     bookmarks = list(bookmarks or [])
     downloads = list(downloads or [])
@@ -43,32 +45,56 @@ def build_internal_page_html(
     elif page == "setup":
         body = _build_ai_setup_page(assistant_setup)
     elif page == "history":
-        body = _build_internal_entries(
-            history,
-            empty_message="No browsing history yet.",
-            primary_key="title",
-            secondary_key="url",
-            timestamp_key="visited_at",
+        body = _build_collection_page(
+            title="History",
+            summary="Recent pages visited by the managed browser runtime.",
+            count_text=f"{len(history)} saved visits",
+            content=_build_internal_entries(
+                history,
+                empty_message="No browsing history yet.",
+                primary_key="title",
+                secondary_key="url",
+                timestamp_key="visited_at",
+            ),
         )
     elif page == "bookmarks":
-        body = _build_internal_entries(
-            bookmarks,
-            empty_message="No bookmarks yet.",
-            primary_key="title",
-            secondary_key="url",
-            timestamp_key="created_at",
+        body = _build_collection_page(
+            title="Bookmarks",
+            summary="Saved pages collected from the browser menu and current tab.",
+            count_text=f"{len(bookmarks)} saved bookmarks",
+            content=_build_internal_entries(
+                bookmarks,
+                empty_message="No bookmarks yet.",
+                primary_key="title",
+                secondary_key="url",
+                timestamp_key="created_at",
+            ),
         )
     elif page == "downloads":
-        body = _build_internal_entries(
-            downloads,
-            empty_message="No downloads yet.",
-            primary_key="file_name",
-            secondary_key="url",
-            timestamp_key="created_at",
-            tertiary_key="path",
+        body = _build_collection_page(
+            title="Downloads",
+            summary="Files downloaded through the managed browsing session.",
+            count_text=f"{len(downloads)} recorded downloads",
+            content=_build_internal_entries(
+                downloads,
+                empty_message="No downloads yet.",
+                primary_key="file_name",
+                secondary_key="url",
+                timestamp_key="created_at",
+                tertiary_key="path",
+            ),
         )
     elif page == "permissions":
-        body = _build_permission_entries(permissions, permission_requests, handoffs)
+        body = _build_collection_page(
+            title="Permissions",
+            summary="Review decisions, prompts, and recent handoffs in one place.",
+            count_text=(
+                f"{len(permission_requests)} pending | "
+                f"{len(permissions)} saved decisions | "
+                f"{len(handoffs)} handoffs"
+            ),
+            content=_build_permission_entries(permissions, permission_requests, handoffs),
+        )
     else:
         title = INTERNAL_PAGE_TITLES["home"]
         body = _build_home_page(
@@ -113,221 +139,428 @@ def build_internal_page_html(
         <title>{html.escape(title)}</title>
         <style>
           :root {{
-            --bg: #f5f7fb;
-            --surface: rgba(255, 255, 255, 0.95);
-            --line: rgba(99, 117, 148, 0.25);
-            --ink: #172534;
-            --muted: #607289;
-            --accent: #206bc4;
-            --accent-soft: rgba(32, 107, 196, 0.12);
-            --ok: #2fb344;
-            --warn: #f59f00;
+            --bg: #edf2f7;
+            --surface: rgba(255, 255, 255, 0.94);
+            --surface-strong: rgba(255, 255, 255, 0.99);
+            --surface-muted: #f4f7fb;
+            --surface-ink: linear-gradient(135deg, #12233b 0%, #1b3252 58%, #244468 100%);
+            --line: rgba(15, 23, 42, 0.08);
+            --line-strong: rgba(15, 23, 42, 0.14);
+            --ink: #0f172a;
+            --muted: #607089;
+            --accent: #2563eb;
+            --accent-soft: rgba(37, 99, 235, 0.1);
+            --accent-strong: #1749b5;
             --danger: #d63939;
-            --shadow: 0 18px 44px rgba(17, 24, 39, 0.08);
-            --radius: 14px;
+            --shadow-soft: 0 18px 46px rgba(15, 23, 42, 0.08);
+            --shadow-tight: 0 10px 24px rgba(15, 23, 42, 0.04);
+            --radius-xl: 28px;
+            --radius-lg: 22px;
+            --radius-md: 16px;
           }}
           * {{ box-sizing: border-box; }}
+          html {{
+            background: var(--bg);
+          }}
           body {{
             margin: 0;
             min-height: 100vh;
             color: var(--ink);
-            font-family: "Inter", "Segoe UI", "PingFang SC", sans-serif;
+            font-family: "Segoe UI Variable Display", "Aptos", "PingFang SC", sans-serif;
             background:
-              radial-gradient(circle at left top, rgba(32, 107, 196, 0.1), transparent 30%),
-              radial-gradient(circle at right top, rgba(47, 179, 68, 0.08), transparent 24%),
-              linear-gradient(180deg, #ffffff 0%, var(--bg) 100%);
-            padding: 22px;
+              radial-gradient(circle at top, rgba(37, 99, 235, 0.12), transparent 34%),
+              linear-gradient(180deg, #f9fbfe 0%, var(--bg) 48%, #e9eef5 100%);
+            padding: 28px clamp(20px, 3vw, 42px) 72px;
+          }}
+          body::before {{
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background:
+              linear-gradient(90deg, rgba(255, 255, 255, 0.2) 0, rgba(255, 255, 255, 0.2) 1px, transparent 1px, transparent 72px),
+              linear-gradient(rgba(255, 255, 255, 0.16) 0, rgba(255, 255, 255, 0.16) 1px, transparent 1px, transparent 72px);
+            opacity: 0.24;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.52), transparent 82%);
           }}
           a {{ color: inherit; text-decoration: none; }}
           .tblr-shell {{
-            max-width: 1120px;
+            position: relative;
+            max-width: 1220px;
             margin: 0 auto;
           }}
           .tblr-head {{
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 12px;
+            gap: 16px;
             margin-bottom: 14px;
             padding: 14px 16px;
-            border-radius: var(--radius);
+            border-radius: var(--radius-lg);
             border: 1px solid var(--line);
-            background: var(--surface);
-            box-shadow: var(--shadow);
+            background: rgba(255, 255, 255, 0.72);
+            backdrop-filter: blur(18px);
+            box-shadow: var(--shadow-tight);
           }}
           .tblr-brand {{
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
           }}
           .tblr-logo {{
-            width: 38px;
-            height: 38px;
-            border-radius: 10px;
+            width: 42px;
+            height: 42px;
+            border-radius: 14px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            background: linear-gradient(145deg, #1f4e8c 0%, #1a6bd6 100%);
-            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            background: var(--surface-ink);
+            color: #f8fbff;
             font-weight: 700;
+            font-size: 16px;
+            box-shadow: 0 14px 28px rgba(18, 35, 59, 0.24);
           }}
           .tblr-brand h1 {{
             margin: 0;
-            font-size: 1rem;
+            font-family: "Bahnschrift SemiBold", "Segoe UI Variable Display", sans-serif;
+            font-size: 1.1rem;
+            letter-spacing: -0.02em;
           }}
           .tblr-brand p {{
-            margin: 2px 0 0;
+            margin: 3px 0 0;
             color: var(--muted);
-            font-size: 12px;
+            font-size: 12.5px;
           }}
           .tblr-badges {{
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
+            justify-content: flex-end;
           }}
           .tblr-badge {{
-            padding: 5px 10px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 34px;
+            padding: 6px 12px;
             border-radius: 999px;
             border: 1px solid var(--line);
-            background: rgba(255, 255, 255, 0.8);
+            background: rgba(255, 255, 255, 0.82);
             color: var(--muted);
             font-size: 12px;
             font-weight: 600;
           }}
           .tblr-badge strong {{
             color: var(--ink);
-            margin-right: 6px;
           }}
           .tblr-nav {{
             display: flex;
-            gap: 8px;
+            gap: 6px;
             flex-wrap: wrap;
             margin-bottom: 14px;
-            padding: 10px;
-            border-radius: var(--radius);
+            padding: 7px;
+            border-radius: 999px;
             border: 1px solid var(--line);
-            background: var(--surface);
+            background: rgba(255, 255, 255, 0.72);
+            backdrop-filter: blur(18px);
+            box-shadow: var(--shadow-tight);
           }}
           .tblr-nav-link {{
-            padding: 8px 12px;
-            border-radius: 10px;
-            border: 1px solid var(--line);
-            background: #ffffff;
-            color: var(--ink);
+            padding: 9px 14px;
+            border-radius: 999px;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--muted);
             font-size: 13px;
             font-weight: 600;
+            transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+          }}
+          .tblr-nav-link:hover {{
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.82);
+            border-color: var(--line);
           }}
           .tblr-nav-link.is-active {{
-            border-color: rgba(32, 107, 196, 0.5);
-            background: var(--accent-soft);
+            border-color: rgba(37, 99, 235, 0.16);
+            background: rgba(255, 255, 255, 0.96);
             color: var(--accent);
+            box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.05);
           }}
           .tblr-alert {{
             margin-bottom: 14px;
-            padding: 12px;
-            border-radius: 12px;
+            padding: 14px 16px;
+            border-radius: var(--radius-md);
             border: 1px solid rgba(214, 57, 57, 0.35);
             background: rgba(214, 57, 57, 0.08);
             color: #7f1d1d;
           }}
           .tblr-hero,
           .tblr-list {{
-            background: var(--surface);
+            position: relative;
             border: 1px solid var(--line);
-            border-radius: 16px;
-            padding: 18px;
-            box-shadow: var(--shadow);
+            border-radius: var(--radius-xl);
+            padding: 24px;
+            box-shadow: var(--shadow-soft);
+            overflow: hidden;
+          }}
+          .tblr-hero {{
+            background: var(--surface-ink);
+            color: #f8fbff;
+            border-color: rgba(255, 255, 255, 0.08);
+          }}
+          .tblr-hero::after {{
+            content: "";
+            position: absolute;
+            inset: auto -60px -90px auto;
+            width: 280px;
+            height: 280px;
+            border-radius: 999px;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.16), transparent 68%);
+            pointer-events: none;
+          }}
+          .tblr-hero--compact {{
+            background: rgba(255, 255, 255, 0.8);
+            color: var(--ink);
+            border-color: var(--line);
+            padding-bottom: 18px;
           }}
           .tblr-hero h2 {{
-            margin: 0 0 8px;
-            font-size: 1.5rem;
+            margin: 0 0 10px;
+            font-family: "Bahnschrift SemiBold", "Segoe UI Variable Display", sans-serif;
+            font-size: clamp(1.8rem, 2vw, 2.35rem);
+            letter-spacing: -0.02em;
+            line-height: 1.08;
           }}
           .tblr-hero p {{
-            margin: 0 0 14px;
+            max-width: 860px;
+            margin: 0;
+            color: rgba(226, 232, 240, 0.88);
+            line-height: 1.62;
+            font-size: 1.02rem;
+          }}
+          .tblr-hero--compact h2 {{
+            font-size: clamp(1.55rem, 1.7vw, 1.9rem);
+            color: var(--ink);
+          }}
+          .tblr-hero--compact p {{
             color: var(--muted);
+            font-size: 0.99rem;
+          }}
+          .tblr-inline-stat {{
+            display: inline-flex;
+            align-items: center;
+            min-height: 34px;
+            margin-top: 16px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.84);
+            color: var(--accent-strong);
+            font-size: 12px;
+            font-weight: 600;
           }}
           .tblr-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-            gap: 10px;
+            grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+            gap: 14px;
+            margin-top: 22px;
           }}
           .tblr-card {{
-            padding: 12px;
-            border-radius: 12px;
-            border: 1px solid var(--line);
-            background: #ffffff;
+            padding: 16px;
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.09);
+            backdrop-filter: blur(10px);
           }}
           .tblr-card strong {{
             display: block;
-            margin-bottom: 4px;
+            margin-bottom: 8px;
+            color: rgba(226, 232, 240, 0.82);
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
           }}
-          .tblr-card span,
+          .tblr-card > span {{
+            display: block;
+            color: #ffffff;
+            font-size: 1.18rem;
+            font-weight: 700;
+            line-height: 1.2;
+          }}
+          .tblr-card .tblr-meta,
           .tblr-meta {{
             color: var(--muted);
             font-size: 13px;
           }}
+          .tblr-card .tblr-meta {{
+            margin-top: 8px;
+            color: rgba(226, 232, 240, 0.74);
+            line-height: 1.55;
+          }}
+          .tblr-hero--compact .tblr-card,
+          .tblr-list .tblr-card {{
+            background: var(--surface-muted);
+            border-color: var(--line);
+            backdrop-filter: none;
+          }}
+          .tblr-hero--compact .tblr-card strong,
+          .tblr-list .tblr-card strong {{
+            color: var(--muted);
+          }}
+          .tblr-hero--compact .tblr-card > span,
+          .tblr-list .tblr-card > span {{
+            color: var(--ink);
+          }}
+          .tblr-hero--compact .tblr-card .tblr-meta,
+          .tblr-list .tblr-card .tblr-meta {{
+            color: var(--muted);
+          }}
           .tblr-links {{
-            margin-top: 12px;
             display: flex;
             flex-wrap: wrap;
-            gap: 8px;
+            gap: 10px;
+            margin-top: 22px;
           }}
           .tblr-chip {{
             display: inline-flex;
-            padding: 7px 10px;
+            align-items: center;
+            min-height: 34px;
+            padding: 7px 12px;
             border-radius: 999px;
-            border: 1px solid var(--line);
-            background: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.1);
+            color: #f8fbff;
             font-size: 12px;
             font-weight: 600;
+            transition: transform 160ms ease, background 160ms ease;
+          }}
+          .tblr-chip:hover {{
+            transform: translateY(-1px);
+            background: rgba(255, 255, 255, 0.16);
           }}
           .tblr-list {{
-            margin-top: 14px;
+            margin-top: 16px;
+            background: var(--surface);
           }}
           .tblr-entry {{
-            padding: 10px 0;
-            border-top: 1px solid var(--line);
+            padding: 16px 18px;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background: var(--surface-muted);
+            margin-top: 12px;
           }}
           .tblr-entry:first-child {{
-            border-top: 0;
-            padding-top: 0;
+            margin-top: 0;
+          }}
+          .tblr-entry strong {{
+            display: block;
+            margin-bottom: 8px;
+            font-size: 1rem;
+            letter-spacing: -0.01em;
           }}
           .tblr-entry a {{
             color: var(--accent);
           }}
+          .tblr-entry a:hover {{
+            color: var(--accent-strong);
+          }}
           .tblr-empty {{
             margin: 0;
             color: var(--muted);
+            padding: 18px 0 2px;
+          }}
+          .tblr-section-head {{
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 16px;
+          }}
+          .tblr-section-kicker {{
+            margin-bottom: 8px;
+            color: var(--accent-strong);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+          }}
+          .tblr-section-title {{
+            margin: 0;
+            font-family: "Bahnschrift SemiBold", "Segoe UI Variable Display", sans-serif;
+            font-size: 1.35rem;
+            letter-spacing: -0.02em;
+          }}
+          .tblr-section-copy {{
+            max-width: 760px;
+            margin: 8px 0 0;
+            color: var(--muted);
+            line-height: 1.56;
+          }}
+          .tblr-meta-pills {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+          }}
+          .tblr-meta-pill {{
+            display: inline-flex;
+            align-items: center;
+            min-height: 30px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: var(--surface-strong);
+            border: 1px solid var(--line);
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.2;
           }}
           .tblr-route-grid {{
-            margin-top: 12px;
+            margin-top: 18px;
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 10px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
           }}
           .tblr-route-path {{
+            display: inline-flex;
+            margin-top: 8px;
+            padding: 5px 9px;
+            border-radius: 999px;
+            background: var(--accent-soft);
             font-family: "Cascadia Mono", Consolas, monospace;
             color: var(--accent);
             font-size: 12px;
             word-break: break-all;
           }}
           @media (max-width: 760px) {{
-            body {{ padding: 12px; }}
+            body {{ padding: 18px 14px 48px; }}
             .tblr-head {{
               flex-direction: column;
               align-items: flex-start;
             }}
+            .tblr-badges {{
+              justify-content: flex-start;
+            }}
+            .tblr-section-head {{
+              flex-direction: column;
+            }}
+            .tblr-hero,
+            .tblr-list {{
+              padding: 20px;
+              border-radius: 24px;
+            }}
           }}
         </style>
       </head>
-      <body>
+      <body class="tblr-page tblr-page--{html.escape(page)}">
         <main class="tblr-shell">
           <header class="tblr-head">
             <div class="tblr-brand">
               <div class="tblr-logo">A</div>
               <div>
                 <h1>Aoryn Browser</h1>
-                <p>Managed browser runtime tuned to the desktop app</p>
+                <p>Managed browser surface for the desktop app</p>
               </div>
             </div>
             <div class="tblr-badges">
@@ -345,6 +578,201 @@ def build_internal_page_html(
     return title, document
 
 
+def _build_blank_home_document() -> str:
+    return """
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title></title>
+        <style>
+          :root {
+            color-scheme: light;
+            --page-bg: #ffffff;
+            --wordmark: #1f3d70;
+            --wordmark-soft: #5b7fb6;
+            --search-bg: #ffffff;
+            --search-border: #dfe1e5;
+            --search-border-hover: #d2d6dc;
+            --search-shadow: 0 1px 6px rgba(32, 33, 36, 0.18);
+            --text-soft: #6f7782;
+          }
+          * {
+            box-sizing: border-box;
+          }
+          html, body {
+            margin: 0;
+            min-height: 100%;
+          }
+          body {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            width: 100%;
+            padding-top: min(16vh, 132px);
+            background: var(--page-bg);
+            font-family: Arial, "Segoe UI", sans-serif;
+          }
+          .tblr-home-shell {
+            width: min(760px, calc(100vw - 64px));
+            display: grid;
+            gap: 28px;
+            justify-items: center;
+            position: relative;
+          }
+          .tblr-wordmark {
+            display: inline-flex;
+            align-items: baseline;
+            justify-content: center;
+            gap: 2px;
+            font-size: clamp(54px, 9vw, 86px);
+            font-weight: 700;
+            letter-spacing: -0.06em;
+            line-height: 1;
+            user-select: none;
+          }
+          .tblr-wordmark-main {
+            color: var(--wordmark);
+          }
+          .tblr-wordmark-accent {
+            color: var(--wordmark-soft);
+          }
+          .tblr-search-shell {
+            width: min(640px, calc(100vw - 72px));
+            display: flex;
+            align-items: center;
+            padding: 0 18px;
+            height: 50px;
+            border-radius: 999px;
+            border: 1px solid var(--search-border);
+            background: var(--search-bg);
+            cursor: text;
+          }
+          .tblr-search-shell:hover {
+            border-color: var(--search-border-hover);
+            box-shadow: var(--search-shadow);
+          }
+          .tblr-search-main {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            min-width: 0;
+            flex: 1;
+          }
+          .tblr-search-icon {
+            position: relative;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #9aa0a6;
+            border-radius: 999px;
+            flex: none;
+          }
+          .tblr-search-icon::after {
+            content: "";
+            position: absolute;
+            right: -6px;
+            bottom: -4px;
+            width: 8px;
+            height: 2px;
+            border-radius: 999px;
+            background: #9aa0a6;
+            transform: rotate(45deg);
+            transform-origin: center;
+          }
+          .tblr-search-label {
+            appearance: none;
+            border: 0;
+            outline: 0;
+            background: transparent;
+            width: 100%;
+            min-width: 0;
+            color: var(--text-soft);
+            font-size: 16px;
+            line-height: 1;
+            padding: 0;
+            margin: 0;
+            font-family: Arial, "Segoe UI", sans-serif;
+          }
+          .tblr-search-label::placeholder {
+            color: var(--text-soft);
+          }
+          @media (max-width: 720px) {
+            .tblr-home-shell {
+              width: calc(100vw - 28px);
+            }
+            .tblr-search-shell {
+              width: calc(100vw - 40px);
+            }
+            body {
+              padding-top: 90px;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <main class="tblr-home-shell">
+          <div class="tblr-wordmark" aria-hidden="true">
+            <span class="tblr-wordmark-main">Aoryn</span><span class="tblr-wordmark-accent">.</span>
+          </div>
+          <form id="new-tab-search" class="tblr-search-shell" action="aoryn://focus-address" method="get" autocomplete="off">
+            <div class="tblr-search-main">
+              <div class="tblr-search-icon" aria-hidden="true"></div>
+              <input
+                id="new-tab-search-input"
+                class="tblr-search-label"
+                type="text"
+                name="query"
+                placeholder="Search or enter address"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+              />
+            </div>
+          </form>
+        </main>
+        <script>
+          (() => {
+            const form = document.getElementById("new-tab-search");
+            const input = document.getElementById("new-tab-search-input");
+            if (!form || !input) return;
+
+            const submit = () => {
+              const value = String(input.value || "").trim();
+              if (!value) {
+                input.focus();
+                return;
+              }
+              window.location.href = "aoryn://focus-address?query=" + encodeURIComponent(value);
+            };
+
+            form.addEventListener("submit", (event) => {
+              event.preventDefault();
+              submit();
+            });
+
+            form.addEventListener("click", () => input.focus());
+
+            window.addEventListener("keydown", (event) => {
+              const active = document.activeElement;
+              if (active === input || event.ctrlKey || event.metaKey || event.altKey) return;
+              if (event.key === "/" || (event.key.length === 1 && !event.repeat)) {
+                input.focus();
+                if (event.key.length === 1 && event.key !== "/") {
+                  input.value = event.key;
+                }
+                event.preventDefault();
+              }
+            });
+
+            window.addEventListener("load", () => input.focus());
+          })();
+        </script>
+      </body>
+    </html>
+    """
+
+
 def _build_service_metric_card(*, label: str, value: str, detail: str | None = None) -> str:
     detail_markup = ""
     if _optional_str(detail):
@@ -356,6 +784,43 @@ def _build_service_metric_card(*, label: str, value: str, detail: str | None = N
         f"{detail_markup}"
         "</div>"
     )
+
+
+def _build_collection_page(*, title: str, summary: str, count_text: str, content: str) -> str:
+    return (
+        '<section class="tblr-hero tblr-hero--compact">'
+        f"<h2>{html.escape(title)}</h2>"
+        f"<p>{html.escape(summary)}</p>"
+        f'<div class="tblr-inline-stat">{html.escape(count_text)}</div>'
+        "</section>"
+        f"{content}"
+    )
+
+
+def _build_section_card(*, kicker: str, title: str, summary: str, content: str, aside: str | None = None) -> str:
+    aside_markup = ""
+    if _optional_str(aside):
+        aside_markup = f'<div class="tblr-inline-stat">{html.escape(_optional_str(aside) or "")}</div>'
+    return (
+        '<section class="tblr-list">'
+        '<div class="tblr-section-head">'
+        "<div>"
+        f'<div class="tblr-section-kicker">{html.escape(kicker)}</div>'
+        f'<h3 class="tblr-section-title">{html.escape(title)}</h3>'
+        f'<p class="tblr-section-copy">{html.escape(summary)}</p>'
+        "</div>"
+        f"{aside_markup}"
+        "</div>"
+        f"{content}"
+        "</section>"
+    )
+
+
+def _render_meta_pills(parts: list[str]) -> str:
+    items = [part for part in parts if _optional_str(part)]
+    if not items:
+        return ""
+    return '<div class="tblr-meta-pills">' + "".join(f'<span class="tblr-meta-pill">{item}</span>' for item in items) + "</div>"
 
 
 def _build_service_routes_markup(service_summary: dict[str, Any] | None) -> str:
@@ -376,14 +841,12 @@ def _build_service_routes_markup(service_summary: dict[str, Any] | None) -> str:
             f'<div class="tblr-meta">{html.escape(full_url)}</div>'
             "</article>"
         )
-    return (
-        '<section class="tblr-list">'
-        '<article class="tblr-entry">'
-        "<strong>Runtime routes</strong>"
-        '<div class="tblr-meta">These local endpoints are what the desktop app calls when it drives browsing, DOM inspection, waiting, downloads, and handoff checks.</div>'
-        "</article>"
-        f'<div class="tblr-route-grid">{"".join(cards)}</div>'
-        "</section>"
+    return _build_section_card(
+        kicker="Runtime",
+        title="Runtime routes",
+        summary="These local endpoints are what the desktop app calls when it drives browsing, DOM inspection, waiting, downloads, and handoff checks.",
+        aside=_optional_str(payload.get("transport")) or "local_http",
+        content=f'<div class="tblr-route-grid">{"".join(cards)}</div>',
     )
 
 
@@ -415,7 +878,7 @@ def _build_home_page(
         """
         <section class="tblr-hero">
           <h2>Managed browser runtime for Aoryn tasks.</h2>
-          <p>This browser is primarily the desktop app's control surface: Aoryn can navigate pages, inspect DOM, wait for UI state, and pause here when a human needs to step in.</p>
+          <p>This browser is the desktop app's control surface. Aoryn can navigate, inspect the DOM, wait for UI state, and pause here when human review is needed.</p>
         """
         + f"""
           <div class="tblr-grid">
@@ -427,10 +890,10 @@ def _build_home_page(
             {_build_service_metric_card(label='Handoffs', value=f"{len(handoffs)} recorded events", detail=handoff_detail)}
           </div>
           <div class="tblr-links">
-            <a class="tblr-chip" href="aoryn://runtime">Runtime console</a>
-            <a class="tblr-chip" href="aoryn://setup">Model + browser setup</a>
+            <a class="tblr-chip" href="aoryn://runtime">Runtime overview</a>
+            <a class="tblr-chip" href="aoryn://setup">Model and browser setup</a>
             <a class="tblr-chip" href="aoryn://history">Research trail</a>
-            <a class="tblr-chip" href="aoryn://permissions">Human review queue</a>
+            <a class="tblr-chip" href="aoryn://permissions">Review queue</a>
             <a class="tblr-chip" href="aoryn://downloads">Downloads</a>
           </div>
         </section>
@@ -459,8 +922,8 @@ def _build_runtime_page(service_summary: dict[str, Any] | None, assistant_setup:
     return (
         """
         <section class="tblr-hero">
-          <h2>Control surface for the desktop app.</h2>
-          <p>The desktop executor talks to this browser over local HTTP. These metrics show whether the managed runtime is ready for navigation, DOM inspection, downloads, and human-review pauses.</p>
+          <h2>Browser runtime for the desktop workbench.</h2>
+          <p>The desktop executor talks to this browser over local HTTP. These metrics show whether the managed runtime is ready for navigation, DOM inspection, downloads, and review pauses.</p>
         """
         + f"""
           <div class="tblr-grid">
@@ -506,7 +969,7 @@ def _build_internal_entries(
         rows.append(
             '<article class="tblr-entry">'
             f"<strong>{html.escape(primary)}</strong>"
-            f"<div class=\"tblr-meta\">{'<br/>'.join(part for part in meta_parts if part)}</div>"
+            f"{_render_meta_pills(meta_parts)}"
             "</article>"
         )
     return f'<section class="tblr-list">{"".join(rows)}</section>'
@@ -515,7 +978,7 @@ def _build_internal_entries(
 def _build_ai_setup_page(assistant_setup: dict[str, Any] | None) -> str:
     payload = assistant_setup or {}
     status = html.escape(_optional_str(payload.get("status")) or "Setup needed")
-    detail = html.escape(_optional_str(payload.get("detail")) or "Open the Setup button in the toolbar to configure browser AI.")
+    detail = html.escape(_optional_str(payload.get("detail")) or "Open Setup in the toolbar to connect browser AI.")
     provider_label = html.escape(_optional_str(payload.get("provider_label")) or "Not selected")
     model_display = html.escape(_optional_str(payload.get("model_display")) or "Auto")
     base_url = html.escape(_optional_str(payload.get("base_url")) or "Not set")
@@ -527,8 +990,8 @@ def _build_ai_setup_page(assistant_setup: dict[str, Any] | None) -> str:
     api_key_state = "Configured" if bool(payload.get("api_key_configured")) else "Not configured"
     return f"""
         <section class="tblr-hero">
-          <h2>Configure the browser assistant and execution browser in one place.</h2>
-          <p>The toolbar Setup button writes to the same runtime preferences used by Aoryn tasks, so browser AI and desktop runs stay aligned.</p>
+          <h2>Configure browser AI and the execution browser in one place.</h2>
+          <p>Setup writes to the same local runtime preferences used by Aoryn tasks, so browser AI and desktop runs stay aligned.</p>
           <div class="tblr-grid">
             <div class="tblr-card"><strong>Status</strong><span>{status}</span><div class="tblr-meta">{detail}</div></div>
             <div class="tblr-card"><strong>Provider</strong><span>{provider_label}</span></div>
@@ -557,7 +1020,7 @@ def _build_permission_entries(
         pending_rows.append(
             '<article class="tblr-entry">'
             f"<strong>{html.escape(_optional_str(entry.get('origin')) or 'Unknown origin')}</strong>"
-            f"<div class=\"tblr-meta\">{html.escape(_optional_str(entry.get('feature')) or 'permission')}<br/>{html.escape(_optional_str(entry.get('request_id')) or '')}<br/>{html.escape(_format_timestamp(entry.get('requested_at')))}</div>"
+            f"{_render_meta_pills([html.escape(_optional_str(entry.get('feature')) or 'permission'), html.escape(_optional_str(entry.get('request_id')) or ''), html.escape(_format_timestamp(entry.get('requested_at')))])}"
             "</article>"
         )
     permission_rows: list[str] = []
@@ -568,7 +1031,7 @@ def _build_permission_entries(
         permission_rows.append(
             '<article class="tblr-entry">'
             f"<strong>{html.escape(origin)}</strong>"
-            f"<div class=\"tblr-meta\">{html.escape(feature)}<br/>{html.escape(decision.title())}<br/>{html.escape(_format_timestamp(entry.get('updated_at')))}</div>"
+            f"{_render_meta_pills([html.escape(feature), html.escape(decision.title()), html.escape(_format_timestamp(entry.get('updated_at')))])}"
             "</article>"
         )
     handoff_rows: list[str] = []
@@ -576,25 +1039,34 @@ def _build_permission_entries(
         handoff_rows.append(
             '<article class="tblr-entry">'
             f"<strong>{html.escape(_optional_str(entry.get('kind')) or 'handoff')}</strong>"
-            f"<div class=\"tblr-meta\">{html.escape(_optional_str(entry.get('reason')) or 'Manual review required')}<br/>{html.escape(_optional_str(entry.get('url')) or '')}<br/>{html.escape(_format_timestamp(entry.get('created_at')))}</div>"
+            f"{_render_meta_pills([html.escape(_optional_str(entry.get('reason')) or 'Manual review required'), html.escape(_optional_str(entry.get('url')) or ''), html.escape(_format_timestamp(entry.get('created_at')))])}"
             "</article>"
         )
     permissions_markup = "".join(permission_rows) or '<p class="tblr-empty">No saved permission decisions yet.</p>'
     pending_markup = "".join(pending_rows) or '<p class="tblr-empty">No pending permission requests.</p>'
     handoffs_markup = "".join(handoff_rows) or '<p class="tblr-empty">No recent auth or human handoffs.</p>'
     return (
-        '<section class="tblr-list">'
-        "<article class=\"tblr-entry\"><strong>Pending Requests</strong></article>"
-        f"{pending_markup}"
-        "</section>"
-        '<section class="tblr-list">'
-        "<article class=\"tblr-entry\"><strong>Permission Decisions</strong></article>"
-        f"{permissions_markup}"
-        "</section>"
-        '<section class="tblr-list">'
-        "<article class=\"tblr-entry\"><strong>Recent Handoffs</strong></article>"
-        f"{handoffs_markup}"
-        "</section>"
+        _build_section_card(
+            kicker="Review",
+            title="Pending Requests",
+            summary="Prompts waiting for a human decision before the managed browser can continue.",
+            aside=f"{len(permission_requests)} open",
+            content=pending_markup,
+        )
+        + _build_section_card(
+            kicker="Review",
+            title="Permission Decisions",
+            summary="Saved allow, deny, and prompt decisions that speed up repeat browsing tasks.",
+            aside=f"{len(permissions)} saved",
+            content=permissions_markup,
+        )
+        + _build_section_card(
+            kicker="Review",
+            title="Recent Handoffs",
+            summary="Authentication pauses and operator checkpoints captured during recent runs.",
+            aside=f"{len(handoffs)} events",
+            content=handoffs_markup,
+        )
     )
 
 

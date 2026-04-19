@@ -18,14 +18,14 @@ const FALLBACK_COPY = {
   "zh-CN": {
     document: { title: "Aoryn" },
     sidebar: { appTitle: "Aoryn", appSubtitle: "任务", newTask: "新建", history: "历史" },
-    topbar: { menu: "菜单", chatMode: "聊天", devMode: "开发", settings: "设置" },
+    topbar: { menu: "菜单", chatMode: "聊天", devMode: "诊断", settings: "设置" },
     chat: { emptyEyebrow: "Aoryn", emptyTitle: "开始一个任务", emptyBody: "输入目标后，执行过程和截图会出现在对话里。" },
     common: { refresh: "刷新", close: "×", closeLabel: "关闭" },
   },
   "en-US": {
     document: { title: "Aoryn" },
     sidebar: { appTitle: "Aoryn", appSubtitle: "Tasks", newTask: "New", history: "History" },
-    topbar: { menu: "Menu", chatMode: "Chat", devMode: "Developer", settings: "Settings" },
+    topbar: { menu: "Menu", chatMode: "Chat", devMode: "Diagnostics", settings: "Settings" },
     chat: { emptyEyebrow: "Aoryn", emptyTitle: "Start a task", emptyBody: "Enter a goal and keep the run plus screenshots in chat." },
     common: { refresh: "Refresh", close: "×", closeLabel: "Close" },
   },
@@ -88,6 +88,9 @@ const state = {
   displayDetectionToken: 0,
   settingsRestoreFocus: null,
   helpRestoreFocus: null,
+  helpAudience: "user",
+  helpLocale: "",
+  helpTitle: "",
   helpContent: null,
   helpLoading: false,
   helpError: "",
@@ -183,6 +186,7 @@ const elements = {
   browserExecutablePath: document.getElementById("browserExecutablePath"),
   browserHeadless: document.getElementById("browserHeadless"),
   openHelpCenterButton: document.getElementById("openHelpCenterButton"),
+  openDeveloperDocsButton: document.getElementById("openDeveloperDocsButton"),
   openDeveloperConsoleButton: document.getElementById("openDeveloperConsoleButton"),
   openAboutButton: document.getElementById("openAboutButton"),
   aboutTitle: document.getElementById("aboutTitle"),
@@ -196,6 +200,7 @@ const elements = {
   helpOverlay: document.getElementById("helpOverlay"),
   helpBackdrop: document.getElementById("helpBackdrop"),
   helpModal: document.getElementById("helpModal"),
+  helpCenterTitle: document.getElementById("helpCenterTitle"),
   closeHelpButton: document.getElementById("closeHelpButton"),
   helpContent: document.getElementById("helpContent"),
   inspectorOverlay: document.getElementById("inspectorOverlay"),
@@ -316,7 +321,8 @@ function bindEvents() {
   elements.openSettingsFromDeveloper?.addEventListener("click", openSettings);
   elements.settingsBackdrop?.addEventListener("click", closeSettings);
   elements.closeSettingsButton?.addEventListener("click", closeSettings);
-  elements.openHelpCenterButton?.addEventListener("click", openHelpCenter);
+  elements.openHelpCenterButton?.addEventListener("click", () => openHelpCenter("user"));
+  elements.openDeveloperDocsButton?.addEventListener("click", () => openHelpCenter("developer"));
   elements.openDeveloperConsoleButton?.addEventListener("click", openDeveloperConsole);
   elements.openAboutButton?.addEventListener("click", openAboutPanel);
   elements.aboutBackdrop?.addEventListener("click", closeAboutPanel);
@@ -2850,6 +2856,19 @@ function tr(zh, en) {
   return state.locale === "zh-CN" ? zh : en;
 }
 
+function normalizeHelpAudience(audience) {
+  return audience === "developer" ? "developer" : "user";
+}
+
+function getDefaultHelpTitle(audience = state.helpAudience, locale = state.locale) {
+  const normalizedAudience = normalizeHelpAudience(audience);
+  const normalizedLocale = locale === "en-US" ? "en-US" : "zh-CN";
+  if (normalizedAudience === "developer") {
+    return normalizedLocale === "en-US" ? "Advanced Docs" : "高级文档";
+  }
+  return normalizedLocale === "en-US" ? "Help Center" : "帮助中心";
+}
+
 function safeStorageSet(key, value) {
   try {
     if (value == null || value === "") {
@@ -3571,7 +3590,7 @@ function renderTopbar() {
   }
 
   if (state.uiMode === "developer") {
-    elements.topbarTitle.textContent = tr("开发控制台", "Developer");
+    elements.topbarTitle.textContent = tr("诊断面板", "Diagnostics");
     elements.topbarSubtitle.textContent = "";
     return;
   }
@@ -3717,19 +3736,27 @@ function buildWelcomeRecentItems() {
 }
 
 function renderWelcomeMessage() {
-  return "";
+  if (!state.hydrated || !state.meta) {
+    return "";
+  }
   const recentItems = buildWelcomeRecentItems();
+  const starterItems = buildStarterSuggestions().slice(0, 3);
   const capabilityItems = [
-    tr("浏览器流程执行", "Browser workflow runs"),
-    tr("桌面应用操作", "Desktop app control"),
-    tr("截图与过程回放", "Screenshots and run playback"),
+    tr("可见执行与截图回放", "Visible runs and screenshot replay"),
+    tr("本地优先的模型与浏览器设置", "Local-first model and browser setup"),
+    tr("可恢复的时间线与历史记录", "Recoverable timelines and local history"),
   ];
   return `
     <div class="chat-welcome">
       <div class="chat-welcome__hero">
         <p>${escapeHtml(t("chat.emptyEyebrow"))}</p>
         <h2>${escapeHtml(t("chat.emptyTitle"))}</h2>
-        <p>${escapeHtml(t("chat.emptyBody"))}</p>
+        <p>${escapeHtml(
+          tr(
+            "把目标交给 Aoryn，执行过程、截图和恢复入口会留在同一个工作台里。",
+            "Hand a goal to Aoryn and keep execution, screenshots, and recovery paths inside one workbench."
+          )
+        )}</p>
       </div>
       <aside class="chat-welcome__aside" aria-label="${escapeHtml(tr("工作台概览", "Workspace overview"))}">
         <section class="welcome-card">
@@ -3744,6 +3771,35 @@ function renderWelcomeMessage() {
                 `
               )
               .join("")}
+          </div>
+        </section>
+        <section class="welcome-card">
+          <p class="welcome-card__eyebrow">${escapeHtml(tr("推荐起步任务", "Starter tasks"))}</p>
+          <div class="welcome-card__list">
+            ${
+              starterItems.length
+                ? starterItems
+                    .map(
+                      (item) => `
+                        <div class="welcome-card__item">
+                          <strong>${escapeHtml(item.label)}</strong>
+                          <span>${escapeHtml(item.description || item.task)}</span>
+                          <button class="suggestion-chip" type="button" data-start-agent-task="${escapeHtml(item.task)}">
+                            ${escapeHtml(tr("用这条任务", "Use this task"))}
+                          </button>
+                        </div>
+                      `
+                    )
+                    .join("")
+                : `
+                    <div class="welcome-card__item welcome-card__item--empty">
+                      <strong>${escapeHtml(tr("等待配置完成", "Waiting for setup"))}</strong>
+                      <span>${escapeHtml(
+                        tr("完成模型或浏览器设置后，这里会显示推荐起步任务。", "Starter tasks will appear here after model and browser setup is ready.")
+                      )}</span>
+                    </div>
+                  `
+            }
           </div>
         </section>
         <section class="welcome-card">
@@ -4225,11 +4281,19 @@ function openDeveloperConsole() {
   setUiMode("developer");
 }
 
-function openHelpCenter() {
+function openHelpCenter(audience = "user") {
   state.helpRestoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const nextAudience = normalizeHelpAudience(audience);
+  const audienceChanged = state.helpAudience !== nextAudience;
+  state.helpAudience = nextAudience;
   closeCustomSelect({ restoreFocus: false });
   state.settingsOpen = false;
   state.helpOpen = true;
+  if (audienceChanged) {
+    state.helpContent = "";
+    state.helpError = "";
+  }
+  state.helpTitle = getDefaultHelpTitle(nextAudience);
   renderAll();
   if (!state.helpContent && !state.helpLoading) {
     loadHelpContent();
@@ -4368,20 +4432,27 @@ function applyStaticCopy() {
   });
 
   if (elements.openHelpCenterButton) {
-    elements.openHelpCenterButton.textContent = tr("开发者文档", "Developer Docs");
+    elements.openHelpCenterButton.textContent = tr("帮助中心", "Help Center");
+  }
+  if (elements.openDeveloperDocsButton) {
+    elements.openDeveloperDocsButton.textContent = tr("高级文档", "Advanced Docs");
   }
   if (elements.openDeveloperConsoleButton) {
-    elements.openDeveloperConsoleButton.textContent = tr("开发控制台", "Developer Console");
+    elements.openDeveloperConsoleButton.textContent = tr("诊断面板", "Diagnostics");
   }
   const helpTitle = document.getElementById("helpAndAdvancedTitle");
   if (helpTitle) {
-    helpTitle.textContent = tr("文档与高级", "Docs & Advanced");
+    helpTitle.textContent = tr("帮助与高级", "Help & Advanced");
   }
-  const helpCenterTitle = document.getElementById("helpCenterTitle");
-  if (helpCenterTitle && !state.helpContent) {
-    helpCenterTitle.textContent = tr("开发者文档", "Developer Docs");
+  if (elements.helpCenterTitle && !state.helpContent) {
+    elements.helpCenterTitle.textContent = getDefaultHelpTitle();
   }
-  elements.helpBackdrop?.setAttribute("aria-label", tr("关闭开发者文档", "Close developer docs"));
+  elements.helpBackdrop?.setAttribute(
+    "aria-label",
+    state.helpAudience === "developer"
+      ? tr("关闭高级文档", "Close advanced docs")
+      : tr("关闭帮助中心", "Close help center")
+  );
   elements.closeHelpButton?.setAttribute("aria-label", closeLabel);
 }
 
@@ -4391,7 +4462,7 @@ function setLocale(locale) {
   state.helpError = "";
   state.helpLoading = false;
   state.helpLocale = "";
-  state.helpTitle = state.locale === "en-US" ? "Developer Docs" : "开发者文档";
+  state.helpTitle = getDefaultHelpTitle();
   safeStorageSet(LOCALE_STORAGE_KEY, state.locale);
   fillLanguageOptions();
   fillSendShortcutOptions();
@@ -4418,22 +4489,29 @@ function renderSettingsProfile() {
 
 
 async function loadHelpContent() {
+  const audience = normalizeHelpAudience(state.helpAudience);
+  const locale = normalizeLocale(state.locale);
   state.helpLoading = true;
   state.helpError = "";
-  state.helpTitle = state.locale === "en-US" ? "Developer Docs" : "开发者文档";
+  state.helpTitle = getDefaultHelpTitle(audience, locale);
   renderAll();
 
-  const locale = normalizeLocale(state.locale);
-  const payload = await fetchJson(`/api/help?locale=${encodeURIComponent(locale)}`);
+  const payload = await fetchJson(
+    `/api/help?locale=${encodeURIComponent(locale)}&audience=${encodeURIComponent(audience)}`
+  );
   state.helpLoading = false;
   if (!payload) {
-    state.helpError = tr("无法加载开发者文档。", "Could not load developer docs.");
+    state.helpError =
+      audience === "developer"
+        ? tr("无法加载高级文档。", "Could not load advanced docs.")
+        : tr("无法加载帮助中心。", "Could not load help center.");
     renderAll();
     return;
   }
 
+  state.helpAudience = normalizeHelpAudience(payload.audience);
   state.helpLocale = payload.locale || locale;
-  state.helpTitle = payload.title || (locale === "en-US" ? "Developer Docs" : "开发者文档");
+  state.helpTitle = payload.title || getDefaultHelpTitle(state.helpAudience, state.helpLocale);
   state.helpContent = payload.markdown || "";
   state.helpError = "";
   renderAll();
@@ -5545,23 +5623,28 @@ function renderRunGallery(details) {
 
 function renderHelpCenter() {
   if (elements.helpCenterTitle) {
-    elements.helpCenterTitle.textContent = state.helpTitle || tr("开发者文档", "Developer Docs");
+    elements.helpCenterTitle.textContent = state.helpTitle || getDefaultHelpTitle();
   }
   if (!elements.helpContent) return;
+  const isDeveloperAudience = normalizeHelpAudience(state.helpAudience) === "developer";
 
   if (state.helpLoading) {
     elements.helpContent.innerHTML = renderPanelEmptyState({
-      eyebrow: tr("Docs", "Docs"),
-      title: tr("正在加载开发者文档...", "Loading developer docs..."),
-      description: tr("文档内容到达后会直接显示在这里。", "The documentation will appear here as soon as it is ready."),
+      eyebrow: isDeveloperAudience ? tr("高级", "Advanced") : tr("帮助", "Help"),
+      title: isDeveloperAudience
+        ? tr("正在加载高级文档...", "Loading advanced docs...")
+        : tr("正在加载帮助中心...", "Loading help center..."),
+      description: isDeveloperAudience
+        ? tr("高级说明准备好后会显示在这里。", "Advanced documentation will appear here as soon as it is ready.")
+        : tr("帮助内容准备好后会显示在这里。", "Help content will appear here as soon as it is ready."),
     });
     return;
   }
 
   if (state.helpError) {
     elements.helpContent.innerHTML = renderPanelEmptyState({
-      eyebrow: tr("Docs", "Docs"),
-      title: tr("无法加载文档", "Could not load documentation"),
+      eyebrow: isDeveloperAudience ? tr("高级", "Advanced") : tr("帮助", "Help"),
+      title: isDeveloperAudience ? tr("无法加载高级文档", "Could not load advanced docs") : tr("无法加载帮助中心", "Could not load help center"),
       description: state.helpError,
       tone: "error",
     });
@@ -5570,9 +5653,11 @@ function renderHelpCenter() {
 
   if (!state.helpContent) {
     elements.helpContent.innerHTML = renderPanelEmptyState({
-      eyebrow: tr("Docs", "Docs"),
-      title: tr("暂无文档内容", "No documentation available"),
-      description: tr("这里暂时还没有可用的开发者文档。", "There is no developer documentation available yet."),
+      eyebrow: isDeveloperAudience ? tr("高级", "Advanced") : tr("帮助", "Help"),
+      title: isDeveloperAudience ? tr("暂无高级文档", "No advanced docs available") : tr("暂无帮助内容", "No help content available"),
+      description: isDeveloperAudience
+        ? tr("这里暂时还没有可用的高级文档。", "There are no advanced docs available yet.")
+        : tr("这里暂时还没有可用的帮助内容。", "There is no help content available yet."),
     });
     return;
   }
@@ -6327,23 +6412,86 @@ function renderOnboardingGuide() {
 
   const isEnglish = state.locale === "en-US";
   const diagnostics = state.meta?.diagnostics || {};
+  const defaults = getEffectiveConfigDefaults();
   const configDir = diagnostics.config_dir || "%APPDATA%\\\\Aoryn";
   const runRoot = diagnostics.run_root || "%LOCALAPPDATA%\\\\Aoryn\\\\runs";
+  const starterItems = buildStarterSuggestions();
+  const recommendedTask = starterItems[0] || null;
+  const latestRun = state.runs?.[0] || null;
+  const environmentItems = Array.isArray(state.environmentCheck?.items) ? state.environmentCheck.items : [];
+  const environmentReady = environmentItems.length > 0 && environmentItems.every((item) => item.status === "Ready");
+  const providerChosen = Boolean(defaults.model_provider || defaults.model_name || defaults.model_auto_discover);
+  const firstRunDone = Boolean((state.runs || []).length || (state.jobs || []).length || state.activeJob);
+  const timelineOpened = Boolean(state.selectedRunDetails || (state.historySelection?.kind === "run" && state.historySelection.id));
+  const checklist = [
+    {
+      done: providerChosen,
+      title: isEnglish ? "1. Choose a model path" : "1. 选择模型路径",
+      detail: isEnglish
+        ? "Pick local LM Studio or a hosted compatible API before the first real run."
+        : "先决定使用本地 LM Studio 还是托管兼容 API，再开始第一条任务。",
+    },
+    {
+      done: environmentReady,
+      title: isEnglish ? "2. Check environment readiness" : "2. 检查环境是否就绪",
+      detail: isEnglish
+        ? "Confirm the provider connection, display correction, and runtime checks are ready."
+        : "确认模型连接、显示修正和运行环境检查都已经通过。",
+    },
+    {
+      done: firstRunDone,
+      title: isEnglish ? "3. Run one starter task" : "3. 跑通一条推荐任务",
+      detail: isEnglish
+        ? "Start with a low-risk browser task so you can verify the full execution loop."
+        : "先用低风险的浏览器任务验证完整执行链路。",
+    },
+    {
+      done: timelineOpened,
+      title: isEnglish ? "4. Review results and timeline" : "4. 查看结果与时间线",
+      detail: isEnglish
+        ? "Open the latest run to inspect screenshots, status updates, and recovery points."
+        : "打开最新运行，查看截图、状态变化和可恢复节点。",
+    },
+  ];
 
   elements.onboardingSection.innerHTML = `
     <div class="onboarding-card">
       <div class="onboarding-card__head">
         <div>
-          <p class="onboarding-card__eyebrow">${escapeHtml(isEnglish ? "First launch guide" : "首次启动引导")}</p>
-          <h3 class="onboarding-card__title">${escapeHtml(isEnglish ? "Check the environment before your first task." : "在开始第一条任务前，先确认环境是否就绪。")}</h3>
-          <p class="onboarding-card__body">${escapeHtml(isEnglish ? "Aoryn keeps the install folder and the user data folder separate, so upgrades stay predictable even if you install the app to a custom location such as D:\\Apps\\Aoryn." : "Aoryn 会把程序安装目录和用户数据目录分开管理，所以即使你把程序安装到 D:\\Apps\\Aoryn 这类自定义位置，后续升级和卸载也会更稳定。")}</p>
+          <p class="onboarding-card__eyebrow">${escapeHtml(isEnglish ? "First run guide" : "首次启动引导")}</p>
+          <h3 class="onboarding-card__title">${escapeHtml(isEnglish ? "Finish one successful run in four steps." : "用四步跑通第一条成功任务。")}</h3>
+          <p class="onboarding-card__body">${escapeHtml(
+            isEnglish
+              ? "Choose a model path, confirm the environment, run a starter task, and then inspect the timeline so the whole workflow is visible."
+              : "先选模型路径，再检查环境，接着运行推荐任务，最后查看时间线，让整条工作流都保持可见。"
+          )}</p>
         </div>
-        <span class="onboarding-card__badge">${escapeHtml(isEnglish ? "First run" : "首次启动")}</span>
+        <span class="onboarding-card__badge">${escapeHtml(isEnglish ? "4 steps" : "四步完成")}</span>
       </div>
 
       <div class="onboarding-tip">
-        <strong>${escapeHtml(isEnglish ? "Data location policy" : "数据目录策略")}</strong>
-        <span>${escapeHtml(isEnglish ? `Config and preferences stay in ${configDir}, while logs, cache, screenshots, and run history stay in ${runRoot}.` : `配置与偏好会保存在 ${configDir}，而日志、缓存、截图和运行记录会保存在 ${runRoot}。`)}</span>
+        <strong>${escapeHtml(isEnglish ? "Local-first data boundary" : "本地优先的数据边界")}</strong>
+        <span>${escapeHtml(
+          isEnglish
+            ? `Config and preferences stay in ${configDir}, while logs, cache, screenshots, and run history stay in ${runRoot}. Your account only handles identity and downloads.`
+            : `配置与偏好保存在 ${configDir}，日志、缓存、截图和运行记录保存在 ${runRoot}。账号只负责身份和下载权限。`
+        )}</span>
+      </div>
+
+      <div class="onboarding-checklist">
+        ${checklist
+          .map(
+            (item) => `
+              <div class="onboarding-check ${item.done ? "is-done" : ""}">
+                <span class="onboarding-check__dot" aria-hidden="true"></span>
+                <div>
+                  <strong>${escapeHtml(item.title)}</strong>
+                  <small>${escapeHtml(item.detail)}</small>
+                </div>
+              </div>
+            `
+          )
+          .join("")}
       </div>
 
       ${renderEnvironmentCheckGrid()}
@@ -6353,9 +6501,25 @@ function renderOnboardingGuide() {
         <button class="secondary-button" type="button" data-onboarding-provider="openai_compatible">${escapeHtml(isEnglish ? "Use hosted / compatible API" : "使用兼容 API")}</button>
         <button class="secondary-button" type="button" data-open-about="true">${escapeHtml(isEnglish ? "Open about & logs" : "打开关于与日志")}</button>
       </div>
+      <div class="onboarding-actions">
+        ${
+          recommendedTask
+            ? `<button class="primary-button" type="button" data-start-agent-task="${escapeHtml(recommendedTask.task)}">${escapeHtml(
+                isEnglish ? "Run starter task" : "运行推荐任务"
+              )}</button>`
+            : ""
+        }
+        ${
+          latestRun
+            ? `<button class="secondary-button" type="button" data-open-run-id="${escapeHtml(latestRun.id || "")}">${escapeHtml(
+                isEnglish ? "Open latest timeline" : "打开最新时间线"
+              )}</button>`
+            : ""
+        }
+      </div>
       <div class="onboarding-actions onboarding-actions--compact">
         <button class="secondary-button" type="button" data-onboarding-later="true">${escapeHtml(isEnglish ? "Maybe later" : "稍后再说")}</button>
-        <button class="primary-button" type="button" data-onboarding-complete="true">${escapeHtml(isEnglish ? "Mark setup done" : "完成引导")}</button>
+        <button class="primary-button" type="button" data-onboarding-complete="true">${escapeHtml(isEnglish ? "Finish onboarding" : "完成引导")}</button>
       </div>
     </div>
   `;

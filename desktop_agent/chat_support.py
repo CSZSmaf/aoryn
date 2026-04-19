@@ -58,7 +58,7 @@ def load_help_markdown(path: Path | None = None) -> str:
     if source == README_EN_PATH:
         return (
             "# Aoryn Developer Guide\n\n"
-            "Aoryn includes chat mode, Agent mode, and a developer console."
+            "Aoryn includes chat mode, Agent mode, and an advanced diagnostics area."
         )
     return (
         "# Aoryn 开发者文档\n\n"

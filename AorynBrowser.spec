@@ -17,7 +17,7 @@ from desktop_agent.version import APP_BROWSER_NAME, APP_NAME, APP_PUBLISHER, APP
 
 
 project_root = Path(SPECPATH)
-icon_path = project_root / "desktop_agent" / "dashboard_assets" / "icons" / "aoryn-app.ico"
+icon_path = project_root / "desktop_agent" / "dashboard_assets" / "icons" / "aoryn-browser.ico"
 
 datas = collect_data_files("desktop_agent")
 hiddenimports = collect_submodules("desktop_agent")

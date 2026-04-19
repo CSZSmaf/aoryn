@@ -8,7 +8,7 @@ It combines three layers behind one web shell:
 
 - Chat mode: normal conversation using the configured model, with no direct desktop execution
 - Agent mode: task execution, run playback, screenshots, and result review
-- Developer console: provider diagnostics, payload inspection, and low-level debugging
+- Advanced diagnostics: provider checks, payload inspection, and low-level debugging
 
 The current goal is not multi-agent orchestration. The product is focused on a reliable single-task desktop agent with good observability and a clean local web UI.
 
@@ -27,7 +27,21 @@ The current goal is not multi-agent orchestration. The product is focused on a r
 python run_agent.py
 ```
 
-This starts the local dashboard and attempts to open:
+On Windows this starts the local workbench with the embedded desktop shell by default.
+
+To launch the UI explicitly with dashboard-only flags, use:
+
+```bash
+python run_agent.py ui --no-browser --port 8765
+```
+
+To force the browser-based dashboard instead of the desktop shell, use:
+
+```bash
+python run_agent.py ui --browser --no-browser --port 8765
+```
+
+The UI serves:
 
 ```text
 http://127.0.0.1:8765
@@ -141,9 +155,9 @@ Agent mode reuses the existing execution core:
 5. persist logs into `runs/<run_id>/`
 6. poll and render the run back into the web UI
 
-### 4.3 Developer Console
+### 4.3 Advanced Diagnostics
 
-The developer console still exists, but it is no longer exposed as the main top-level mode.
+The advanced diagnostics area still exists, but it is no longer exposed as the main top-level mode.
 
 Use it for:
 
@@ -213,11 +227,12 @@ Request fields:
 
 ### 6.4 Help Content
 
-- `GET /api/help?locale=zh-CN|en-US`
+- `GET /api/help?locale=zh-CN|en-US&audience=user|developer`
 
-This route serves the developer documentation used by both:
+This route serves:
 
-- the in-app help center
+- user help content by default
+- developer-facing documentation when `audience=developer`
 - the knowledge base injected into chat mode
 
 Locale mapping:

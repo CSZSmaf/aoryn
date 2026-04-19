@@ -149,25 +149,25 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
     ? (isZh ? "下载桌面版" : "Download desktop app")
     : pageCopy.hero.primaryCta;
   const heroSecondaryLabel = authenticated
-    ? (isZh ? "查看界面" : "View workspace")
+    ? (isZh ? "查看工作台" : "View workbench")
     : pageCopy.hero.secondaryCta;
   const stageBody = authenticated
     ? (isZh
-      ? "桌面工作台负责真实执行，云端只保留最少身份信息与版本分发边界。"
-      : "The desktop workspace handles real execution while the cloud keeps only minimal identity and release access boundaries.")
+      ? "桌面工作台负责真实执行与回放，官网账号只保留身份和下载权限。"
+      : "The desktop workbench owns real execution and replay while the website account only keeps identity and download access.")
     : pageCopy.stage.body;
   const stageStatus = authenticated
-    ? (isZh ? "工作台已就绪" : "Workspace ready")
+    ? (isZh ? "可直接进入工作台" : "Ready to open")
     : pageCopy.stage.status;
   const cards = authenticated
     ? pageCopy.cards.map((item, index) =>
       index === 2
         ? {
             ...item,
-            title: isZh ? "桌面版现已可下载" : "Desktop installer ready",
+            title: isZh ? "安装包已解锁" : "Installer unlocked",
             body: isZh
-              ? "继续下载安装包，或查看工作台与安装说明。"
-              : "Continue to the installer or review the workspace and install flow.",
+              ? "继续下载安装包，或先查看工作台与安装路径说明。"
+              : "Continue to the installer or review the workbench and install path first.",
           }
         : item,
     )
@@ -184,15 +184,9 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
             <Link className="primary-button" to="/download">
               {heroPrimaryLabel}
             </Link>
-            {authenticated ? (
-              <Link className="secondary-button" to="/workspace">
-                {heroSecondaryLabel}
-              </Link>
-            ) : (
-              <button className="secondary-button" type="button" onClick={() => openAuthModal("register")}>
-                {heroSecondaryLabel}
-              </button>
-            )}
+            <Link className="secondary-button" to="/workspace">
+              {heroSecondaryLabel}
+            </Link>
             <Link className="text-link" to="/product">
               {pageCopy.hero.tertiaryCta}
             </Link>
@@ -340,8 +334,8 @@ function WorkspacePage({ copy, authenticated, locale }) {
   const pageCopy = copy.pages.workspace;
   const heroBody = authenticated
     ? (locale === "zh-CN"
-      ? "进入可见的桌面执行界面，把对话、执行与回放整理进同一个工作台。"
-      : "Open the visible desktop workspace and keep chat, execution, and replay inside one surface.")
+      ? "进入本地工作台，把 Agent、聊天、时间线和回放整理进同一个主界面。"
+      : "Open the local workbench and keep Agent, chat, timelines, and replay inside one product surface.")
     : pageCopy.hero.body;
 
   return (
@@ -393,8 +387,8 @@ function DownloadPage({ copy, authState, authReady, openAuthModal, locale }) {
     ? siteConfig.downloads
     : [siteConfig.release];
   const unlockedBody = locale === "zh-CN"
-    ? "桌面安装包现已可用。任务、截图、历史与配置仍保留在本地设备，不会上传到云端。"
-    : "The desktop installer is ready. Tasks, screenshots, history, and config stay on your device and are not uploaded to the cloud.";
+    ? "桌面安装包现已可用。账号只负责下载权限；任务、截图、历史和设置仍然留在本地设备。"
+    : "The desktop installer is ready. Your account only handles download access; tasks, screenshots, history, and settings still remain on your device.";
   const packageMeta = downloads.flatMap((item) => ([
     { label: `${item.name} ${pageCopy.packageMeta.version}`, value: siteConfig.release.version },
     { label: `${item.name} ${pageCopy.packageMeta.platform}`, value: item.platform },
