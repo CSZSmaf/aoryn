@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import html
@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote_plus, urlparse
 
+from desktop_agent.browser_internal_pages import build_internal_page_html
 from desktop_agent.browser_runtime import BrowserObservation, BrowserRuntimeError
+from desktop_agent.controller import discover_config_path, load_agent_config
 from desktop_agent.runtime_paths import local_data_root
 from desktop_agent.version import APP_ID, APP_NAME
 
@@ -24,6 +26,8 @@ DEFAULT_BROWSER_HOMEPAGE = "aoryn://home"
 DEFAULT_BROWSER_SEARCH_URL = "https://www.google.com/search?q={query}"
 INTERNAL_PAGE_TITLES = {
     "home": "Home",
+    "runtime": "Runtime",
+    "setup": "AI Setup",
     "history": "History",
     "bookmarks": "Bookmarks",
     "downloads": "Downloads",
@@ -42,27 +46,68 @@ SESSION_STATE_KEYS = (
 )
 
 try:  # pragma: no cover - GUI runtime availability depends on environment
-    from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, QUrl, Signal, Slot
+    from PySide6.QtCore import QEventLoop, QObject, QSize, Qt, QTimer, QUrl, Signal, Slot
     from PySide6.QtGui import QAction, QCloseEvent, QIcon
-    from PySide6.QtWidgets import QApplication, QLineEdit, QMainWindow, QTabWidget, QToolBar
+    from PySide6.QtWidgets import (
+        QApplication,
+        QCheckBox,
+        QComboBox,
+        QDialog,
+        QDialogButtonBox,
+        QDockWidget,
+        QFormLayout,
+        QFrame,
+        QHBoxLayout,
+        QLabel,
+        QLineEdit,
+        QMainWindow,
+        QMenu,
+        QPushButton,
+        QSizePolicy,
+        QStyle,
+        QTabWidget,
+        QTextEdit,
+        QToolBar,
+        QToolButton,
+        QVBoxLayout,
+        QWidget,
+    )
     from PySide6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEnginePage, QWebEngineProfile
     from PySide6.QtWebEngineWidgets import QWebEngineView
 
     _QT_IMPORT_ERROR: Exception | None = None
 except Exception as exc:  # pragma: no cover - GUI runtime availability depends on environment
     QApplication = None  # type: ignore[assignment]
+    QCheckBox = object  # type: ignore[assignment]
     QCloseEvent = object  # type: ignore[assignment]
+    QComboBox = object  # type: ignore[assignment]
+    QDialog = object  # type: ignore[assignment]
+    QDialogButtonBox = object  # type: ignore[assignment]
+    QDockWidget = object  # type: ignore[assignment]
     QEventLoop = object  # type: ignore[assignment]
+    QFormLayout = object  # type: ignore[assignment]
+    QFrame = object  # type: ignore[assignment]
     QIcon = object  # type: ignore[assignment]
+    QHBoxLayout = object  # type: ignore[assignment]
+    QLabel = object  # type: ignore[assignment]
     QLineEdit = object  # type: ignore[assignment]
     QMainWindow = object  # type: ignore[assignment]
+    QMenu = object  # type: ignore[assignment]
     QObject = object  # type: ignore[assignment]
+    QPushButton = object  # type: ignore[assignment]
     QAction = object  # type: ignore[assignment]
+    QSize = object  # type: ignore[assignment]
+    QSizePolicy = object  # type: ignore[assignment]
+    QStyle = object  # type: ignore[assignment]
     QTabWidget = object  # type: ignore[assignment]
+    QTextEdit = object  # type: ignore[assignment]
     QToolBar = object  # type: ignore[assignment]
+    QToolButton = object  # type: ignore[assignment]
     QTimer = object  # type: ignore[assignment]
     Qt = object  # type: ignore[assignment]
     QUrl = object  # type: ignore[assignment]
+    QVBoxLayout = object  # type: ignore[assignment]
+    QWidget = object  # type: ignore[assignment]
     QWebEngineDownloadRequest = object  # type: ignore[assignment]
     QWebEnginePage = object  # type: ignore[assignment]
     QWebEngineProfile = object  # type: ignore[assignment]
@@ -107,6 +152,21 @@ def is_internal_browser_url(target: str | None) -> bool:
     return _internal_browser_page_name(target) in INTERNAL_PAGE_TITLES
 
 
+def _looks_like_browser_host(value: str) -> bool:
+    token = _optional_str(value)
+    if not token:
+        return False
+    first = token.split("/", 1)[0]
+    if first.lower().startswith("localhost"):
+        return True
+    host, _, port = first.partition(":")
+    if port and not port.isdigit():
+        return False
+    if host.replace(".", "").isdigit():
+        return True
+    return "." in host
+
+
 def normalize_browser_target(
     target: str | None,
     *,
@@ -125,6 +185,223 @@ def normalize_browser_target(
     if parsed.scheme:
         return text
     return search_url.format(query=quote_plus(text))
+
+
+def _collapse_browser_text(value: Any, *, limit: int = 2400) -> str:
+    text = " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "..."
+
+
+def build_browser_digest(snapshot: dict[str, Any] | None, *, mode: str = "summary") -> str:
+    payload = snapshot or {}
+    title = _optional_str(payload.get("title")) or "Current page"
+    url = _optional_str(payload.get("url")) or "No page is open yet."
+    text = _collapse_browser_text(payload.get("text"), limit=2800)
+    sentences = [segment.strip() for segment in text.replace("!", ".").replace("?", ".").split(".") if segment.strip()]
+    highlights = sentences[:3] if sentences else []
+    if mode == "insights":
+        lines = [
+            f"{title}",
+            url,
+            "",
+            "What stands out",
+        ]
+        if highlights:
+            lines.extend(f"- {item}" for item in highlights)
+        else:
+            lines.append("- Open a page to generate quick insights.")
+        lines.extend(
+            [
+                "",
+                "Next actions",
+                "- Ask Aoryn to summarize this page",
+                "- Extract decisions or deadlines",
+                "- Continue in the desktop app for agent execution",
+            ]
+        )
+        return "\n".join(lines)
+    if mode == "handoff":
+        return "\n".join(
+            [
+                "Ready for agent handoff",
+                title,
+                url,
+                "",
+                _collapse_browser_text(text or "Open a page, then ask Aoryn to continue with full agent mode.", limit=420),
+            ]
+        )
+    lines = [
+        f"{title}",
+        url,
+        "",
+        "Quick summary",
+    ]
+    if highlights:
+        lines.extend(f"- {item}" for item in highlights)
+    else:
+        lines.append("- Open a page to generate a quick summary.")
+    if text and len(sentences) > 3:
+        lines.extend(["", _collapse_browser_text(" ".join(sentences[3:]), limit=500)])
+    return "\n".join(lines)
+
+
+def build_browser_assistant_user_message(snapshot: dict[str, Any] | None, prompt: str | None) -> str:
+    payload = snapshot or {}
+    title = _optional_str(payload.get("title")) or "Unknown page"
+    url = _optional_str(payload.get("url")) or "No page is open."
+    page_text = _collapse_browser_text(payload.get("text"), limit=5200)
+    request = _optional_str(prompt) or "Summarize this page and suggest the next useful step."
+    context_block = page_text or "No visible page text was captured."
+    return "\n".join(
+        [
+            "You are helping inside Aoryn Browser.",
+            "Use the visible page context below as the primary source of truth.",
+            "If the page does not contain enough information, say so clearly.",
+            "Answer in the same language as the user's request when that is clear.",
+            "",
+            f"Page title: {title}",
+            f"Page URL: {url}",
+            "Visible page text:",
+            context_block,
+            "",
+            "User request:",
+            request,
+        ]
+    )
+
+
+def build_browser_ai_setup_summary(
+    config: Any,
+    *,
+    provider_options: list[dict[str, Any]] | None = None,
+    browser_channel_options: list[dict[str, Any]] | None = None,
+    config_path: Path | None = None,
+    runtime_preferences_path: Path | None = None,
+) -> dict[str, Any]:
+    provider_value = _optional_str(getattr(config, "model_provider", None)) or "lmstudio_local"
+    provider_label = provider_value
+    provider_requires_api_key = False
+    for item in provider_options or []:
+        if _optional_str(item.get("value")) == provider_value:
+            provider_label = _optional_str(item.get("label")) or provider_value
+            provider_requires_api_key = bool(item.get("api_key_required"))
+            break
+
+    model_name = _optional_str(getattr(config, "model_name", None)) or "auto"
+    model_display = "Auto" if model_name.lower() in {"auto", "first"} else model_name
+    base_url = _optional_str(getattr(config, "model_base_url", None))
+    api_key_configured = bool(_optional_str(getattr(config, "model_api_key", None)))
+
+    browser_channel = _optional_str(getattr(config, "browser_channel", None)) or ""
+    browser_channel_label = "System default"
+    for item in browser_channel_options or []:
+        if _optional_str(item.get("value")) == browser_channel:
+            browser_channel_label = _optional_str(item.get("label")) or browser_channel_label
+            break
+    if browser_channel and browser_channel_label == "System default":
+        browser_channel_label = browser_channel
+
+    browser_path = _optional_str(getattr(config, "browser_executable_path", None))
+    browser_headless = bool(getattr(config, "browser_headless", False))
+
+    status = "Ready"
+    detail = f"{provider_label} will answer questions about the current page."
+    if not base_url:
+        status = "Setup needed"
+        detail = "Add a Base URL before using the in-browser assistant."
+    elif provider_requires_api_key and not api_key_configured:
+        status = "API key needed"
+        detail = f"{provider_label} requires an API key before the browser assistant can answer."
+
+    badge_text = f"{provider_label} | {model_display}" if status == "Ready" else status
+    return {
+        "status": status,
+        "detail": detail,
+        "badge_text": badge_text,
+        "provider_value": provider_value,
+        "provider_label": provider_label,
+        "model_name": model_name,
+        "model_display": model_display,
+        "base_url": base_url or "",
+        "api_key_configured": api_key_configured,
+        "browser_channel": browser_channel,
+        "browser_channel_label": browser_channel_label,
+        "browser_executable_path": browser_path or "",
+        "browser_headless": browser_headless,
+        "config_path": str(config_path) if config_path else None,
+        "runtime_preferences_path": str(runtime_preferences_path) if runtime_preferences_path else None,
+    }
+
+
+def build_browser_service_summary(
+    *,
+    base_url: str,
+    transport: str,
+    status: str,
+    window_count: int,
+    tab_count: int,
+    active_title: str | None = None,
+    active_url: str | None = None,
+    pending_permissions: int = 0,
+    handoff_count: int = 0,
+    annotation_count: int = 0,
+    auth_pause_reason: str | None = None,
+) -> dict[str, Any]:
+    normalized_status = _optional_str(status) or "ready"
+    badge_text = "Service ready" if normalized_status == "ready" else normalized_status.replace("_", " ").title()
+    detail = (
+        "Aoryn can inspect, navigate, query DOM, and perform browser actions through the managed runtime."
+        if normalized_status == "ready"
+        else f"Runtime state: {normalized_status.replace('_', ' ')}."
+    )
+    if auth_pause_reason:
+        detail = f"{detail} Human review is blocking progress: {auth_pause_reason}"
+    return {
+        "badge_text": badge_text,
+        "detail": detail,
+        "runtime_role": "managed_browser_service",
+        "transport": _optional_str(transport) or "local_http",
+        "base_url": _optional_str(base_url) or "http://127.0.0.1",
+        "status": normalized_status,
+        "window_count": max(0, int(window_count or 0)),
+        "tab_count": max(0, int(tab_count or 0)),
+        "active_title": _optional_str(active_title),
+        "active_url": _optional_str(active_url),
+        "pending_permissions": max(0, int(pending_permissions or 0)),
+        "handoff_count": max(0, int(handoff_count or 0)),
+        "annotation_count": max(0, int(annotation_count or 0)),
+        "auth_pause_reason": _optional_str(auth_pause_reason),
+        "routes": [
+            {"label": "Status", "path": "/status"},
+            {"label": "Snapshot", "path": "/snapshot"},
+            {"label": "DOM query", "path": "/query_dom"},
+            {"label": "Action", "path": "/perform_action"},
+            {"label": "Wait", "path": "/wait_for_state"},
+            {"label": "Session", "path": "/get_session_state"},
+        ],
+    }
+
+
+def build_browser_http_error_payload(exc: Exception) -> dict[str, Any]:
+    message = _optional_str(str(exc)) or "Browser request failed."
+    if isinstance(exc, BrowserRuntimeError):
+        return {"ok": False, "error": message, "error_type": "runtime"}
+    return {"ok": False, "error": message, "error_type": "server"}
+
+
+def write_browser_json_response(handler: Any, payload: dict[str, Any], *, status: int = HTTPStatus.OK) -> bool:
+    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    try:
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(raw)))
+        handler.end_headers()
+        handler.wfile.write(raw)
+        return True
+    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+        return False
 
 
 def load_browser_state(profile_root: Path) -> dict[str, Any]:
@@ -161,325 +438,6 @@ def save_browser_state(profile_root: Path, state: dict[str, Any]) -> Path:
     temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     temp_path.replace(path)
     return path
-
-
-def build_internal_page_html(
-    page_name: str,
-    *,
-    history: list[dict[str, Any]] | None = None,
-    bookmarks: list[dict[str, Any]] | None = None,
-    downloads: list[dict[str, Any]] | None = None,
-    permissions: list[dict[str, Any]] | None = None,
-    permission_requests: list[dict[str, Any]] | None = None,
-    handoffs: list[dict[str, Any]] | None = None,
-    auth_pause_reason: str | None = None,
-) -> tuple[str, str]:
-    page = (page_name or "home").strip().lower()
-    title = INTERNAL_PAGE_TITLES.get(page, "Home")
-    history = list(history or [])
-    bookmarks = list(bookmarks or [])
-    downloads = list(downloads or [])
-    permissions = list(permissions or [])
-    permission_requests = list(permission_requests or [])
-    handoffs = list(handoffs or [])
-
-    if page == "history":
-        body = _build_internal_entries(
-            history,
-            empty_message="No browsing history yet.",
-            primary_key="title",
-            secondary_key="url",
-            timestamp_key="visited_at",
-        )
-    elif page == "bookmarks":
-        body = _build_internal_entries(
-            bookmarks,
-            empty_message="No bookmarks yet.",
-            primary_key="title",
-            secondary_key="url",
-            timestamp_key="created_at",
-        )
-    elif page == "downloads":
-        body = _build_internal_entries(
-            downloads,
-            empty_message="No downloads yet.",
-            primary_key="file_name",
-            secondary_key="url",
-            timestamp_key="created_at",
-            tertiary_key="path",
-        )
-    elif page == "permissions":
-        body = _build_permission_entries(permissions, permission_requests, handoffs)
-    else:
-        title = INTERNAL_PAGE_TITLES["home"]
-        body = f"""
-        <section class="hero">
-          <h1>{html.escape(APP_NAME)} Browser</h1>
-          <p>A Chromium-powered browser surface for day-to-day browsing and agent-assisted work.</p>
-          <div class="grid">
-            <a class="card" href="aoryn://history"><strong>History</strong><span>{len(history)} recent visits</span></a>
-            <a class="card" href="aoryn://bookmarks"><strong>Bookmarks</strong><span>{len(bookmarks)} saved pages</span></a>
-            <a class="card" href="aoryn://downloads"><strong>Downloads</strong><span>{len(downloads)} tracked files</span></a>
-            <a class="card" href="aoryn://permissions"><strong>Permissions</strong><span>{len(permission_requests)} pending, {len(permissions)} saved</span></a>
-          </div>
-          <div class="hint">
-            <strong>Tip:</strong> Type a URL, hostname, or search query in the address bar.
-          </div>
-        </section>
-        """
-
-    auth_banner = ""
-    if auth_pause_reason:
-        auth_banner = (
-            '<div class="banner">'
-            f"<strong>AI paused:</strong> {html.escape(auth_pause_reason)}"
-            "</div>"
-        )
-
-    nav = "".join(
-        f'<a href="aoryn://{name}" class="nav-link{" active" if name == page else ""}">{html.escape(label)}</a>'
-        for name, label in INTERNAL_PAGE_TITLES.items()
-    )
-    document = f"""
-    <!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{html.escape(title)}</title>
-        <style>
-          :root {{
-            color-scheme: light;
-            --bg: #f6f8fb;
-            --card: #ffffff;
-            --line: #d7dce5;
-            --ink: #172033;
-            --muted: #5b6578;
-            --accent: #0f8f73;
-            --accent-soft: rgba(15, 143, 115, 0.12);
-          }}
-          * {{ box-sizing: border-box; }}
-          body {{
-            margin: 0;
-            padding: 24px;
-            font-family: "Segoe UI", "PingFang SC", sans-serif;
-            color: var(--ink);
-            background: radial-gradient(circle at top right, #edf8f4 0, var(--bg) 45%);
-          }}
-          .shell {{
-            max-width: 1040px;
-            margin: 0 auto;
-          }}
-          .nav {{
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            margin-bottom: 18px;
-          }}
-          .nav-link {{
-            color: var(--ink);
-            text-decoration: none;
-            background: var(--card);
-            border: 1px solid var(--line);
-            border-radius: 999px;
-            padding: 10px 16px;
-            font-weight: 600;
-          }}
-          .nav-link.active {{
-            border-color: var(--accent);
-            background: var(--accent-soft);
-            color: var(--accent);
-          }}
-          .banner {{
-            margin-bottom: 18px;
-            border: 1px solid #f2c98f;
-            background: #fff7ec;
-            color: #865d16;
-            border-radius: 14px;
-            padding: 14px 16px;
-          }}
-          .hero, .list {{
-            background: var(--card);
-            border: 1px solid rgba(23, 32, 51, 0.08);
-            border-radius: 20px;
-            padding: 22px;
-            box-shadow: 0 10px 28px rgba(23, 32, 51, 0.06);
-          }}
-          .hero h1 {{
-            margin: 0 0 8px;
-            font-size: 34px;
-          }}
-          .hero p {{
-            margin: 0 0 18px;
-            color: var(--muted);
-            font-size: 16px;
-          }}
-          .grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 14px;
-            margin-bottom: 18px;
-          }}
-          .card {{
-            display: block;
-            background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-            border: 1px solid var(--line);
-            border-radius: 16px;
-            padding: 16px;
-            color: var(--ink);
-            text-decoration: none;
-          }}
-          .card strong {{
-            display: block;
-            margin-bottom: 6px;
-            font-size: 18px;
-          }}
-          .card span, .hint, .meta {{
-            color: var(--muted);
-          }}
-          .entry {{
-            padding: 14px 0;
-            border-top: 1px solid rgba(23, 32, 51, 0.08);
-          }}
-          .entry:first-child {{
-            border-top: 0;
-            padding-top: 0;
-          }}
-          .entry a {{
-            color: var(--accent);
-            text-decoration: none;
-            font-weight: 600;
-          }}
-          .entry .meta {{
-            margin-top: 6px;
-            font-size: 13px;
-            word-break: break-all;
-          }}
-          .empty {{
-            margin: 0;
-            color: var(--muted);
-          }}
-        </style>
-      </head>
-      <body>
-        <main class="shell">
-          <nav class="nav">{nav}</nav>
-          {auth_banner}
-          {body}
-        </main>
-      </body>
-    </html>
-    """
-    return title, document
-
-
-def _build_internal_entries(
-    entries: list[dict[str, Any]],
-    *,
-    empty_message: str,
-    primary_key: str,
-    secondary_key: str,
-    timestamp_key: str,
-    tertiary_key: str | None = None,
-) -> str:
-    if not entries:
-        return f'<section class="list"><p class="empty">{html.escape(empty_message)}</p></section>'
-    rows: list[str] = []
-    for entry in reversed(entries[-60:]):
-        primary = _optional_str(entry.get(primary_key)) or _optional_str(entry.get(secondary_key)) or "Untitled"
-        secondary = _optional_str(entry.get(secondary_key))
-        tertiary = _optional_str(entry.get(tertiary_key)) if tertiary_key else None
-        meta_parts = [_format_timestamp(entry.get(timestamp_key))]
-        if secondary:
-            safe_secondary = html.escape(secondary)
-            if secondary.startswith(("http://", "https://")):
-                secondary_markup = f'<a href="{safe_secondary}">{safe_secondary}</a>'
-            else:
-                secondary_markup = safe_secondary
-            meta_parts.append(secondary_markup)
-        if tertiary:
-            meta_parts.append(html.escape(tertiary))
-        rows.append(
-            '<article class="entry">'
-            f"<strong>{html.escape(primary)}</strong>"
-            f"<div class=\"meta\">{'<br/>'.join(part for part in meta_parts if part)}</div>"
-            "</article>"
-        )
-    return f'<section class="list">{"".join(rows)}</section>'
-
-
-def _build_permission_entries(
-    permissions: list[dict[str, Any]],
-    permission_requests: list[dict[str, Any]],
-    handoffs: list[dict[str, Any]],
-) -> str:
-    pending_rows: list[str] = []
-    for entry in reversed(permission_requests[-20:]):
-        pending_rows.append(
-            '<article class="entry">'
-            f"<strong>{html.escape(_optional_str(entry.get('origin')) or 'Unknown origin')}</strong>"
-            f"<div class=\"meta\">{html.escape(_optional_str(entry.get('feature')) or 'permission')}<br/>{html.escape(_optional_str(entry.get('request_id')) or '')}<br/>{html.escape(_format_timestamp(entry.get('requested_at')))}</div>"
-            "</article>"
-        )
-    permission_rows: list[str] = []
-    for entry in reversed(permissions[-40:]):
-        origin = _optional_str(entry.get("origin")) or "Unknown origin"
-        feature = _optional_str(entry.get("feature")) or "permission"
-        decision = (_optional_str(entry.get("decision")) or "prompt").replace("_", " ")
-        permission_rows.append(
-            '<article class="entry">'
-            f"<strong>{html.escape(origin)}</strong>"
-            f"<div class=\"meta\">{html.escape(feature)}<br/>{html.escape(decision.title())}<br/>{html.escape(_format_timestamp(entry.get('updated_at')))}</div>"
-            "</article>"
-        )
-    handoff_rows: list[str] = []
-    for entry in reversed(handoffs[-20:]):
-        handoff_rows.append(
-            '<article class="entry">'
-            f"<strong>{html.escape(_optional_str(entry.get('kind')) or 'handoff')}</strong>"
-            f"<div class=\"meta\">{html.escape(_optional_str(entry.get('reason')) or 'Manual review required')}<br/>{html.escape(_optional_str(entry.get('url')) or '')}<br/>{html.escape(_format_timestamp(entry.get('created_at')))}</div>"
-            "</article>"
-        )
-    permissions_markup = "".join(permission_rows) or '<p class="empty">No saved permission decisions yet.</p>'
-    pending_markup = "".join(pending_rows) or '<p class="empty">No pending permission requests.</p>'
-    handoffs_markup = "".join(handoff_rows) or '<p class="empty">No recent auth or human handoffs.</p>'
-    return (
-        '<section class="list">'
-        '<h2>Pending Requests</h2>'
-        f"{pending_markup}"
-        "</section>"
-        '<section class="list" style="margin-top:16px;">'
-        '<h2>Permission Decisions</h2>'
-        f"{permissions_markup}"
-        "</section>"
-        '<section class="list" style="margin-top:16px;">'
-        '<h2>Recent Handoffs</h2>'
-        f"{handoffs_markup}"
-        "</section>"
-    )
-
-
-def _looks_like_browser_host(target: str) -> bool:
-    token = str(target or "").strip()
-    if not token or " " in token:
-        return False
-    first = token.split("/", 1)[0]
-    if first.lower().startswith("localhost"):
-        return True
-    host, _, port = first.partition(":")
-    if port and not port.isdigit():
-        return False
-    if host.replace(".", "").isdigit():
-        return True
-    return "." in host
-
-
-def _format_timestamp(value: Any) -> str:
-    try:
-        instant = float(value)
-    except (TypeError, ValueError):
-        return ""
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(instant))
 
 
 def normalize_annotation_entries(entries: Any) -> list[dict[str, Any]]:
@@ -843,6 +801,350 @@ if QApplication is not None:
             return super().chooseFiles(mode, old_files, accepted_mime_types)
 
 
+    class BrowserAssistantPanel(QWidget):
+        quick_action_requested = Signal(str)
+        ask_requested = Signal(str)
+        handoff_requested = Signal(str)
+        open_setup_requested = Signal()
+
+        def __init__(self, parent=None) -> None:
+            super().__init__(parent)
+            self.setObjectName("AssistantPanel")
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(16, 16, 16, 16)
+            layout.setSpacing(12)
+
+            head = QHBoxLayout()
+            head.setContentsMargins(0, 0, 0, 0)
+            head.setSpacing(8)
+            badge = QLabel("Aoryn")
+            badge.setObjectName("AssistantBadge")
+            head.addWidget(badge)
+            head.addStretch(1)
+            self.setup_button = QPushButton("Setup", self)
+            self.setup_button.setObjectName("AssistantSecondaryButton")
+            self.setup_button.clicked.connect(lambda: self.open_setup_requested.emit())
+            head.addWidget(self.setup_button)
+            layout.addLayout(head)
+
+            self.heading = QLabel("Ask Aoryn")
+            self.heading.setObjectName("AssistantHeading")
+            layout.addWidget(self.heading)
+
+            self.subheading = QLabel(
+                "Share the current tab with Aoryn while the desktop app uses this same browser as its managed runtime."
+            )
+            self.subheading.setWordWrap(True)
+            self.subheading.setObjectName("AssistantSubheading")
+            layout.addWidget(self.subheading)
+
+            self.status = QLabel(
+                "Connect a provider in Setup. The desktop app will reuse the same browser AI settings on its next run."
+            )
+            self.status.setObjectName("AssistantStatus")
+            self.status.setWordWrap(True)
+            layout.addWidget(self.status)
+
+            self.context_card = QFrame(self)
+            self.context_card.setObjectName("AssistantContextCard")
+            context_layout = QVBoxLayout(self.context_card)
+            context_layout.setContentsMargins(14, 12, 14, 12)
+            context_layout.setSpacing(4)
+            self.context_title = QLabel("No page selected")
+            self.context_title.setObjectName("AssistantContextTitle")
+            self.context_title.setWordWrap(True)
+            self.context_url = QLabel("Open a page to share context.")
+            self.context_url.setObjectName("AssistantContextUrl")
+            self.context_url.setWordWrap(True)
+            context_layout.addWidget(self.context_title)
+            context_layout.addWidget(self.context_url)
+            layout.addWidget(self.context_card)
+
+            chip_row = QHBoxLayout()
+            chip_row.setContentsMargins(0, 0, 0, 0)
+            chip_row.setSpacing(8)
+            for label, mode in (
+                ("Summarize", "summary"),
+                ("Insights", "insights"),
+                ("Handoff", "handoff"),
+            ):
+                button = QPushButton(label, self)
+                button.setObjectName("AssistantChip")
+                button.clicked.connect(lambda _checked=False, current_mode=mode: self.quick_action_requested.emit(current_mode))
+                chip_row.addWidget(button)
+            layout.addLayout(chip_row)
+
+            self.prompt = QTextEdit(self)
+            self.prompt.setObjectName("AssistantPrompt")
+            self.prompt.setPlaceholderText("Ask a question about this page, or describe what the agent should do next.")
+            self.prompt.setFixedHeight(100)
+            layout.addWidget(self.prompt)
+
+            action_row = QHBoxLayout()
+            action_row.setContentsMargins(0, 0, 0, 0)
+            action_row.setSpacing(8)
+            self.ask_button = QPushButton("Ask Aoryn", self)
+            self.ask_button.setObjectName("AssistantPrimaryButton")
+            self.ask_button.clicked.connect(lambda: self.ask_requested.emit(self.prompt.toPlainText().strip()))
+            action_row.addWidget(self.ask_button, 1)
+            self.handoff_button = QPushButton("Continue in Agent", self)
+            self.handoff_button.setObjectName("AssistantSecondaryButton")
+            self.handoff_button.clicked.connect(lambda: self.handoff_requested.emit(self.prompt.toPlainText().strip()))
+            action_row.addWidget(self.handoff_button, 1)
+            layout.addLayout(action_row)
+
+            self.response = QTextEdit(self)
+            self.response.setObjectName("AssistantResponse")
+            self.response.setReadOnly(True)
+            self.response.setPlaceholderText("Page-grounded answers, summaries, and handoff previews will appear here.")
+            layout.addWidget(self.response, 1)
+            self._quick_action_buttons = self.findChildren(QPushButton, "AssistantChip")
+
+        def update_context(self, snapshot: dict[str, Any] | None) -> None:
+            payload = snapshot or {}
+            self.context_title.setText(_optional_str(payload.get("title")) or "No page selected")
+            self.context_url.setText(_optional_str(payload.get("url")) or "Open a page to share context.")
+
+        def set_digest(self, text: str) -> None:
+            self.response.setPlainText(str(text or "").strip())
+
+        def set_prompt(self, text: str) -> None:
+            self.prompt.setPlainText(text)
+            self.prompt.setFocus()
+
+        def set_status(self, text: str) -> None:
+            self.status.setText(
+                _optional_str(text)
+                or "Connect a provider in Setup. The desktop app will reuse the same browser AI settings on its next run."
+            )
+
+        def set_busy(self, busy: bool, *, status_text: str | None = None) -> None:
+            if status_text:
+                self.set_status(status_text)
+            self.prompt.setReadOnly(busy)
+            self.ask_button.setDisabled(busy)
+            self.handoff_button.setDisabled(busy)
+            self.setup_button.setDisabled(busy)
+            for button in self._quick_action_buttons:
+                button.setDisabled(busy)
+
+
+    class BrowserAssistantSetupDialog(QDialog):
+        def __init__(self, runtime, parent=None) -> None:
+            super().__init__(parent)
+            self.runtime = runtime
+            self.setWindowTitle("Aoryn Browser AI Setup")
+            self.setModal(True)
+            self.resize(620, 520)
+
+            self._provider_defaults: dict[str, str] = {}
+
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(18, 18, 18, 18)
+            layout.setSpacing(14)
+
+            title = QLabel("Configure browser AI and the managed browser runtime.")
+            title.setObjectName("AssistantSetupTitle")
+            title.setWordWrap(True)
+            layout.addWidget(title)
+
+            self.subtitle = QLabel(
+                "These settings are saved to runtime preferences and reused by the browser assistant plus the next Aoryn task that calls into the managed browser service."
+            )
+            self.subtitle.setObjectName("AssistantSetupSubtitle")
+            self.subtitle.setWordWrap(True)
+            layout.addWidget(self.subtitle)
+
+            form = QFormLayout()
+            form.setContentsMargins(0, 0, 0, 0)
+            form.setSpacing(10)
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+            form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+
+            self.provider_combo = QComboBox(self)
+            form.addRow("Provider", self.provider_combo)
+
+            self.base_url_edit = QLineEdit(self)
+            self.base_url_edit.setPlaceholderText("https://api.openai.com/v1")
+            form.addRow("Base URL", self.base_url_edit)
+
+            self.model_combo = QComboBox(self)
+            self.model_combo.setEditable(True)
+            self.model_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            form.addRow("Model", self.model_combo)
+
+            self.auto_discover_checkbox = QCheckBox("Prefer automatic model selection when available.", self)
+            form.addRow("", self.auto_discover_checkbox)
+
+            self.api_key_edit = QLineEdit(self)
+            self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+            self.api_key_edit.setPlaceholderText("Optional for local providers")
+            form.addRow("API key", self.api_key_edit)
+
+            self.browser_channel_combo = QComboBox(self)
+            form.addRow("Browser channel", self.browser_channel_combo)
+
+            self.browser_path_edit = QLineEdit(self)
+            self.browser_path_edit.setPlaceholderText("Optional explicit browser executable path")
+            form.addRow("Browser path", self.browser_path_edit)
+
+            self.browser_headless_checkbox = QCheckBox("Run the managed browser in headless mode.", self)
+            form.addRow("", self.browser_headless_checkbox)
+
+            layout.addLayout(form)
+
+            action_row = QHBoxLayout()
+            action_row.setContentsMargins(0, 0, 0, 0)
+            action_row.setSpacing(8)
+            self.refresh_models_button = QPushButton("Refresh models", self)
+            self.refresh_models_button.setObjectName("AssistantSecondaryButton")
+            self.refresh_models_button.clicked.connect(self._refresh_models)
+            action_row.addWidget(self.refresh_models_button)
+            action_row.addStretch(1)
+            layout.addLayout(action_row)
+
+            self.status_note = QLabel("Saved settings will be used by the in-browser assistant and the next Aoryn run.")
+            self.status_note.setObjectName("AssistantSetupStatus")
+            self.status_note.setWordWrap(True)
+            layout.addWidget(self.status_note)
+
+            self.paths_note = QLabel("")
+            self.paths_note.setObjectName("AssistantSetupPaths")
+            self.paths_note.setWordWrap(True)
+            layout.addWidget(self.paths_note)
+
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+                parent=self,
+            )
+            buttons.accepted.connect(self.accept)
+            buttons.rejected.connect(self.reject)
+            layout.addWidget(buttons)
+
+            self.provider_combo.currentIndexChanged.connect(self._handle_provider_changed)
+            self._load_snapshot()
+
+        def _load_snapshot(self) -> None:
+            snapshot = self.runtime.assistant_setup_snapshot()
+            providers = snapshot.get("providers") or []
+            browser_channels = snapshot.get("browser_channels") or []
+            effective = snapshot.get("effective") or {}
+            summary = snapshot.get("summary") or {}
+
+            self.provider_combo.blockSignals(True)
+            self.provider_combo.clear()
+            self._provider_defaults = {}
+            current_provider = _optional_str(effective.get("model_provider")) or "lmstudio_local"
+            provider_index = 0
+            for index, item in enumerate(providers):
+                value = _optional_str(item.get("value")) or ""
+                label = _optional_str(item.get("label")) or value or "Provider"
+                self.provider_combo.addItem(label, value)
+                self._provider_defaults[value] = _optional_str(item.get("base_url")) or ""
+                if value == current_provider:
+                    provider_index = index
+            if self.provider_combo.count() == 0:
+                self.provider_combo.addItem(current_provider, current_provider)
+            self.provider_combo.setCurrentIndex(provider_index)
+            self.provider_combo.blockSignals(False)
+
+            self.browser_channel_combo.clear()
+            current_channel = _optional_str(effective.get("browser_channel")) or ""
+            channel_index = 0
+            for index, item in enumerate(browser_channels):
+                value = _optional_str(item.get("value")) or ""
+                label = _optional_str(item.get("label")) or value or "System default"
+                self.browser_channel_combo.addItem(label, value)
+                if value == current_channel:
+                    channel_index = index
+            if self.browser_channel_combo.count() == 0:
+                self.browser_channel_combo.addItem("System default", "")
+            self.browser_channel_combo.setCurrentIndex(channel_index)
+
+            self.base_url_edit.setText(_optional_str(effective.get("model_base_url")) or "")
+            self.api_key_edit.setText(_optional_str(effective.get("model_api_key")) or "")
+            self.browser_path_edit.setText(_optional_str(effective.get("browser_executable_path")) or "")
+            self.auto_discover_checkbox.setChecked(bool(effective.get("model_auto_discover", True)))
+            self.browser_headless_checkbox.setChecked(bool(effective.get("browser_headless", False)))
+
+            self.model_combo.clear()
+            self.model_combo.addItem("auto")
+            current_model = _optional_str(effective.get("model_name")) or "auto"
+            if self.model_combo.findText(current_model) < 0:
+                self.model_combo.addItem(current_model)
+            self.model_combo.setCurrentText(current_model)
+
+            self._set_status(
+                f"{_optional_str(summary.get('status')) or 'Setup needed'}: {_optional_str(summary.get('detail')) or ''}".strip(": ")
+            )
+            self.paths_note.setText(
+                "\n".join(
+                    [
+                        f"Runtime preferences: {_optional_str(snapshot.get('runtime_preferences_path')) or 'Unavailable'}",
+                        f"Config file: {_optional_str(snapshot.get('config_path')) or 'Using defaults'}",
+                    ]
+                )
+            )
+
+        def _set_status(self, text: str) -> None:
+            self.status_note.setText(_optional_str(text) or "Saved settings will be used by the in-browser assistant and the next Aoryn run.")
+
+        def _handle_provider_changed(self) -> None:
+            provider_value = _optional_str(self.provider_combo.currentData()) or ""
+            current_base = _optional_str(self.base_url_edit.text())
+            default_base = self._provider_defaults.get(provider_value, "")
+            if not current_base or current_base in set(self._provider_defaults.values()):
+                self.base_url_edit.setText(default_base)
+
+        def _refresh_models(self) -> None:
+            self._set_status("Refreshing provider connection and model catalog...")
+            snapshot = self.runtime.assistant_provider_snapshot()
+            if not snapshot.get("ok"):
+                self._set_status(_optional_str(snapshot.get("error")) or "Unable to reach the configured provider.")
+                return
+
+            models = []
+            for item in snapshot.get("catalog_models") or []:
+                if not isinstance(item, dict):
+                    continue
+                model_id = _optional_str(item.get("model_id"))
+                if model_id:
+                    models.append(model_id)
+            preferred_model = _optional_str(snapshot.get("preferred_chat_model")) or _optional_str(self.model_combo.currentText()) or "auto"
+
+            self.model_combo.clear()
+            self.model_combo.addItem("auto")
+            for model_id in models:
+                if self.model_combo.findText(model_id) < 0:
+                    self.model_combo.addItem(model_id)
+            if self.model_combo.findText(preferred_model) < 0:
+                self.model_combo.addItem(preferred_model)
+            self.model_combo.setCurrentText(preferred_model)
+            self._set_status(
+                f"Connected to {_optional_str(snapshot.get('provider')) or 'provider'} and found {len(models)} models."
+            )
+
+        def _collect_payload(self) -> dict[str, Any]:
+            return {
+                "model_provider": _optional_str(self.provider_combo.currentData()) or "",
+                "model_base_url": _optional_str(self.base_url_edit.text()) or "",
+                "model_name": _optional_str(self.model_combo.currentText()) or "auto",
+                "model_api_key": _optional_str(self.api_key_edit.text()) or "",
+                "model_auto_discover": self.auto_discover_checkbox.isChecked(),
+                "browser_channel": _optional_str(self.browser_channel_combo.currentData()) or "",
+                "browser_executable_path": _optional_str(self.browser_path_edit.text()) or "",
+                "browser_headless": self.browser_headless_checkbox.isChecked(),
+            }
+
+        def accept(self) -> None:
+            result = self.runtime.update_assistant_settings(self._collect_payload())
+            if not result.get("ok"):
+                self._set_status(_optional_str(result.get("error")) or "Unable to save browser AI settings.")
+                return
+            self._set_status("Saved. The browser assistant and next Aoryn task will use the updated settings.")
+            super().accept()
+
+
     class BrowserWindow(QMainWindow):
         def __init__(
             self,
@@ -857,67 +1159,664 @@ if QApplication is not None:
             self.profile = profile
             self.homepage_url = homepage_url
             self.search_url = search_url
+            self._assistant_request_in_flight = False
             self.tabs = QTabWidget(self)
             self.tabs.setDocumentMode(True)
             self.tabs.setTabsClosable(True)
+            self.tabs.setMovable(True)
+            self.tabs.setUsesScrollButtons(True)
             self.tabs.tabCloseRequested.connect(self._close_tab)
             self.tabs.currentChanged.connect(self._handle_current_tab_changed)
+            tab_bar = self.tabs.tabBar()
+            tab_bar.setDocumentMode(True)
+            tab_bar.setExpanding(False)
+            tab_bar.setMovable(True)
+            tab_bar.setDrawBase(False)
+            tab_bar.setElideMode(Qt.TextElideMode.ElideRight)
             self.setCentralWidget(self.tabs)
             self.setWindowTitle(f"{APP_NAME} Browser")
             self.setWindowIcon(QIcon(str(icon_path)))
             self.resize(1280, 900)
             self._tab_refs: list[_BrowserTab] = []
             self.address_bar = QLineEdit(self)
-            self._build_toolbar()
             self._build_menu()
+            self._build_assistant_dock()
+            self._build_toolbar()
+            self._build_tab_controls()
+            self._apply_chrome_like_style()
+            self.menuBar().hide()
+            self.refresh_assistant_setup_state()
 
         def _build_toolbar(self) -> None:
             toolbar = QToolBar("Navigation", self)
+            toolbar.setObjectName("NavigationBar")
             toolbar.setMovable(False)
+            toolbar.setFloatable(False)
+            toolbar.setIconSize(QSize(16, 16))
             self.addToolBar(toolbar)
-
-            back_action = QAction("Back", self)
-            back_action.triggered.connect(self.go_back)
-            toolbar.addAction(back_action)
-
-            forward_action = QAction("Forward", self)
-            forward_action.triggered.connect(self.go_forward)
-            toolbar.addAction(forward_action)
-
-            reload_action = QAction("Reload", self)
-            reload_action.triggered.connect(self.reload_page)
-            toolbar.addAction(reload_action)
-
-            home_action = QAction("Home", self)
-            home_action.triggered.connect(self.open_home_page)
-            toolbar.addAction(home_action)
-
-            new_tab_action = QAction("New Tab", self)
-            new_tab_action.triggered.connect(lambda: self.open_tab(self.homepage_url))
-            toolbar.addAction(new_tab_action)
-
+            toolbar.addWidget(self._create_brand_widget())
+            toolbar.addSeparator()
+            toolbar.addWidget(
+                self._create_toolbar_button(
+                    icon=self._standard_icon("SP_ArrowBack"),
+                    tooltip="Back",
+                    handler=self.go_back,
+                )
+            )
+            toolbar.addWidget(
+                self._create_toolbar_button(
+                    icon=self._standard_icon("SP_ArrowForward"),
+                    tooltip="Forward",
+                    handler=self.go_forward,
+                )
+            )
+            toolbar.addWidget(
+                self._create_toolbar_button(
+                    icon=self._standard_icon("SP_BrowserReload"),
+                    tooltip="Reload",
+                    handler=self.reload_page,
+                )
+            )
             toolbar.addSeparator()
             self.address_bar.setClearButtonEnabled(True)
-            self.address_bar.setPlaceholderText("Search or enter address")
+            self.address_bar.setPlaceholderText("Search, type a URL, or describe the page task")
+            self.address_bar.setObjectName("AddressBar")
+            self.address_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self.address_bar.returnPressed.connect(self._navigate_from_address_bar)
             toolbar.addWidget(self.address_bar)
+            toolbar.addSeparator()
+            self.assistant_status_chip = QLabel("Runtime starting", self)
+            self.assistant_status_chip.setObjectName("AssistantStatusChip")
+            toolbar.addWidget(self.assistant_status_chip)
+            toolbar.addWidget(
+                self._create_toolbar_button(
+                    text="Setup",
+                    tooltip="Configure browser AI and browser runtime",
+                    handler=self._open_assistant_setup,
+                    object_name="SetupToggleButton",
+                )
+            )
+            toolbar.addWidget(
+                self._create_toolbar_button(
+                    text="AI",
+                    tooltip="Toggle Aoryn side panel",
+                    handler=self._toggle_assistant_panel,
+                    object_name="AssistantToggleButton",
+                )
+            )
+            toolbar.addWidget(
+                self._create_toolbar_button(
+                    icon=self._standard_icon("SP_DirHomeIcon", "SP_DesktopIcon"),
+                    tooltip="Home",
+                    handler=self.open_home_page,
+                )
+            )
+            toolbar.addWidget(self._create_menu_button())
 
         def _build_menu(self) -> None:
-            file_menu = self.menuBar().addMenu("File")
+            self._browser_menu = QMenu(self)
             new_tab = QAction("New Tab", self)
             new_tab.triggered.connect(lambda: self.open_tab(self.homepage_url))
-            file_menu.addAction(new_tab)
-
-            view_menu = self.menuBar().addMenu("View")
+            self._browser_menu.addAction(new_tab)
+            setup_action = QAction("AI Setup", self)
+            setup_action.triggered.connect(self._open_assistant_setup)
+            self._browser_menu.addAction(setup_action)
+            bookmark_action = QAction("Bookmark Current Page", self)
+            bookmark_action.triggered.connect(self._bookmark_current_page)
+            self._browser_menu.addAction(bookmark_action)
+            self._browser_menu.addSeparator()
+            setup_page_action = QAction("AI Overview", self)
+            setup_page_action.triggered.connect(lambda: self.open_internal_page("setup"))
+            self._browser_menu.addAction(setup_page_action)
+            runtime_action = QAction("Runtime", self)
+            runtime_action.triggered.connect(lambda: self.open_internal_page("runtime"))
+            self._browser_menu.addAction(runtime_action)
             history_action = QAction("History", self)
             history_action.triggered.connect(lambda: self.open_internal_page("history"))
-            view_menu.addAction(history_action)
+            self._browser_menu.addAction(history_action)
             bookmarks_action = QAction("Bookmarks", self)
             bookmarks_action.triggered.connect(lambda: self.open_internal_page("bookmarks"))
-            view_menu.addAction(bookmarks_action)
+            self._browser_menu.addAction(bookmarks_action)
             downloads_action = QAction("Downloads", self)
             downloads_action.triggered.connect(lambda: self.open_internal_page("downloads"))
-            view_menu.addAction(downloads_action)
+            self._browser_menu.addAction(downloads_action)
+            permissions_action = QAction("Permissions", self)
+            permissions_action.triggered.connect(lambda: self.open_internal_page("permissions"))
+            self._browser_menu.addAction(permissions_action)
+
+        def _build_assistant_dock(self) -> None:
+            self.assistant_panel = BrowserAssistantPanel(self)
+            self.assistant_panel.quick_action_requested.connect(self._handle_assistant_quick_action)
+            self.assistant_panel.ask_requested.connect(self._handle_assistant_ask)
+            self.assistant_panel.handoff_requested.connect(self._handle_assistant_handoff)
+            self.assistant_panel.open_setup_requested.connect(self._open_assistant_setup)
+            self.assistant_dock = QDockWidget("Aoryn", self)
+            self.assistant_dock.setObjectName("AssistantDock")
+            self.assistant_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+            self.assistant_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+            self.assistant_dock.setTitleBarWidget(QWidget(self.assistant_dock))
+            self.assistant_dock.setWidget(self.assistant_panel)
+            self.assistant_dock.setMinimumWidth(360)
+            self.assistant_dock.setMaximumWidth(420)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.assistant_dock)
+            self.assistant_dock.hide()
+
+        def _build_tab_controls(self) -> None:
+            controls = QWidget(self)
+            controls.setObjectName("TabControls")
+            layout = QHBoxLayout(controls)
+            layout.setContentsMargins(0, 0, 8, 0)
+            layout.setSpacing(6)
+            layout.addWidget(
+                self._create_toolbar_button(
+                    text="+",
+                    tooltip="New tab",
+                    handler=lambda: self.open_tab(self.homepage_url),
+                    object_name="TabActionButton",
+                )
+            )
+            self.tabs.setCornerWidget(controls, Qt.Corner.TopRightCorner)
+
+        def _create_brand_widget(self) -> QWidget:
+            brand = QWidget(self)
+            brand.setObjectName("BrowserBrand")
+            layout = QHBoxLayout(brand)
+            layout.setContentsMargins(4, 0, 8, 0)
+            layout.setSpacing(10)
+
+            mark = QLabel("A", brand)
+            mark.setObjectName("BrowserBrandMark")
+            mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(mark)
+
+            copy = QWidget(brand)
+            copy.setObjectName("BrowserBrandCopy")
+            copy_layout = QVBoxLayout(copy)
+            copy_layout.setContentsMargins(0, 0, 0, 0)
+            copy_layout.setSpacing(1)
+
+            wordmark = QLabel("Aoryn", copy)
+            wordmark.setObjectName("BrowserBrandWordmark")
+            copy_layout.addWidget(wordmark)
+
+            subline = QLabel("Browser", copy)
+            subline.setObjectName("BrowserBrandSubline")
+            copy_layout.addWidget(subline)
+
+            layout.addWidget(copy)
+            return brand
+
+        def _create_toolbar_button(
+            self,
+            *,
+            tooltip: str,
+            handler: Callable[[], Any],
+            icon: QIcon | None = None,
+            text: str | None = None,
+            object_name: str = "ChromeNavButton",
+        ) -> QToolButton:
+            button = QToolButton(self)
+            button.setObjectName(object_name)
+            button.setAutoRaise(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setToolTip(tooltip)
+            if icon is not None and not icon.isNull():
+                button.setIcon(icon)
+            if text:
+                button.setText(text)
+            button.clicked.connect(handler)
+            return button
+
+        def _create_menu_button(self) -> QToolButton:
+            button = QToolButton(self)
+            button.setObjectName("BrowserMenuButton")
+            button.setAutoRaise(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setText("Menu")
+            button.setToolTip("Browser menu")
+            button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            button.setMenu(self._browser_menu)
+            return button
+
+        def _standard_icon(self, *candidates: str) -> QIcon:
+            enum_container = getattr(QStyle, "StandardPixmap", None)
+            for name in candidates:
+                if enum_container is not None and hasattr(enum_container, name):
+                    return self.style().standardIcon(getattr(enum_container, name))
+                if hasattr(QStyle, name):
+                    return self.style().standardIcon(getattr(QStyle, name))
+            return QIcon()
+
+        def _bookmark_current_page(self) -> None:
+            runtime = self._browser_runtime()
+            if runtime is not None:
+                runtime.bookmark_page()
+
+        def _open_assistant_setup(self) -> None:
+            runtime = self._browser_runtime()
+            if runtime is None:
+                self.assistant_panel.set_status("Browser runtime is unavailable.")
+                return
+            dialog = BrowserAssistantSetupDialog(runtime, self)
+            if dialog.exec():
+                self.refresh_assistant_setup_state()
+                self._refresh_assistant_context()
+
+        def _toggle_assistant_panel(self) -> None:
+            if self.assistant_dock.isVisible():
+                self.assistant_dock.hide()
+                return
+            self._refresh_assistant_context()
+            self.assistant_dock.show()
+            self.assistant_dock.raise_()
+
+        def _handle_assistant_quick_action(self, mode: str) -> None:
+            snapshot = self.snapshot()
+            self.assistant_panel.update_context(snapshot)
+            self.assistant_panel.set_digest(build_browser_digest(snapshot, mode=mode))
+            if mode == "handoff":
+                self.assistant_panel.set_prompt("Continue this browsing task in the desktop agent.")
+                self.assistant_panel.set_status("Review the handoff preview, then send it to the desktop agent when ready.")
+                return
+            self.assistant_panel.set_status("Quick page digest generated from the visible page.")
+
+        def _handle_assistant_ask(self, prompt: str) -> None:
+            if self._assistant_request_in_flight:
+                return
+            snapshot = self.snapshot()
+            runtime = self._browser_runtime()
+            normalized_prompt = _optional_str(prompt) or "Summarize this page and tell me the next useful step."
+            if runtime is None:
+                self.assistant_panel.set_digest("Browser runtime is unavailable.")
+                self.assistant_panel.set_status("Browser runtime is unavailable.")
+                return
+
+            self._assistant_request_in_flight = True
+            self.assistant_panel.set_busy(True, status_text="Aoryn is reading the current page...")
+            self.assistant_panel.set_digest("Working on a page-grounded answer...")
+
+            def _worker() -> None:
+                result = runtime.ask_assistant(prompt=normalized_prompt, snapshot=snapshot)
+                runtime.dispatcher.invoke(
+                    lambda: self._finish_assistant_request(
+                        normalized_prompt,
+                        snapshot,
+                        result,
+                    )
+                )
+
+            threading.Thread(target=_worker, name=f"browser-ai-{self.window_id}", daemon=True).start()
+
+        def _finish_assistant_request(
+            self,
+            prompt: str,
+            snapshot: dict[str, Any],
+            result: dict[str, Any],
+        ) -> None:
+            self._assistant_request_in_flight = False
+            self.assistant_panel.set_busy(False)
+            if result.get("ok"):
+                message = _optional_str(result.get("assistant_message")) or "The assistant returned an empty response."
+                self.assistant_panel.set_digest(message)
+                self.assistant_panel.set_status(
+                    f"Answered from {_optional_str(snapshot.get('title')) or 'the current page'} using the configured provider."
+                )
+                return
+            self.assistant_panel.set_digest(
+                "\n".join(
+                    [
+                        "AI request failed",
+                        _optional_str(result.get("error")) or "The configured provider could not answer.",
+                    ]
+                )
+            )
+            self.assistant_panel.set_status("Open Setup to check the provider, Base URL, model, or API key.")
+
+        def _handle_assistant_handoff(self, prompt: str) -> None:
+            snapshot = self.snapshot()
+            digest = build_browser_digest(snapshot, mode="handoff")
+            normalized_prompt = _optional_str(prompt) or "Continue with the current page."
+            runtime = self._browser_runtime()
+            if runtime is not None:
+                runtime.record_handoff(
+                    kind="assistant_prompt",
+                    reason=normalized_prompt,
+                    url=_optional_str(snapshot.get("url")),
+                    title=_optional_str(snapshot.get("title")),
+                )
+            self.assistant_panel.set_digest(
+                "\n".join(
+                    [
+                        "Prompt queued for Aoryn",
+                        normalized_prompt,
+                        "",
+                        digest,
+                    ]
+                )
+            )
+            self.assistant_panel.set_status("Handoff recorded. Continue the task in the desktop agent when ready.")
+
+        def refresh_assistant_setup_state(self) -> None:
+            runtime = self._browser_runtime()
+            if runtime is None:
+                self.assistant_status_chip.setText("Runtime offline")
+                self.assistant_status_chip.setToolTip("Browser runtime is unavailable.")
+                self.assistant_panel.set_status("Browser runtime is unavailable.")
+                return
+            service = runtime.service_summary()
+            assistant = runtime.assistant_setup_snapshot().get("summary") or {}
+            service_badge = _optional_str(service.get("badge_text")) or "Runtime starting"
+            service_detail = _optional_str(service.get("detail")) or "Managed runtime state is unavailable."
+            assistant_status = _optional_str(assistant.get("status")) or "Setup needed"
+            assistant_detail = _optional_str(assistant.get("detail")) or "Open Setup to configure browser AI."
+            chip_text = f"{service_badge} | {'AI ready' if assistant_status == 'Ready' else assistant_status}"
+            self.assistant_status_chip.setText(chip_text)
+            self.assistant_status_chip.setToolTip("\n".join([service_detail, f"AI: {assistant_detail}"]).strip())
+            self.assistant_panel.set_status(
+                f"{service_badge}: {service_detail} AI: {assistant_status}. {assistant_detail}"
+            )
+
+        def _refresh_assistant_context(self) -> None:
+            snapshot = self.snapshot()
+            self.assistant_panel.update_context(snapshot)
+            if not self.assistant_panel.response.toPlainText().strip():
+                self.assistant_panel.set_digest(build_browser_digest(snapshot, mode="summary"))
+
+        def _apply_chrome_like_style(self) -> None:
+            self.setStyleSheet(
+                """
+                QMainWindow {
+                    background: qlineargradient(x1: 0, y1: 0, x2: 0.9, y2: 1, stop: 0 #fbfcfa, stop: 0.45 #f4f8f2, stop: 1 #eef3ef);
+                }
+                QToolBar#NavigationBar {
+                    background: rgba(255, 255, 255, 0.84);
+                    border: 1px solid rgba(17, 24, 39, 0.08);
+                    border-radius: 22px;
+                    spacing: 8px;
+                    padding: 10px 14px 12px 14px;
+                    margin: 12px 14px 10px 14px;
+                }
+                QToolBar#NavigationBar::separator {
+                    width: 10px;
+                    background: transparent;
+                }
+                QWidget#BrowserBrand {
+                    background: transparent;
+                }
+                QLabel#BrowserBrandMark {
+                    min-width: 34px;
+                    max-width: 34px;
+                    min-height: 34px;
+                    max-height: 34px;
+                    border-radius: 12px;
+                    border: 1px solid rgba(104, 152, 183, 0.18);
+                    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 #1d3043, stop: 0.56 #18273a, stop: 1 #142130);
+                    color: #ddfff6;
+                    font: 700 15px "Iowan Old Style";
+                    qproperty-alignment: 'AlignCenter';
+                }
+                QLabel#BrowserBrandWordmark {
+                    color: #16211d;
+                    font: 600 15px "Iowan Old Style";
+                    letter-spacing: -0.3px;
+                }
+                QLabel#BrowserBrandSubline {
+                    color: #5f6d68;
+                    font: 11px "Segoe UI";
+                }
+                QWidget#TabControls {
+                    background: transparent;
+                }
+                QTabWidget::pane {
+                    border: 1px solid rgba(17, 24, 39, 0.08);
+                    border-radius: 24px;
+                    top: -1px;
+                    margin: 2px 14px 14px 14px;
+                    background: rgba(255, 255, 255, 0.96);
+                }
+                QTabBar::tab {
+                    background: rgba(255, 255, 255, 0.55);
+                    color: #5f6d68;
+                    border: 1px solid transparent;
+                    border-top-left-radius: 16px;
+                    border-top-right-radius: 16px;
+                    padding: 10px 18px 11px 18px;
+                    margin-right: 6px;
+                    min-width: 156px;
+                    max-width: 220px;
+                    font: 600 12px "Segoe UI";
+                }
+                QTabBar::tab:selected {
+                    background: rgba(255, 255, 255, 0.96);
+                    color: #16211d;
+                    border-color: rgba(15, 143, 115, 0.22);
+                }
+                QTabBar::tab:hover:!selected {
+                    background: rgba(255, 255, 255, 0.76);
+                    color: #16211d;
+                }
+                QToolButton#ChromeNavButton,
+                QToolButton#TabActionButton,
+                QToolButton#BrowserMenuButton,
+                QToolButton#AssistantToggleButton,
+                QToolButton#SetupToggleButton {
+                    background: rgba(255, 255, 255, 0.62);
+                    border: 1px solid rgba(17, 24, 39, 0.06);
+                    border-radius: 16px;
+                    color: #24312d;
+                    min-width: 32px;
+                    min-height: 34px;
+                    padding: 7px 10px;
+                    font: 600 14px "Segoe UI";
+                }
+                QToolButton#ChromeNavButton:hover,
+                QToolButton#TabActionButton:hover,
+                QToolButton#BrowserMenuButton:hover,
+                QToolButton#AssistantToggleButton:hover,
+                QToolButton#SetupToggleButton:hover {
+                    background: rgba(255, 255, 255, 0.92);
+                    border-color: rgba(15, 143, 115, 0.14);
+                }
+                QToolButton#ChromeNavButton:pressed,
+                QToolButton#TabActionButton:pressed,
+                QToolButton#BrowserMenuButton:pressed,
+                QToolButton#AssistantToggleButton:pressed,
+                QToolButton#SetupToggleButton:pressed {
+                    background: rgba(241, 246, 244, 0.98);
+                }
+                QToolButton#AssistantToggleButton {
+                    min-width: 52px;
+                    padding: 7px 12px;
+                    color: #ffffff;
+                    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 #0f8f73, stop: 1 #0c6d59);
+                    border: 0;
+                    font: 700 12px "Segoe UI";
+                }
+                QToolButton#SetupToggleButton {
+                    min-width: 52px;
+                    padding: 7px 12px;
+                    color: #24312d;
+                    font: 600 12px "Segoe UI";
+                }
+                QLabel#AssistantStatusChip {
+                    padding: 8px 13px;
+                    border-radius: 999px;
+                    background: rgba(15, 143, 115, 0.12);
+                    border: 1px solid rgba(15, 143, 115, 0.18);
+                    color: #0c6d59;
+                    font: 600 12px "Segoe UI";
+                }
+                QLineEdit#AddressBar {
+                    background: rgba(255, 255, 255, 0.96);
+                    border: 1px solid rgba(17, 24, 39, 0.08);
+                    border-radius: 20px;
+                    color: #16211d;
+                    min-height: 38px;
+                    padding: 8px 16px;
+                    selection-background-color: rgba(15, 143, 115, 0.18);
+                    font: 14px "Segoe UI";
+                }
+                QLineEdit#AddressBar:hover {
+                    border-color: rgba(15, 143, 115, 0.18);
+                }
+                QLineEdit#AddressBar:focus {
+                    border-color: #0f8f73;
+                    background: rgba(255, 255, 255, 1);
+                }
+                QMenu {
+                    background: rgba(255, 255, 255, 0.98);
+                    border: 1px solid rgba(17, 24, 39, 0.08);
+                    border-radius: 14px;
+                    padding: 8px;
+                }
+                QMenu::item {
+                    padding: 8px 14px;
+                    border-radius: 10px;
+                    color: #16211d;
+                }
+                QMenu::item:selected {
+                    background: rgba(15, 143, 115, 0.12);
+                    color: #0f8f73;
+                }
+                QDockWidget#AssistantDock {
+                    border: 0;
+                }
+                QWidget#AssistantPanel {
+                    background: qlineargradient(x1: 0, y1: 0, x2: 0.8, y2: 1, stop: 0 #fbfcfa, stop: 1 #f3f7f2);
+                    border-left: 1px solid rgba(17, 24, 39, 0.08);
+                }
+                QLabel#AssistantBadge {
+                    background: rgba(15, 143, 115, 0.12);
+                    color: #0f8f73;
+                    border-radius: 999px;
+                    padding: 6px 10px;
+                    font: 700 11px "Segoe UI";
+                    max-width: 64px;
+                }
+                QLabel#AssistantHeading {
+                    color: #16211d;
+                    font: 600 24px "Segoe UI";
+                }
+                QLabel#AssistantSubheading {
+                    color: #5f6d68;
+                    font: 13px "Segoe UI";
+                }
+                QLabel#AssistantStatus {
+                    color: #305248;
+                    background: rgba(255, 255, 255, 0.82);
+                    border: 1px solid rgba(15, 143, 115, 0.16);
+                    border-radius: 16px;
+                    padding: 10px 12px;
+                    font: 12px "Segoe UI";
+                }
+                QFrame#AssistantContextCard {
+                    background: rgba(255, 255, 255, 0.88);
+                    border: 1px solid rgba(17, 24, 39, 0.08);
+                    border-radius: 18px;
+                }
+                QLabel#AssistantContextTitle {
+                    color: #16211d;
+                    font: 600 14px "Segoe UI";
+                }
+                QLabel#AssistantContextUrl {
+                    color: #5f6d68;
+                    font: 12px "Segoe UI";
+                }
+                QPushButton#AssistantChip {
+                    background: rgba(255, 255, 255, 0.72);
+                    border: 1px solid rgba(17, 24, 39, 0.08);
+                    border-radius: 999px;
+                    color: #24312d;
+                    padding: 8px 12px;
+                    font: 600 12px "Segoe UI";
+                }
+                QPushButton#AssistantChip:hover {
+                    background: rgba(15, 143, 115, 0.12);
+                    border-color: rgba(15, 143, 115, 0.18);
+                    color: #0f8f73;
+                }
+                QTextEdit#AssistantPrompt,
+                QTextEdit#AssistantResponse {
+                    background: rgba(255, 255, 255, 0.96);
+                    border: 1px solid rgba(17, 24, 39, 0.08);
+                    border-radius: 18px;
+                    padding: 10px 12px;
+                    color: #16211d;
+                    font: 13px "Segoe UI";
+                }
+                QTextEdit#AssistantPrompt:focus {
+                    border-color: #0f8f73;
+                }
+                QPushButton#AssistantPrimaryButton {
+                    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 #0f8f73, stop: 1 #0c6d59);
+                    color: #ffffff;
+                    border: 0;
+                    border-radius: 18px;
+                    padding: 12px 14px;
+                    font: 600 13px "Segoe UI";
+                }
+                QPushButton#AssistantPrimaryButton:hover {
+                    background: #0c6d59;
+                }
+                QPushButton#AssistantSecondaryButton {
+                    background: rgba(255, 255, 255, 0.82);
+                    color: #29443c;
+                    border: 1px solid rgba(17, 24, 39, 0.08);
+                    border-radius: 18px;
+                    padding: 10px 14px;
+                    font: 600 12px "Segoe UI";
+                }
+                QPushButton#AssistantSecondaryButton:hover {
+                    background: rgba(15, 143, 115, 0.1);
+                    border-color: rgba(15, 143, 115, 0.16);
+                }
+                QDialog {
+                    background: qlineargradient(x1: 0, y1: 0, x2: 0.85, y2: 1, stop: 0 #fbfcfa, stop: 1 #f3f7f2);
+                }
+                QLabel#AssistantSetupTitle {
+                    color: #16211d;
+                    font: 600 22px "Segoe UI";
+                }
+                QLabel#AssistantSetupSubtitle,
+                QLabel#AssistantSetupStatus,
+                QLabel#AssistantSetupPaths {
+                    color: #5f6d68;
+                    font: 12px "Segoe UI";
+                }
+                QDialog QLineEdit,
+                QDialog QComboBox {
+                    min-height: 36px;
+                    border-radius: 14px;
+                    border: 1px solid rgba(17, 24, 39, 0.08);
+                    background: rgba(255, 255, 255, 0.96);
+                    padding: 6px 10px;
+                    color: #16211d;
+                }
+                QDialog QLineEdit:focus,
+                QDialog QComboBox:focus {
+                    border-color: #0f8f73;
+                }
+                QDialog QCheckBox {
+                    color: #29443c;
+                    spacing: 8px;
+                }
+                QDialog QPushButton {
+                    min-height: 34px;
+                    border-radius: 14px;
+                    padding: 8px 14px;
+                    font: 600 12px "Segoe UI";
+                }
+                QDialogButtonBox QPushButton {
+                    background: rgba(255, 255, 255, 0.9);
+                    border: 1px solid rgba(17, 24, 39, 0.08);
+                    color: #24312d;
+                }
+                QDialogButtonBox QPushButton:hover {
+                    background: rgba(15, 143, 115, 0.08);
+                    border-color: rgba(15, 143, 115, 0.14);
+                }
+                """
+            )
 
         def open_tab(
             self,
@@ -975,6 +1874,7 @@ if QApplication is not None:
             target.internal_page = None
             target.view.load(QUrl(normalized))
             self._sync_address_bar()
+            self._refresh_assistant_context()
             return {"window_id": self.window_id, "tab_id": target.tab_id, "url": normalized}
 
         def open_internal_page(self, page_name: str, *, tab_id: str | None = None) -> dict[str, Any]:
@@ -1089,7 +1989,7 @@ if QApplication is not None:
             tab = self.active_tab()
             if tab is None:
                 return {"annotated": False}
-            runtime = self._runtime()
+            runtime = self._browser_runtime()
             annotation_id = uuid.uuid4().hex[:8]
             script = build_annotation_overlay_script(
                 selector=selector,
@@ -1124,7 +2024,7 @@ if QApplication is not None:
             if tab.internal_page:
                 return {"ok": False, "error": "Internal pages do not carry page annotations."}
             result = _run_js_sync(tab.view.page(), build_clear_annotations_script(annotation_id=annotation_id))
-            runtime = self._runtime()
+            runtime = self._browser_runtime()
             if runtime is not None:
                 runtime.clear_registered_annotations(tab.tab_id, annotation_id=annotation_id)
             payload = result if isinstance(result, dict) else {"cleared": False, "count": 0}
@@ -1199,12 +2099,12 @@ if QApplication is not None:
             if action == "open_internal_page":
                 return self.open_internal_page(value or "home", tab_id=tab.tab_id)
             if action == "bookmark":
-                runtime = self._runtime()
+                runtime = self._browser_runtime()
                 if runtime is None:
                     return {"ok": False, "error": "Browser runtime is unavailable."}
                 return runtime.bookmark_page()
             if action == "resume_after_auth":
-                runtime = self._runtime()
+                runtime = self._browser_runtime()
                 if runtime is None:
                     return {"ok": False, "error": "Browser runtime is unavailable."}
                 return runtime.resume_after_auth()
@@ -1213,7 +2113,7 @@ if QApplication is not None:
             if action == "upload":
                 return self.upload_files(selector=selector, paths=upload_paths, tab_id=tab.tab_id)
             if action == "decide_permission":
-                runtime = self._runtime()
+                runtime = self._browser_runtime()
                 if runtime is None:
                     return {"ok": False, "error": "Browser runtime is unavailable."}
                 origin = _optional_str(payload.get("origin")) or _optional_str(tab.view.url().host()) or _optional_str(tab.view.url().toString())
@@ -1230,7 +2130,7 @@ if QApplication is not None:
                     }
                 )
             if action == "pause_for_auth":
-                runtime = self._runtime()
+                runtime = self._browser_runtime()
                 if runtime is None:
                     return {"ok": False, "error": "Browser runtime is unavailable."}
                 return runtime.pause_for_auth(value or "Authentication required.")
@@ -1302,7 +2202,7 @@ if QApplication is not None:
             tabs: list[dict[str, Any]] = []
             active = self.active_tab()
             active_id = active.tab_id if active is not None else None
-            runtime = self._runtime()
+            runtime = self._browser_runtime()
             for item in self._tab_refs:
                 tabs.append(
                     {
@@ -1340,7 +2240,7 @@ if QApplication is not None:
             self._tab_refs = [item for item in self._tab_refs if item.view is not widget]
             widget.deleteLater()
             self._refresh_title()
-            runtime = self._runtime()
+            runtime = self._browser_runtime()
             if runtime is not None:
                 runtime.schedule_persist_state()
             if self.tabs.count() == 0:
@@ -1364,6 +2264,7 @@ if QApplication is not None:
         def _handle_current_tab_changed(self, _index: int) -> None:
             self._refresh_title()
             self._sync_address_bar()
+            self._refresh_assistant_context()
 
         def _handle_url_changed(self, tab_id: str, url: QUrl) -> None:
             item = self._resolve_tab(tab_id)
@@ -1378,7 +2279,7 @@ if QApplication is not None:
             item = self._resolve_tab(tab_id)
             if item is None or item.internal_page or not ok:
                 return
-            runtime = self._runtime()
+            runtime = self._browser_runtime()
             if runtime is None:
                 return
             runtime._record_history(
@@ -1391,13 +2292,14 @@ if QApplication is not None:
             )
             runtime.reapply_annotations(tab_id)
             runtime.schedule_persist_state()
+            self._refresh_assistant_context()
 
         def _open_internal_target(self, tab_id: str, target: str) -> None:
             self.open_internal_page(_internal_browser_page_name(target) or "home", tab_id=tab_id)
 
         def _render_internal_page(self, tab: _BrowserTab, target_url: str) -> dict[str, Any]:
             page_name = _internal_browser_page_name(target_url) or "home"
-            runtime = self._runtime()
+            runtime = self._browser_runtime()
             if runtime is None:
                 title, document = build_internal_page_html(page_name)
             else:
@@ -1410,6 +2312,7 @@ if QApplication is not None:
             self._refresh_title()
             if runtime is not None:
                 runtime.schedule_persist_state()
+            self._refresh_assistant_context()
             return {
                 "window_id": self.window_id,
                 "tab_id": tab.tab_id,
@@ -1449,13 +2352,13 @@ if QApplication is not None:
             return _optional_str(tab.view.title()) or "New Tab"
 
         def _annotation_snapshot(self, tab_id: str | None) -> list[dict[str, Any]]:
-            runtime = self._runtime()
+            runtime = self._browser_runtime()
             if runtime is None or not tab_id:
                 return []
             return runtime.annotations_for_tab(tab_id)
 
         def _handle_permission_request(self, tab_id: str, page, security_origin, feature) -> None:
-            runtime = self._runtime()
+            runtime = self._browser_runtime()
             if runtime is None:
                 return
             runtime.register_permission_request(
@@ -1465,21 +2368,22 @@ if QApplication is not None:
                 feature=feature,
             )
 
-        def _runtime(self):
-            return getattr(self, "_runtime", None)
+        def _browser_runtime(self):
+            return getattr(self, "_browser_runtime_ref", None)
 
         def closeEvent(self, event: QCloseEvent) -> None:
-            runtime = self._runtime()
+            runtime = self._browser_runtime()
             if runtime is not None:
                 runtime.unregister_window(self.window_id)
             super().closeEvent(event)
 
 
     class AorynBrowserRuntime:
-        def __init__(self, *, profile_root: Path, port: int, icon_path: Path) -> None:
+        def __init__(self, *, profile_root: Path, port: int, icon_path: Path, config_path: Path | None = None) -> None:
             self.profile_root = profile_root
             self.port = port
             self.icon_path = icon_path
+            self.config_path = discover_config_path(config_path)
             self.homepage_url = DEFAULT_BROWSER_HOMEPAGE
             self.search_url = DEFAULT_BROWSER_SEARCH_URL
             self.dispatcher = _UiDispatcher()
@@ -1519,6 +2423,138 @@ if QApplication is not None:
             except Exception:
                 pass
 
+        def _dashboard_app(self):
+            from desktop_agent.dashboard import DashboardApp
+
+            return DashboardApp(host="127.0.0.1", port=0, config_path=self.config_path)
+
+        def assistant_setup_snapshot(self) -> dict[str, Any]:
+            app = self._dashboard_app()
+            meta = app.meta()
+            runtime_snapshot = app.runtime_preferences.snapshot()
+            runtime_overrides = runtime_snapshot.get("config_overrides") if isinstance(runtime_snapshot, dict) else {}
+            config = load_agent_config(self.config_path, config_overrides=runtime_overrides if isinstance(runtime_overrides, dict) else {})
+            summary = build_browser_ai_setup_summary(
+                config,
+                provider_options=meta.get("model_providers") if isinstance(meta, dict) else None,
+                browser_channel_options=meta.get("browser_channels") if isinstance(meta, dict) else None,
+                config_path=app.config_path,
+                runtime_preferences_path=app.runtime_preferences.path,
+            )
+            return {
+                "summary": summary,
+                "config_path": str(app.config_path) if app.config_path else None,
+                "runtime_preferences_path": str(app.runtime_preferences.path),
+                "providers": list(meta.get("model_providers") or []) if isinstance(meta, dict) else [],
+                "browser_channels": list(meta.get("browser_channels") or []) if isinstance(meta, dict) else [],
+                "effective": {
+                    "model_provider": config.model_provider,
+                    "model_base_url": config.model_base_url,
+                    "model_name": config.model_name,
+                    "model_api_key": config.model_api_key or "",
+                    "model_auto_discover": config.model_auto_discover,
+                    "browser_channel": config.browser_channel or "",
+                    "browser_executable_path": config.browser_executable_path or "",
+                    "browser_headless": config.browser_headless,
+                },
+            }
+
+        def assistant_provider_snapshot(self) -> dict[str, Any]:
+            try:
+                app = self._dashboard_app()
+                payload = app.provider_models({})
+                return {"ok": True, **payload}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        def update_assistant_settings(self, payload: dict[str, Any] | None) -> dict[str, Any]:
+            try:
+                app = self._dashboard_app()
+                runtime_snapshot = app.runtime_preferences.snapshot()
+                current = dict(runtime_snapshot.get("config_overrides") or {}) if isinstance(runtime_snapshot, dict) else {}
+                allowed_keys = {
+                    "model_provider",
+                    "model_base_url",
+                    "model_name",
+                    "model_api_key",
+                    "model_auto_discover",
+                    "browser_channel",
+                    "browser_executable_path",
+                    "browser_headless",
+                }
+                incoming = dict(payload or {})
+                for key in allowed_keys:
+                    if key not in incoming:
+                        continue
+                    value = incoming.get(key)
+                    if isinstance(value, str):
+                        value = value.strip()
+                    if value in {None, ""} and key not in {"model_auto_discover", "browser_headless"}:
+                        current.pop(key, None)
+                        continue
+                    current[key] = value
+                app.runtime_preferences.update(config_overrides=current)
+                self.refresh_ai_surfaces()
+                self.schedule_internal_page_refresh()
+                return {"ok": True, "snapshot": self.assistant_setup_snapshot()}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        def ask_assistant(self, *, prompt: str, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+            try:
+                app = self._dashboard_app()
+                request_message = build_browser_assistant_user_message(snapshot, prompt)
+                reply = app.chat_reply(
+                    messages=[{"role": "user", "content": request_message}],
+                    config_overrides={},
+                    session_meta={"locale": "zh-CN" if any("\u4e00" <= char <= "\u9fff" for char in prompt) else "en-US"},
+                )
+                return {"ok": True, **reply}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        def _resolved_transport(self) -> str:
+            try:
+                config = load_agent_config(self.config_path)
+                return _optional_str(getattr(config, "browser_runtime_transport", None)) or "local_http"
+            except Exception:
+                return "local_http"
+
+        def _service_summary_payload(self, *, transport: str) -> dict[str, Any]:
+            window = self._active_window()
+            snapshot = window.snapshot() if window is not None else {}
+            runtime_status = "paused_for_auth" if self.auth_pause_reason else ("ready" if self.windows else "starting")
+            return build_browser_service_summary(
+                base_url=f"http://127.0.0.1:{self.port}",
+                transport=transport,
+                status=runtime_status,
+                window_count=len(self.windows),
+                tab_count=len(self._list_tabs()),
+                active_title=_optional_str(snapshot.get("title")),
+                active_url=_optional_str(snapshot.get("url")),
+                pending_permissions=len(self.permission_requests),
+                handoff_count=len(self.handoffs),
+                annotation_count=len(self.annotations),
+                auth_pause_reason=self.auth_pause_reason,
+            )
+
+        def service_summary(self) -> dict[str, Any]:
+            transport = self._resolved_transport()
+            return self.dispatcher.invoke(lambda: self._service_summary_payload(transport=transport))
+
+        def refresh_ai_surfaces(self) -> None:
+            def _refresh() -> None:
+                for window in list(self.windows.values()):
+                    try:
+                        window.refresh_assistant_setup_state()
+                    except Exception:
+                        continue
+
+            if threading.current_thread() is threading.main_thread():
+                _refresh()
+                return
+            self.dispatcher.invoke(_refresh)
+
         def open_window(self, url: str | None = None) -> dict[str, Any]:
             def _create() -> dict[str, Any]:
                 window = BrowserWindow(
@@ -1527,7 +2563,8 @@ if QApplication is not None:
                     homepage_url=self.homepage_url,
                     search_url=self.search_url,
                 )
-                window._runtime = self  # type: ignore[attr-defined]
+                window._browser_runtime_ref = self  # type: ignore[attr-defined]
+                window.refresh_assistant_setup_state()
                 payload = window.open_tab(url or self.homepage_url)
                 self.windows[window.window_id] = window
                 window.show()
@@ -1763,6 +2800,7 @@ if QApplication is not None:
             return self.status().to_dict()
 
         def session_state(self) -> dict[str, Any]:
+            transport = self._resolved_transport()
             return self.dispatcher.invoke(
                 lambda: {
                     "windows": self._serialize_windows(),
@@ -1775,6 +2813,7 @@ if QApplication is not None:
                     "permission_requests": list(self.permission_requests),
                     "handoffs": list(self.handoffs),
                     "auth_pause_reason": self.auth_pause_reason,
+                    "service": self._service_summary_payload(transport=transport),
                 }
             )
 
@@ -2062,6 +3101,8 @@ if QApplication is not None:
                 permission_requests=self.permission_requests,
                 handoffs=self.handoffs,
                 auth_pause_reason=self.auth_pause_reason,
+                assistant_setup=self.assistant_setup_snapshot().get("summary"),
+                service_summary=self.service_summary(),
             )
 
         def refresh_internal_pages(self) -> None:
@@ -2130,7 +3171,8 @@ if QApplication is not None:
                     homepage_url=self.homepage_url,
                     search_url=self.search_url,
                 )
-                window._runtime = self  # type: ignore[attr-defined]
+                window._browser_runtime_ref = self  # type: ignore[attr-defined]
+                window.refresh_assistant_setup_state()
                 self.windows[window.window_id] = window
                 active_tab_id = _optional_str(window_state.get("active_tab_id"))
                 active_index = 0
@@ -2153,87 +3195,99 @@ if QApplication is not None:
 
             class BrowserHandler(BaseHTTPRequestHandler):
                 def do_GET(self) -> None:  # noqa: N802
-                    if self.path == "/status":
-                        self._write_json(runtime.status().to_dict())
-                        return
-                    if self.path == "/snapshot":
-                        self._write_json(runtime.snapshot())
-                        return
-                    self.send_error(HTTPStatus.NOT_FOUND)
+                    try:
+                        if self.path == "/status":
+                            self._write_json(runtime.status().to_dict())
+                            return
+                        if self.path == "/snapshot":
+                            self._write_json(runtime.snapshot())
+                            return
+                        self.send_error(HTTPStatus.NOT_FOUND)
+                    except Exception as exc:
+                        self._write_json(
+                            build_browser_http_error_payload(exc),
+                            status=HTTPStatus.SERVICE_UNAVAILABLE if isinstance(exc, BrowserRuntimeError) else HTTPStatus.INTERNAL_SERVER_ERROR,
+                        )
 
                 def do_POST(self) -> None:  # noqa: N802
-                    payload = self._read_json_body()
-                    path = self.path
-                    if path == "/open_window":
-                        self._write_json(runtime.open_window(_optional_str(payload.get("url"))))
-                        return
-                    if path == "/open_tab":
-                        self._write_json(runtime.open_tab(_optional_str(payload.get("url"))))
-                        return
-                    if path == "/open_internal_page":
-                        self._write_json(runtime.open_internal_page(_optional_str(payload.get("page")) or "home"))
-                        return
-                    if path == "/switch_tab":
-                        self._write_json(runtime.switch_tab(_optional_str(payload.get("tab_id")) or ""))
-                        return
-                    if path == "/close_tab":
-                        self._write_json(runtime.close_tab(_optional_str(payload.get("tab_id"))))
-                        return
-                    if path == "/navigate":
-                        self._write_json(runtime.navigate(str(payload.get("url", "")), tab_id=_optional_str(payload.get("tab_id"))))
-                        return
-                    if path == "/query_dom":
-                        self._write_json(runtime.query_dom(payload))
-                        return
-                    if path == "/query_accessibility":
-                        self._write_json(runtime.query_accessibility())
-                        return
-                    if path == "/annotate_page":
-                        self._write_json(runtime.annotate_page(payload))
-                        return
-                    if path == "/list_tabs":
-                        self._write_json(runtime.list_tabs())
-                        return
-                    if path == "/list_annotations":
-                        self._write_json(runtime.list_annotations(payload))
-                        return
-                    if path == "/clear_annotations":
-                        self._write_json(runtime.clear_annotations(payload))
-                        return
-                    if path == "/perform_action":
-                        self._write_json(runtime.perform_action(payload))
-                        return
-                    if path == "/wait_for_state":
-                        self._write_json(runtime.wait_for_state(payload))
-                        return
-                    if path == "/collect_downloads":
-                        self._write_json(runtime.collect_downloads(payload))
-                        return
-                    if path == "/wait_for_download":
-                        self._write_json(runtime.wait_for_download(payload))
-                        return
-                    if path == "/list_permissions":
-                        self._write_json(runtime.list_permissions())
-                        return
-                    if path == "/list_permission_requests":
-                        self._write_json(runtime.list_permission_requests())
-                        return
-                    if path == "/decide_permission":
-                        self._write_json(runtime.decide_permission(payload))
-                        return
-                    if path == "/bookmark_page":
-                        self._write_json(runtime.bookmark_page())
-                        return
-                    if path == "/pause_for_auth":
-                        self._write_json(runtime.pause_for_auth(_optional_str(payload.get("reason"))))
-                        return
-                    if path == "/resume_after_auth":
-                        self._write_json(runtime.resume_after_auth())
-                        return
-                    if path == "/get_session_state":
-                        self._write_json(runtime.session_state())
-                        return
-                    self.send_error(HTTPStatus.NOT_FOUND)
+                    try:
+                        payload = self._read_json_body()
+                        path = self.path
+                        if path == "/open_window":
+                            self._write_json(runtime.open_window(_optional_str(payload.get("url"))))
+                            return
+                        if path == "/open_tab":
+                            self._write_json(runtime.open_tab(_optional_str(payload.get("url"))))
+                            return
+                        if path == "/open_internal_page":
+                            self._write_json(runtime.open_internal_page(_optional_str(payload.get("page")) or "home"))
+                            return
+                        if path == "/switch_tab":
+                            self._write_json(runtime.switch_tab(_optional_str(payload.get("tab_id")) or ""))
+                            return
+                        if path == "/close_tab":
+                            self._write_json(runtime.close_tab(_optional_str(payload.get("tab_id"))))
+                            return
+                        if path == "/navigate":
+                            self._write_json(runtime.navigate(str(payload.get("url", "")), tab_id=_optional_str(payload.get("tab_id"))))
+                            return
+                        if path == "/query_dom":
+                            self._write_json(runtime.query_dom(payload))
+                            return
+                        if path == "/query_accessibility":
+                            self._write_json(runtime.query_accessibility())
+                            return
+                        if path == "/annotate_page":
+                            self._write_json(runtime.annotate_page(payload))
+                            return
+                        if path == "/list_tabs":
+                            self._write_json(runtime.list_tabs())
+                            return
+                        if path == "/list_annotations":
+                            self._write_json(runtime.list_annotations(payload))
+                            return
+                        if path == "/clear_annotations":
+                            self._write_json(runtime.clear_annotations(payload))
+                            return
+                        if path == "/perform_action":
+                            self._write_json(runtime.perform_action(payload))
+                            return
+                        if path == "/wait_for_state":
+                            self._write_json(runtime.wait_for_state(payload))
+                            return
+                        if path == "/collect_downloads":
+                            self._write_json(runtime.collect_downloads(payload))
+                            return
+                        if path == "/wait_for_download":
+                            self._write_json(runtime.wait_for_download(payload))
+                            return
+                        if path == "/list_permissions":
+                            self._write_json(runtime.list_permissions())
+                            return
+                        if path == "/list_permission_requests":
+                            self._write_json(runtime.list_permission_requests())
+                            return
+                        if path == "/decide_permission":
+                            self._write_json(runtime.decide_permission(payload))
+                            return
+                        if path == "/bookmark_page":
+                            self._write_json(runtime.bookmark_page())
+                            return
+                        if path == "/pause_for_auth":
+                            self._write_json(runtime.pause_for_auth(_optional_str(payload.get("reason"))))
+                            return
+                        if path == "/resume_after_auth":
+                            self._write_json(runtime.resume_after_auth())
+                            return
+                        if path == "/get_session_state":
+                            self._write_json(runtime.session_state())
+                            return
+                        self.send_error(HTTPStatus.NOT_FOUND)
+                    except Exception as exc:
+                        self._write_json(
+                            build_browser_http_error_payload(exc),
+                            status=HTTPStatus.SERVICE_UNAVAILABLE if isinstance(exc, BrowserRuntimeError) else HTTPStatus.INTERNAL_SERVER_ERROR,
+                        )
 
                 def log_message(self, format, *args) -> None:  # noqa: A003
                     return
@@ -2249,13 +3303,8 @@ if QApplication is not None:
                         return {}
                     return payload if isinstance(payload, dict) else {}
 
-                def _write_json(self, payload: dict[str, Any]) -> None:
-                    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-                    self.send_response(HTTPStatus.OK)
-                    self.send_header("Content-Type", "application/json; charset=utf-8")
-                    self.send_header("Content-Length", str(len(raw)))
-                    self.end_headers()
-                    self.wfile.write(raw)
+                def _write_json(self, payload: dict[str, Any], *, status: int = HTTPStatus.OK) -> None:
+                    write_browser_json_response(self, payload, status=status)
 
             return ThreadingHTTPServer(("127.0.0.1", self.port), BrowserHandler)
 
@@ -2291,6 +3340,7 @@ def launch_aoryn_browser(
     port: int,
     profile_root: Path | None = None,
     initial_url: str | None = None,
+    config_path: Path | None = None,
 ) -> int:
     if QApplication is None:
         raise BrowserRuntimeError(f"PySide6 QtWebEngine is unavailable: {_QT_IMPORT_ERROR}")
@@ -2301,7 +3351,7 @@ def launch_aoryn_browser(
     app = QApplication(sys.argv[:1])
     icon_path = Path(__file__).resolve().parent / "dashboard_assets" / "icons" / "aoryn-app.ico"
     profile = profile_root or (local_data_root() / "browser-runtime")
-    runtime = AorynBrowserRuntime(profile_root=profile, port=port, icon_path=icon_path)
+    runtime = AorynBrowserRuntime(profile_root=profile, port=port, icon_path=icon_path, config_path=config_path)
     runtime.start(initial_url=initial_url)
     app.aboutToQuit.connect(runtime.shutdown)
     return app.exec()
@@ -2311,9 +3361,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=f"{APP_NAME} Browser")
     parser.add_argument("--port", type=int, default=38991)
     parser.add_argument("--profile-root", type=Path, default=None)
+    parser.add_argument("--config-path", type=Path, default=None)
     parser.add_argument("--url", default=DEFAULT_BROWSER_HOMEPAGE)
     args = parser.parse_args(argv)
-    return launch_aoryn_browser(port=args.port, profile_root=args.profile_root, initial_url=args.url)
+    return launch_aoryn_browser(
+        port=args.port,
+        profile_root=args.profile_root,
+        initial_url=args.url,
+        config_path=args.config_path,
+    )
 
 
 def _optional_str(value: Any) -> str | None:
@@ -2323,5 +3379,8 @@ def _optional_str(value: Any) -> str | None:
     return text or None
 
 
+# Delegate internal-page rendering to a dedicated module so UI templates stay
+# maintainable and can evolve independently from the runtime control logic.
 if __name__ == "__main__":  # pragma: no cover - manual runtime entrypoint
     raise SystemExit(main())
+

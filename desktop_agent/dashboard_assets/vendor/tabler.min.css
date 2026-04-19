@@ -1,0 +1,212 @@
+/*!
+ * Tabler-inspired local vendor baseline
+ * Source reference: https://github.com/tabler/tabler
+ * License: MIT
+ * Notes:
+ * - This file is a localized, curated subset used by Aoryn Desktop dashboard.
+ * - It is intentionally scoped to layout primitives used by dashboard assets.
+ */
+
+:root {
+  --tblr-white: #ffffff;
+  --tblr-black: #000000;
+  --tblr-body-color: #182433;
+  --tblr-body-color-rgb: 24, 36, 51;
+  --tblr-muted: #667892;
+  --tblr-muted-rgb: 102, 120, 146;
+  --tblr-bg-surface: #f6f8fb;
+  --tblr-bg-surface-rgb: 246, 248, 251;
+  --tblr-primary: #206bc4;
+  --tblr-primary-rgb: 32, 107, 196;
+  --tblr-primary-fg: #ffffff;
+  --tblr-success: #2fb344;
+  --tblr-warning: #f59f00;
+  --tblr-danger: #d63939;
+  --tblr-border-color: rgba(98, 117, 148, 0.22);
+  --tblr-border-color-strong: rgba(98, 117, 148, 0.38);
+  --tblr-radius: 12px;
+  --tblr-radius-sm: 8px;
+  --tblr-radius-lg: 18px;
+  --tblr-shadow-sm: 0 8px 24px rgba(16, 24, 40, 0.08);
+  --tblr-shadow-lg: 0 24px 60px rgba(16, 24, 40, 0.12);
+  --tblr-font-sans-serif:
+    "Inter",
+    "Segoe UI",
+    "PingFang SC",
+    "Microsoft YaHei",
+    "Noto Sans SC",
+    sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  color: var(--tblr-body-color);
+  font-family: var(--tblr-font-sans-serif);
+  line-height: 1.45;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(var(--tblr-primary-rgb), 0.08), transparent 32%),
+    radial-gradient(circle at 100% 0%, rgba(47, 179, 68, 0.08), transparent 30%),
+    linear-gradient(180deg, #ffffff 0%, var(--tblr-bg-surface) 100%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.tblr-card {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--tblr-border-color);
+  border-radius: var(--tblr-radius);
+  box-shadow: var(--tblr-shadow-sm);
+}
+
+.tblr-card--lg {
+  border-radius: var(--tblr-radius-lg);
+}
+
+.tblr-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--tblr-border-color);
+  background: rgba(255, 255, 255, 0.74);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tblr-muted);
+}
+
+.tblr-badge--primary {
+  color: rgb(var(--tblr-primary-rgb));
+  border-color: rgba(var(--tblr-primary-rgb), 0.32);
+  background: rgba(var(--tblr-primary-rgb), 0.12);
+}
+
+.tblr-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--tblr-border-color);
+  border-radius: var(--tblr-radius-sm);
+  background: rgba(255, 255, 255, 0.84);
+  color: var(--tblr-body-color);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.tblr-btn:hover {
+  border-color: var(--tblr-border-color-strong);
+  box-shadow: 0 12px 28px rgba(16, 24, 40, 0.12);
+  transform: translateY(-1px);
+}
+
+.tblr-btn--primary {
+  border-color: rgba(var(--tblr-primary-rgb), 0.65);
+  background: linear-gradient(180deg, #2a78d5 0%, var(--tblr-primary) 100%);
+  color: var(--tblr-primary-fg);
+}
+
+.tblr-btn--ghost {
+  background: transparent;
+}
+
+.tblr-input,
+.tblr-select,
+.tblr-textarea {
+  width: 100%;
+  min-height: 38px;
+  padding: 9px 11px;
+  border: 1px solid var(--tblr-border-color);
+  border-radius: 9px;
+  background: #ffffff;
+  color: var(--tblr-body-color);
+}
+
+.tblr-input:focus,
+.tblr-select:focus,
+.tblr-textarea:focus {
+  outline: 2px solid rgba(var(--tblr-primary-rgb), 0.2);
+  border-color: rgba(var(--tblr-primary-rgb), 0.55);
+}
+
+.tblr-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.tblr-kpi {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--tblr-border-color);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.tblr-kpi__label {
+  margin: 0;
+  color: var(--tblr-muted);
+  font-size: 12px;
+}
+
+.tblr-kpi__value {
+  margin: 4px 0 0;
+  color: var(--tblr-body-color);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.tblr-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(91, 111, 143, 0.48) transparent;
+}
+
+.tblr-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.tblr-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(91, 111, 143, 0.38);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.tblr-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (max-width: 820px) {
+  .tblr-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}

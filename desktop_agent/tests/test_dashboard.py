@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 import sys
 import threading
@@ -562,9 +563,13 @@ def test_dashboard_serves_shell_without_pwa_install_routes():
         with urllib.request.urlopen(f"{base_url}/index.html") as response:
             payload = response.read().decode("utf-8")
             assert response.status == 200
+            assert f'/assets/vendor/tabler.min.css?v={APP_ASSET_VERSION}' in payload
+            assert f'/assets/vendor/tabler-icons-subset.css?v={APP_ASSET_VERSION}' in payload
             assert f'/assets/vendor/desktop-markdown.js?v={APP_ASSET_VERSION}' in payload
+            assert f'/assets/vendor/tabler.min.js?v={APP_ASSET_VERSION}' in payload
+            assert f'/assets/locales/zh-CN.js?v={APP_ASSET_VERSION}' in payload
+            assert f'/assets/locales/en-US.js?v={APP_ASSET_VERSION}' in payload
             assert f'/assets/app.js?v={APP_ASSET_VERSION}' in payload
-            assert "katex@0.16.38/dist/katex.min.css" in payload
             assert "manifest.webmanifest" not in payload
             assert 'id="installActionButton"' not in payload
             assert "v__APP_VERSION__" not in payload
@@ -619,6 +624,38 @@ def test_dashboard_assets_remove_browser_install_entry_points():
     render_section = app_js[app_js.find("function renderAll()") : app_js.find("function applyShellState()")]
     assert 'loadAuthSession({ silent: true })' not in dom_ready_section
     assert "renderAuthGate();" not in render_section
+
+
+def test_dashboard_chinese_copy_integrity_and_no_known_mojibake_tokens():
+    index_html = (Path("desktop_agent") / "dashboard_assets" / "index.html").read_text(encoding="utf-8")
+    app_js = (Path("desktop_agent") / "dashboard_assets" / "app.js").read_text(encoding="utf-8")
+    zh_locale = (Path("desktop_agent") / "dashboard_assets" / "locales" / "zh-CN.js").read_text(encoding="utf-8")
+
+    assert "开始一个任务" in index_html
+    assert "输入目标后，执行过程和截图会出现在对话里。" in index_html
+    assert "语言" in zh_locale
+    assert "任务" in zh_locale
+    assert "设置" in zh_locale
+    assert "关闭" in zh_locale
+
+    known_mojibake_tokens = [
+        "鏂板缓",
+        "鍘嗗彶",
+        "浠诲姟",
+        "鍏充簬涓庢棩蹇?",
+        "脳",
+    ]
+    for token in known_mojibake_tokens:
+        assert token not in index_html
+        assert token not in zh_locale
+        assert token not in app_js
+
+
+def test_dashboard_app_js_has_no_duplicate_function_declarations():
+    app_js = (Path("desktop_agent") / "dashboard_assets" / "app.js").read_text(encoding="utf-8")
+    names = re.findall(r"^function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(", app_js, flags=re.MULTILINE)
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    assert not duplicates, f"Duplicate function declarations found: {duplicates}"
 
 
 def test_dashboard_runtime_preferences_roundtrip():

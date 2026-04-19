@@ -1,0 +1,25 @@
+﻿{
+  "generated_at": "2026-04-19",
+  "vendor_policy": "Local curated subset; no CDN runtime dependency.",
+  "packages": {
+    "tabler": {
+      "upstream": "https://github.com/tabler/tabler",
+      "license": "MIT",
+      "pinned_ref": "dev@2026-04-19",
+      "local_vendor_version": "tabler-local-curated-2026-04-19",
+      "files": [
+        "desktop_agent/dashboard_assets/vendor/tabler.min.css",
+        "desktop_agent/dashboard_assets/vendor/tabler.min.js"
+      ]
+    },
+    "tabler-icons": {
+      "upstream": "https://github.com/tabler/tabler-icons",
+      "license": "MIT",
+      "pinned_ref": "master@2026-04-19",
+      "local_vendor_version": "tabler-icons-local-subset-2026-04-19",
+      "files": [
+        "desktop_agent/dashboard_assets/vendor/tabler-icons-subset.css"
+      ]
+    }
+  }
+}

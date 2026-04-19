@@ -14,187 +14,26 @@ const CHAT_LAUNCH_SESSION_KEY = "desktop-agent-workspace.session-chat-launch-id"
 const CUSTOM_SELECT_IDS = ["languageSelect", "sendShortcutSelect", "modelProvider", "structuredOutput", "availableModels", "browserDomBackend", "browserChannel"];
 const DISPLAY_DEVICE_NAME_PATTERN = /DISPLAY(\d+)/i;
 
-const COPY = {
+const FALLBACK_COPY = {
   "zh-CN": {
     document: { title: "Aoryn" },
-    sidebar: {
-      appTitle: "Aoryn",
-      appSubtitle: "任务",
-      newTask: "新建",
-      history: "历史",
-    },
-    topbar: {
-      menu: "菜单",
-      chatMode: "聊天",
-      devMode: "开发",
-      settings: "设置",
-    },
-    chat: {
-      emptyEyebrow: "Aoryn",
-      emptyTitle: "你想让它做什么？",
-      emptyBody: "输入目标，执行过程和截图会出现在对话里。",
-      inputLabel: "任务",
-      inputPlaceholder: "例如：访问 openai.com，点击 login，然后输入邮箱",
-      inputHint: "Enter 发送",
-      stop: "停止",
-      send: "发送",
-    },
-    settings: {
-      eyebrow: "设置",
-      title: "设置",
-      subtitle: "应用到下一次任务。",
-      profileTitle: "本地工作台",
-      generalEyebrow: "通用",
-      generalTitle: "通用",
-      language: "语言",
-      inputTitle: "输入",
-      sendShortcut: "发送快捷键",
-      runtimeEyebrow: "运行",
-      runtimeTitle: "执行",
-      runtimeHint: "控制下一次任务的步数和暂停。",
-      maxSteps: "步数",
-      pausePerAction: "暂停",
-      providerEyebrow: "模型",
-      providerTitle: "连接",
-      providerProfile: "提供方",
-      baseUrl: "Base URL",
-      modelName: "模型",
-      apiKey: "API Key",
-      structuredOutput: "结构化输出",
-      autoDiscover: "自动发现",
-      autoDiscoverHint: "优先使用 /v1/models 返回的第一个模型。",
-      discoveredModels: "可用模型",
-      useSelected: "使用",
-      portal: "控制台",
-      docs: "文档",
-      browserEyebrow: "浏览器",
-      browserTitle: "浏览器",
-      domBackend: "DOM",
-      domBackendHint: "当前仅内置 Playwright。",
-      domTimeout: "超时",
-      browserChannel: "通道",
-      browserPath: "路径",
-      headless: "无头模式",
-      headlessHint: "适合不需要可视窗口的检查流程。",
-    },
-    inspector: {
-      eyebrow: "详情",
-      title: "运行详情",
-      open: "详情",
-      empty: "选择一条记录后在这里查看。",
-      overview: "概览",
-      timeline: "时间线",
-      gallery: "截图",
-    },
-    developer: {
-      eyebrow: "开发",
-      title: "开发台",
-      subtitle: "队列、模型和原始运行细节。",
-      providerEyebrow: "模型",
-      providerTitle: "检查",
-      testProvider: "测试",
-      refreshModels: "刷新",
-      loadModel: "加载",
-      providerStatus: "这里显示模型连接状态。",
-      queueEyebrow: "队列",
-      queueTitle: "最近任务",
-      payloadEyebrow: "Payload",
-      payloadTitle: "实时快照",
-      runEyebrow: "运行",
-      runTitle: "时间线",
-    },
+    sidebar: { appTitle: "Aoryn", appSubtitle: "任务", newTask: "新建", history: "历史" },
+    topbar: { menu: "菜单", chatMode: "聊天", devMode: "开发", settings: "设置" },
+    chat: { emptyEyebrow: "Aoryn", emptyTitle: "开始一个任务", emptyBody: "输入目标后，执行过程和截图会出现在对话里。" },
     common: { refresh: "刷新", close: "×", closeLabel: "关闭" },
   },
   "en-US": {
     document: { title: "Aoryn" },
-    sidebar: {
-      appTitle: "Aoryn",
-      appSubtitle: "Tasks",
-      newTask: "New",
-      history: "History",
-    },
-    topbar: {
-      menu: "Menu",
-      chatMode: "Chat",
-      devMode: "Developer",
-      settings: "Settings",
-    },
-    chat: {
-      emptyEyebrow: "Aoryn",
-      emptyTitle: "What should it do?",
-      emptyBody: "Enter a goal and keep the run plus screenshots in the chat.",
-      inputLabel: "Task",
-      inputPlaceholder: "Example: visit openai.com, click login, then type your email",
-      inputHint: "Press Enter to send",
-      stop: "Stop",
-      send: "Send",
-    },
-    settings: {
-      eyebrow: "Settings",
-      title: "Settings",
-      subtitle: "Applied to the next task.",
-      profileTitle: "Local workspace",
-      generalEyebrow: "General",
-      generalTitle: "General",
-      language: "Language",
-      inputTitle: "Input",
-      sendShortcut: "Send shortcut",
-      runtimeEyebrow: "Runtime",
-      runtimeTitle: "Run",
-      runtimeHint: "Control step count and pause for the next task.",
-      maxSteps: "Steps",
-      pausePerAction: "Pause",
-      providerEyebrow: "Model",
-      providerTitle: "Connection",
-      providerProfile: "Provider",
-      baseUrl: "Base URL",
-      modelName: "Model",
-      apiKey: "API Key",
-      structuredOutput: "Structured output",
-      autoDiscover: "Auto discover",
-      autoDiscoverHint: "Prefer the first model returned by /v1/models.",
-      discoveredModels: "Available models",
-      useSelected: "Use",
-      portal: "Portal",
-      docs: "Docs",
-      browserEyebrow: "Browser",
-      browserTitle: "Browser",
-      domBackend: "DOM",
-      domBackendHint: "Only Playwright is built in right now.",
-      domTimeout: "Timeout",
-      browserChannel: "Channel",
-      browserPath: "Path",
-      headless: "Headless",
-      headlessHint: "Useful when a visible window is not required.",
-    },
-    inspector: {
-      eyebrow: "Details",
-      title: "Run details",
-      open: "Details",
-      empty: "Select a run to inspect it here.",
-      overview: "Overview",
-      timeline: "Timeline",
-      gallery: "Gallery",
-    },
-    developer: {
-      eyebrow: "Developer",
-      title: "Developer console",
-      subtitle: "Queue, models, and raw run details.",
-      providerEyebrow: "Model",
-      providerTitle: "Checks",
-      testProvider: "Test",
-      refreshModels: "Refresh",
-      loadModel: "Load",
-      providerStatus: "Provider status appears here.",
-      queueEyebrow: "Queue",
-      queueTitle: "Recent jobs",
-      payloadEyebrow: "Payload",
-      payloadTitle: "Live snapshot",
-      runEyebrow: "Run",
-      runTitle: "Timeline",
-    },
+    sidebar: { appTitle: "Aoryn", appSubtitle: "Tasks", newTask: "New", history: "History" },
+    topbar: { menu: "Menu", chatMode: "Chat", devMode: "Developer", settings: "Settings" },
+    chat: { emptyEyebrow: "Aoryn", emptyTitle: "Start a task", emptyBody: "Enter a goal and keep the run plus screenshots in chat." },
     common: { refresh: "Refresh", close: "×", closeLabel: "Close" },
   },
+};
+
+const COPY = {
+  ...FALLBACK_COPY,
+  ...(globalThis.DASHBOARD_LOCALES || {}),
 };
 
 const state = {
@@ -782,53 +621,6 @@ function applyShellState() {
 }
 
 
-function renderTopbar() {
-  const context = getConversationContext();
-  const connection = elements.connectionBadge;
-  connection.className = "connection-chip connection-chip--status";
-  let connectionLabel = tr("离线", "Offline");
-
-  if (state.connected) {
-    connection.classList.add("connection-chip--ok");
-    connectionLabel = tr("在线", "Online");
-  } else if (state.usingCachedSnapshot) {
-    connection.classList.add("connection-chip--warn");
-    connectionLabel = tr("缓存", "Cached");
-  } else {
-    connection.classList.add("connection-chip--bad");
-    connectionLabel = tr("离线", "Offline");
-  }
-  connection.setAttribute("title", connectionLabel);
-  connection.setAttribute("aria-label", connectionLabel);
-
-  if (state.uiMode === "developer") {
-    elements.topbarTitle.textContent = tr("开发台", "Developer");
-    elements.topbarSubtitle.textContent = "";
-    return;
-  }
-
-  if (context.type === "active") {
-    elements.topbarTitle.textContent = cleanRunTitle(context.active.task);
-    elements.topbarSubtitle.textContent = "";
-    return;
-  }
-
-  if (context.type === "run") {
-    elements.topbarTitle.textContent = cleanRunTitle(context.details.task);
-    elements.topbarSubtitle.textContent = "";
-    return;
-  }
-
-  if (context.type === "pending") {
-    elements.topbarTitle.textContent = cleanRunTitle(context.task);
-    elements.topbarSubtitle.textContent = "";
-    return;
-  }
-
-  elements.topbarTitle.textContent = "Aoryn";
-  elements.topbarSubtitle.textContent = "";
-}
-
 function classifyHistoryTask(task) {
   const source = normalizeText(task).toLowerCase();
 
@@ -896,164 +688,6 @@ function renderHistoryBadge(task) {
   };
 
   return `<span class="history-item__badge history-item__badge--${category}" aria-hidden="true">${iconMap[category] || iconMap.general}</span>`;
-}
-
-function renderChat() {
-  const context = getConversationContext();
-  const messages = [];
-
-  if (context.type === "welcome") {
-    messages.push(renderWelcomeMessage());
-  } else if (context.type === "pending") {
-    messages.push(renderUserMessage(context.task));
-    messages.push(renderPendingMessage(context.task));
-  } else if (context.type === "loading") {
-    messages.push(renderLoadingMessage());
-  } else if (context.type === "active") {
-    messages.push(renderUserMessage(context.active.task || ""));
-    messages.push(renderRunningMessage(context.active));
-  } else if (context.type === "run") {
-    messages.push(renderUserMessage(context.details.task || ""));
-    messages.push(...renderCompletedConversation(context.details));
-  }
-
-  elements.chatStream.innerHTML = messages.join("");
-  renderComposerSuggestions(context);
-  renderComposerState(context);
-
-  if (context.type === "active" || context.type === "pending") {
-    window.requestAnimationFrame(() => {
-      elements.chatScroll.scrollTop = elements.chatScroll.scrollHeight;
-    });
-  }
-}
-
-function renderWelcomeMessage() {
-  return `
-    <div class="chat-welcome">
-      <p>${escapeHtml(t("chat.emptyEyebrow"))}</p>
-      <h2>${escapeHtml(t("chat.emptyTitle"))}</h2>
-      <p>${escapeHtml(t("chat.emptyBody"))}</p>
-    </div>
-  `;
-}
-
-function renderPendingMessage(task) {
-  return `
-    <div class="message message--assistant">
-      <article class="assistant-card">
-        <div class="assistant-card__head">
-          <div>
-            <h3>${escapeHtml(tr("已发送", "Queued"))}</h3>
-            <p>${escapeHtml(tr("等待第一条进度。", "Waiting for the first update."))}</p>
-          </div>
-          <span class="status-pill warn">${escapeHtml(tr("等待", "Waiting"))}</span>
-        </div>
-        <div class="message-actions">
-          <span class="metric-pill">${escapeHtml(truncate(task, 42))}</span>
-        </div>
-      </article>
-    </div>
-  `;
-}
-
-function renderLoadingMessage() {
-  return `
-    <div class="message message--assistant">
-      <article class="assistant-card">
-        <div class="assistant-card__head">
-          <div>
-            <h3>${escapeHtml(tr("加载中", "Loading"))}</h3>
-          </div>
-          <span class="status-pill">${escapeHtml(tr("加载", "Loading"))}</span>
-        </div>
-      </article>
-    </div>
-  `;
-}
-
-function renderRunningMessage(active) {
-  const progress = active.result || {};
-  const executionState = progress.execution_state || {};
-  const pendingDecision = progress.pending_decision || executionState.pending_decision || null;
-  const currentSubgoal = executionState.current_subgoal || null;
-  const previewUrl =
-    progress.run_id && progress.latest_screenshot
-      ? buildArtifactUrl(progress.run_id, progress.latest_screenshot)
-      : null;
-  const latestSummary = normalizeText(progress.latest_summary) || tr("等待下一步。", "Waiting for the next step.");
-  const latestActions = (progress.latest_actions || []).slice(0, 4);
-  const jobState = active.cancel_requested
-    ? { label: tr("停止中", "Stopping"), tone: "warn" }
-    : { label: tr("执行中", "Running"), tone: "ok" };
-
-  return `
-    <div class="message message--assistant">
-      <article class="assistant-card">
-        <div class="assistant-card__head">
-          <div>
-            <h3>${escapeHtml(latestSummary)}</h3>
-            <p>${escapeHtml(tr("实时执行中。", "The run is still active."))}</p>
-          </div>
-          <span class="status-pill ${jobState.tone}">${escapeHtml(jobState.label)}</span>
-        </div>
-
-        <div class="metric-row">
-          ${renderMetricCard(tr("用时", "Time"), formatDuration(active.started_at || progress.started_at))}
-          ${renderMetricCard(tr("步骤", "Steps"), String(progress.steps ?? 0))}
-        </div>
-
-        ${
-          previewUrl
-            ? `
-              <div class="message-group">
-                <img class="message-image" src="${escapeHtml(previewUrl)}" alt="${escapeHtml(tr("最新截图", "Latest screenshot"))}" />
-                <div class="message-actions">
-                  <button class="secondary-button" type="button" data-lightbox-src="${escapeHtml(previewUrl)}" data-lightbox-caption="${escapeHtml(active.task || "")}">
-                    ${escapeHtml(tr("放大", "Zoom"))}
-                  </button>
-                  ${
-                    progress.run_id
-                      ? `<button class="secondary-button" type="button" data-open-inspector="${escapeHtml(progress.run_id)}">${escapeHtml(
-                          tr("详情", "Details")
-                        )}</button>`
-                      : ""
-                  }
-                </div>
-              </div>
-            `
-            : ""
-        }
-
-        ${latestActions.length ? `<div class="action-row">${latestActions.map(renderActionPill).join("")}</div>` : ""}
-
-        <div class="message-actions">
-          <button class="primary-button" type="button" data-stop-active-task="true">
-            ${escapeHtml(active.cancel_requested ? tr("停止中", "Stopping") : tr("停止", "Stop"))}
-          </button>
-        </div>
-      </article>
-    </div>
-  `;
-}
-
-function renderCompletedConversation(details) {
-  const messages = [renderResultSummaryMessage(details)];
-  const screenshots = collectRunScreenshots(details);
-  const steps = (details.timeline || []).slice(-4).reverse();
-  const followUps = buildFollowUpSuggestions(details);
-
-  if (screenshots.length) {
-    messages.push(renderScreenshotMessage(details, screenshots.slice(0, 4)));
-  }
-  if (steps.length) {
-    messages.push(renderStepMessage(details, steps));
-  }
-  if (followUps.length) {
-    messages.push(renderFollowUpMessage(followUps));
-  }
-
-  return messages;
 }
 
 function renderResultSummaryMessage(details) {
@@ -1190,121 +824,6 @@ function renderFollowUpMessage(items) {
     </div>
   `;
 }
-
-function renderUserMessage(task) {
-  return `
-    <div class="message message--user">
-      <div class="message-bubble">${escapeHtml(cleanRunTitle(task))}</div>
-    </div>
-  `;
-}
-
-function renderComposerSuggestions(context) {
-  if (state.activeJob || state.uiMode === "developer" || context.type !== "welcome") {
-    elements.composerSuggestions.innerHTML = "";
-    return;
-  }
-
-  const items = buildStarterSuggestions();
-  if (!items.length) {
-    elements.composerSuggestions.innerHTML = "";
-    return;
-  }
-
-  elements.composerSuggestions.innerHTML = items
-    .map(
-      (item) => `
-        <button class="suggestion-chip" type="button" data-prefill-task="${escapeHtml(item.task)}" title="${escapeHtml(item.description || "")}">
-          ${escapeHtml(item.label)}
-        </button>
-      `
-    )
-    .join("");
-}
-
-function renderDeveloper() {
-  updateDomStatus();
-  elements.openInspectorButton.disabled = !Boolean(state.selectedRunDetails || state.activeJob?.result?.run_id);
-  elements.providerStatusNote.textContent = state.providerStatusMessage || t("developer.providerStatus");
-  renderDisplayDetectionDeveloperPanel();
-
-  if (!state.jobs.length) {
-    elements.jobList.innerHTML = `<div class="empty-state">${escapeHtml(tr("暂无任务", "No recent jobs"))}</div>`;
-  } else {
-    elements.jobList.innerHTML = state.jobs.map(renderJobCard).join("");
-  }
-
-  elements.activePayloadView.textContent = JSON.stringify(state.activeJob?.result || state.activeJob || {}, null, 2);
-
-  if (state.selectedRunDetails?.timeline?.length) {
-    elements.developerTimeline.innerHTML = state.selectedRunDetails.timeline
-      .slice()
-      .reverse()
-      .slice(0, 6)
-      .map(renderDeveloperTimelineItem)
-      .join("");
-  } else if (state.activeJob) {
-    elements.developerTimeline.innerHTML = renderLiveDeveloperTimeline();
-  } else {
-    elements.developerTimeline.innerHTML = `<div class="empty-state">${escapeHtml(tr("选择一条记录", "Select a run"))}</div>`;
-  }
-}
-
-function renderJobCard(job) {
-  return `
-    <article class="job-card">
-      <div class="panel-head">
-        <div>
-          <p>${escapeHtml(job.id)}</p>
-          <h3>${escapeHtml(cleanRunTitle(job.task))}</h3>
-        </div>
-        <span class="status-pill ${statusTone(job.status)}">${escapeHtml(translateJobStatus(job.status))}</span>
-      </div>
-    </article>
-  `;
-}
-
-function renderDeveloperTimelineItem(step) {
-  const screenshotUrl =
-    state.selectedRunDetails?.id && step.screenshot
-      ? buildArtifactUrl(state.selectedRunDetails.id, step.screenshot)
-      : null;
-
-  return `
-    <article class="timeline-item">
-      <div class="timeline-item__head">
-        <div>
-          <p>${escapeHtml(tr("步骤", "Step"))} ${escapeHtml(String(step.step))}</p>
-          <h3>${escapeHtml(step.plan?.status_summary || step.task || tr("无摘要", "No summary"))}</h3>
-        </div>
-        <span class="status-pill ${step.error ? "bad" : "ok"}">${escapeHtml(step.error ? tr("错误", "Error") : tr("完成", "OK"))}</span>
-      </div>
-      ${screenshotUrl ? `<img class="timeline-shot" src="${escapeHtml(screenshotUrl)}" alt="${escapeHtml(tr("步骤截图", "Step screenshot"))}" />` : ""}
-    </article>
-  `;
-}
-
-function renderLiveDeveloperTimeline() {
-  const progress = state.activeJob?.result || {};
-  const previewUrl =
-    progress.run_id && progress.latest_screenshot
-      ? buildArtifactUrl(progress.run_id, progress.latest_screenshot)
-      : null;
-
-  return `
-    <article class="timeline-item">
-      <div class="timeline-item__head">
-        <div>
-          <p>${escapeHtml(tr("实时", "Live"))}</p>
-          <h3>${escapeHtml(normalizeText(progress.latest_summary) || tr("等待进度", "Waiting for progress"))}</h3>
-        </div>
-        <span class="status-pill ok">${escapeHtml(tr("执行中", "Running"))}</span>
-      </div>
-      ${previewUrl ? `<img class="timeline-shot" src="${escapeHtml(previewUrl)}" alt="${escapeHtml(tr("最新截图", "Latest screenshot"))}" />` : ""}
-    </article>
-  `;
-}
-
 
 function renderDisplayDetection() {
   renderDisplayDetectionSettings();
@@ -1537,56 +1056,6 @@ function handleDisplayOverrideDraftChange() {
   scheduleDisplayDetection();
 }
 
-function buildDisplayMonitorOptions() {
-  const monitors = Array.isArray(state.displayDetection?.detected?.monitors) ? state.displayDetection.detected.monitors : [];
-  return [
-    { value: "", label: tr("自动", "Auto") },
-    ...monitors.map((monitor) => ({
-      value: monitor.device_name || "",
-      label: `${monitor.device_name || tr("未知显示器", "Unknown monitor")} (${formatWorkArea(monitor.work_area)})`,
-    })),
-  ];
-}
-
-function buildDisplaySummaryCards(snapshot) {
-  const effective = snapshot?.effective || {};
-  const currentMonitor = effective.current_monitor;
-  const taskbar = effective.taskbar;
-  const checkedAt = snapshot?.checked_at ? formatTime(snapshot.checked_at) : tr("刚刚", "Just now");
-  const cards = [
-    { label: tr("当前显示器", "Current monitor"), value: currentMonitor?.device_name || tr("未检测到", "Unavailable") },
-    { label: tr("工作区", "Work area"), value: formatWorkArea(currentMonitor?.work_area) },
-    { label: tr("虚拟桌面", "Virtual bounds"), value: formatWorkArea(effective.virtual_bounds) },
-    { label: tr("DPI / 缩放", "DPI / Scale"), value: formatScale(effective.dpi_scale) },
-    { label: tr("任务栏", "Taskbar"), value: formatTaskbar(taskbar) },
-    { label: tr("检测时间", "Checked"), value: checkedAt },
-  ];
-
-  return cards
-    .map(
-      (item) => `
-        <article class="display-detection-card">
-          <strong>${escapeHtml(item.label)}</strong>
-          <span>${escapeHtml(item.value)}</span>
-        </article>
-      `
-    )
-    .join("");
-}
-
-function renderDisplayCompareCard(label, environment) {
-  const monitor = environment?.current_monitor;
-  return `
-    <article class="display-compare-card">
-      <strong>${escapeHtml(label)}</strong>
-      <span>${escapeHtml((monitor?.device_name || tr("未检测到", "Unavailable")) + " · " + formatWorkArea(monitor?.work_area))}</span>
-      <span>${escapeHtml(tr("虚拟桌面", "Virtual bounds") + ": " + formatWorkArea(environment?.virtual_bounds))}</span>
-      <span>${escapeHtml(tr("DPI / 缩放", "DPI / Scale") + ": " + formatScale(environment?.dpi_scale))}</span>
-      <span>${escapeHtml(tr("任务栏", "Taskbar") + ": " + formatTaskbar(environment?.taskbar))}</span>
-    </article>
-  `;
-}
-
 function buildDisplayOverrideStatusNote(snapshot) {
   if (!snapshot?.override) {
     return tr("显示识别结果会在这里更新。", "Display detection details will appear here.");
@@ -1643,26 +1112,6 @@ function getDisplayDetectionBadgeLabel(status) {
   if (status === "invalid_override") return tr("覆盖失效", "Invalid");
   if (status === "readonly") return tr("只读", "Read-only");
   return tr("自动识别", "Auto");
-}
-
-function handleDisplayOverrideToggle() {
-  updateDisplayOverrideVisibility();
-  scheduleRuntimePreferencesSync();
-  renderAll();
-}
-
-function resetDisplayOverrides() {
-  if (elements.displayOverrideEnabled) elements.displayOverrideEnabled.checked = false;
-  if (elements.displayMonitorSelect) elements.displayMonitorSelect.value = "";
-  if (elements.displayDpiScaleInput) elements.displayDpiScaleInput.value = "";
-  if (elements.displayWorkAreaLeftInput) elements.displayWorkAreaLeftInput.value = "";
-  if (elements.displayWorkAreaTopInput) elements.displayWorkAreaTopInput.value = "";
-  if (elements.displayWorkAreaWidthInput) elements.displayWorkAreaWidthInput.value = "";
-  if (elements.displayWorkAreaHeightInput) elements.displayWorkAreaHeightInput.value = "";
-  updateDisplayOverrideVisibility();
-  scheduleRuntimePreferencesSync();
-  scheduleDisplayDetection();
-  renderAll();
 }
 
 function formatMonitorLabel(monitor, { includePrimary = false } = {}) {
@@ -1793,168 +1242,10 @@ function renderProviderCatalogNote() {
   }
 }
 
-function renderInspector() {
-  const details = state.selectedRunDetails;
-  elements.inspectorSubtitle.textContent = details ? cleanRunTitle(details.task) : t("inspector.empty");
-
-  elements.detailTabs?.querySelectorAll("[data-detail-view]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.detailView === state.detailView);
-  });
-
-  if (!details) {
-    elements.runDetail.innerHTML = `<div class="empty-state">${escapeHtml(t("inspector.empty"))}</div>`;
-    return;
-  }
-
-  if (state.detailView === "timeline") {
-    elements.runDetail.innerHTML = renderRunTimeline(details);
-    return;
-  }
-
-  if (state.detailView === "gallery") {
-    elements.runDetail.innerHTML = renderRunGallery(details);
-    return;
-  }
-
-  elements.runDetail.innerHTML = renderRunOverview(details);
-}
-
-function renderRunOverview(details) {
-  const stateInfo = buildRecordState(details);
-  const screenshots = collectRunScreenshots(details);
-  const latestActions = collectLatestActions(details).slice(0, 4);
-
-  return `
-    <article class="detail-card">
-      <span class="detail-card__label">${escapeHtml(tr("状态", "Status"))}</span>
-      <div class="detail-card__value">${escapeHtml(stateInfo.label)}</div>
-      <div class="message-actions">
-        <span class="status-pill ${stateInfo.tone}">${escapeHtml(stateInfo.label)}</span>
-        ${renderExecutionModeChip(details.dry_run)}
-        ${renderHumanVerificationChip(details)}
-      </div>
-    </article>
-
-    <div class="summary-grid">
-      ${renderDetailMetricCard(tr("开始", "Start"), formatShortTime(details.started_at))}
-      ${renderDetailMetricCard(tr("结束", "End"), formatShortTime(details.finished_at))}
-      ${renderDetailMetricCard(tr("截图", "Shots"), String(screenshots.length))}
-    </div>
-
-    ${latestActions.length ? `<article class="detail-card"><div class="action-row">${latestActions.map(renderActionPill).join("")}</div></article>` : ""}
-
-    ${
-      screenshots[0]
-        ? `
-          <article class="detail-card">
-            <img class="message-image" src="${escapeHtml(screenshots[0].src)}" alt="${escapeHtml(screenshots[0].alt)}" />
-            <div class="message-actions">
-              <button class="secondary-button" type="button" data-lightbox-src="${escapeHtml(screenshots[0].src)}" data-lightbox-caption="${escapeHtml(screenshots[0].caption)}">
-                ${escapeHtml(tr("放大", "Zoom"))}
-              </button>
-            </div>
-          </article>
-        `
-        : ""
-    }
-  `;
-}
-
-function renderRunTimeline(details) {
-  if (!(details.timeline || []).length) {
-    return `<div class="empty-state">${escapeHtml(tr("暂无时间线", "No timeline yet"))}</div>`;
-  }
-
-  return (details.timeline || [])
-    .map((step) => {
-      const screenshotUrl = details.id && step.screenshot ? buildArtifactUrl(details.id, step.screenshot) : null;
-      return `
-        <article class="timeline-item">
-          <div class="timeline-item__head">
-            <div>
-              <p>${escapeHtml(tr("步骤", "Step"))} ${escapeHtml(String(step.step))}</p>
-              <h3>${escapeHtml(step.plan?.status_summary || step.task || tr("无摘要", "No summary"))}</h3>
-            </div>
-            <span class="status-pill ${step.error ? "bad" : "ok"}">${escapeHtml(step.error ? tr("错误", "Error") : tr("完成", "OK"))}</span>
-          </div>
-          ${(step.executed_actions || []).length ? `<div class="action-row">${(step.executed_actions || []).map(renderActionPill).join("")}</div>` : ""}
-          ${
-            screenshotUrl
-              ? `
-                <img class="timeline-shot" src="${escapeHtml(screenshotUrl)}" alt="${escapeHtml(tr("步骤截图", "Step screenshot"))}" />
-                <div class="message-actions">
-                  <button class="secondary-button" type="button" data-lightbox-src="${escapeHtml(screenshotUrl)}" data-lightbox-caption="${escapeHtml(step.plan?.status_summary || step.task || "")}">
-                    ${escapeHtml(tr("放大", "Zoom"))}
-                  </button>
-                </div>
-              `
-              : ""
-          }
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function renderRunGallery(details) {
-  const screenshots = collectRunScreenshots(details);
-  if (!screenshots.length) {
-    return `<div class="empty-state">${escapeHtml(tr("暂无截图", "No screenshots"))}</div>`;
-  }
-
-  return `
-    <div class="detail-gallery">
-      ${screenshots
-        .map(
-          (shot) => `
-            <figure>
-              <img src="${escapeHtml(shot.src)}" alt="${escapeHtml(shot.alt)}" />
-              <button class="secondary-button" type="button" data-lightbox-src="${escapeHtml(shot.src)}" data-lightbox-caption="${escapeHtml(shot.caption)}">
-                ${escapeHtml(tr("放大", "Zoom"))}
-              </button>
-            </figure>
-          `
-        )
-        .join("")}
-    </div>
-  `;
-}
-
 function handleModeClick(event) {
   const button = event.target.closest("[data-ui-mode]");
   if (!button) return;
   setUiMode(button.dataset.uiMode);
-}
-
-function handleInteractiveClick(event) {
-  const lightboxTrigger = event.target.closest("[data-lightbox-src]");
-  if (lightboxTrigger) {
-    openLightbox(lightboxTrigger.dataset.lightboxSrc, lightboxTrigger.dataset.lightboxCaption);
-    return;
-  }
-
-  const prefillTrigger = event.target.closest("[data-prefill-task]");
-  if (prefillTrigger) {
-    prefillTask(prefillTrigger.dataset.prefillTask || "");
-    return;
-  }
-
-  const inspectorTrigger = event.target.closest("[data-open-inspector]");
-  if (inspectorTrigger) {
-    openInspectorForRun(inspectorTrigger.dataset.openInspector);
-    return;
-  }
-
-  const decisionTrigger = event.target.closest("[data-job-decision]");
-  if (decisionTrigger) {
-    handleJobDecision(decisionTrigger.dataset.jobId, decisionTrigger.dataset.jobDecision);
-    return;
-  }
-
-  const stopTrigger = event.target.closest("[data-stop-active-task]");
-  if (stopTrigger) {
-    handleStopTask();
-  }
 }
 
 function handleDetailTabClick(event) {
@@ -2048,49 +1339,6 @@ async function handleJobDecision(jobId, decision) {
     return;
   }
   await refreshOverview({ forceDetailRefresh: true });
-}
-
-function handleGlobalKeydown(event) {
-  if (state.openCustomSelectId && event.key === "Escape") {
-    event.preventDefault();
-    closeCustomSelect({ restoreFocus: true });
-    return;
-  }
-
-  if (event.key === "Escape") {
-    if (!elements.imageLightbox.hidden) {
-      closeLightbox();
-      return;
-    }
-    if (state.drawerOpen) {
-      closeDrawer();
-      return;
-    }
-    if (state.aboutOpen) {
-      closeAboutPanel();
-      return;
-    }
-    if (state.settingsOpen) {
-      closeSettings();
-      return;
-    }
-    if (state.mobileSidebarOpen) {
-      closeSidebar();
-    }
-    return;
-  }
-
-  if (state.settingsOpen && event.key === "Tab") {
-    trapFocusWithin(event, elements.settingsModal);
-  }
-  if (state.aboutOpen && event.key === "Tab") {
-    trapFocusWithin(event, elements.aboutModal);
-  }
-
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b" && !isTypingTarget(event.target)) {
-    event.preventDefault();
-    toggleSidebar();
-  }
 }
 
 function handleGlobalPointerDown(event) {
@@ -2278,52 +1526,6 @@ function trapFocusWithin(event, container) {
 function setDetailView(view) {
   state.detailView = ["overview", "timeline", "gallery"].includes(view) ? view : "overview";
   renderAll();
-  return;
-  if (elements.openAboutButton) {
-    elements.openAboutButton.textContent = tr("鍏充簬涓庢棩蹇?", "About & Logs");
-  }
-  if (elements.aboutAndLogsHint) {
-    elements.aboutAndLogsHint.textContent = tr(
-      "鏌ョ湅鐗堟湰淇℃伅銆佹墦寮€閰嶇疆涓庢棩蹇楃洰褰曪紝浠ュ強蹇€熷洖鐪嬫渶杩戣繍琛岃褰曘€?",
-      "Check the app version, open config and log folders, and jump back to recent runs."
-    );
-  }
-  const aboutAndLogsTitle = document.getElementById("aboutAndLogsTitle");
-  if (aboutAndLogsTitle) {
-    aboutAndLogsTitle.textContent = tr("鍏充簬涓庢棩蹇?", "About & Logs");
-  }
-  if (elements.aboutTitle) {
-    elements.aboutTitle.textContent = tr("鍏充簬 Aoryn", "About Aoryn");
-  }
-  if (elements.aboutSubtitle) {
-    elements.aboutSubtitle.textContent = tr("鐗堟湰銆佽瘖鏂笌杩愯璁板綍", "Version, diagnostics, and logs");
-  }
-  elements.aboutBackdrop?.setAttribute("aria-label", tr("鍏抽棴鍏充簬闈㈡澘", "Close about panel"));
-  elements.closeAboutButton?.setAttribute("aria-label", closeLabel);
-}
-
-
-function prefillTask(task) {
-  const nextTask = String(task || "").trim();
-  if (nextTask) {
-    elements.taskInput.value = nextTask;
-  }
-  state.showWelcome = false;
-  if (state.uiMode !== "user") {
-    state.uiMode = "user";
-    safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
-  }
-  closeSettings();
-  closeDrawer();
-  closeSidebar();
-  renderAll();
-  window.requestAnimationFrame(() => {
-    elements.taskInput.focus();
-    const end = elements.taskInput.value.length;
-    if (typeof elements.taskInput.setSelectionRange === "function") {
-      elements.taskInput.setSelectionRange(end, end);
-    }
-  });
 }
 
 function fillLanguageOptions() {
@@ -3624,11 +2826,6 @@ function detectInitialLocale() {
   return browserLocale.toLowerCase().startsWith("en") ? "en-US" : "zh-CN";
 }
 
-function detectInitialUiMode() {
-  const saved = window.localStorage.getItem(UI_MODE_STORAGE_KEY);
-  return saved === "developer" ? "developer" : "user";
-}
-
 function detectSidebarCollapsed() {
   const saved = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
   return saved === "true";
@@ -3975,167 +3172,6 @@ state.chatStreamDraft = state.chatStreamDraft || null;
 state.chatStreamRenderTimer = state.chatStreamRenderTimer || 0;
 state.chatAbortController = state.chatAbortController || null;
 state.chatStopRequested = Boolean(state.chatStopRequested);
-
-function clearChatStreamRenderTimer() {
-  if (!state.chatStreamRenderTimer) return;
-  window.clearTimeout(state.chatStreamRenderTimer);
-  state.chatStreamRenderTimer = 0;
-}
-
-function scheduleChatStreamRender() {
-  if (state.chatStreamRenderTimer) return;
-  state.chatStreamRenderTimer = window.setTimeout(() => {
-    state.chatStreamRenderTimer = 0;
-    renderAll();
-  }, 32);
-}
-
-async function streamChatReply(body, handlers = {}, options = {}) {
-  const response = await fetch("/api/chat/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: options.signal,
-  });
-
-  const contentType = response.headers.get("content-type") || "";
-  if (!response.ok && !contentType.includes("text/event-stream")) {
-    let payload = null;
-    try {
-      payload = await response.json();
-    } catch {
-      payload = null;
-    }
-    throw new Error(
-      payload?.error || tr("普通对话请求被模型拒绝或执行失败，请检查模型配置和 provider 返回。", "The chat request was rejected or failed. Check the model and provider response.")
-    );
-  }
-
-  if (!response.body) {
-    const fallback = await postJson("/api/chat", body);
-    if (!fallback.ok) {
-      throw new Error(
-        fallback.payload?.error || tr("普通对话请求被模型拒绝或执行失败，请检查模型配置和 provider 返回。", "The chat request was rejected or failed. Check the model and provider response.")
-      );
-    }
-    handlers.onStart?.({ session_meta: body.session_meta || null });
-    if (fallback.payload?.assistant_message) {
-      handlers.onDelta?.({ content_delta: fallback.payload.assistant_message });
-    }
-    handlers.onDone?.({
-      assistant_message: fallback.payload?.assistant_message || "",
-      agent_handoff: fallback.payload?.agent_handoff || null,
-      session_meta: fallback.payload?.session_meta || body.session_meta || null,
-    });
-    return;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-  let streamClosed = false;
-
-  const processEventBlock = (block) => {
-    const lines = block
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (!lines.length) return;
-
-    let eventName = "message";
-    const dataLines = [];
-    for (const line of lines) {
-      if (line.startsWith("event:")) {
-        eventName = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        dataLines.push(line.slice(5).trim());
-      }
-    }
-
-    let payload = {};
-    const raw = dataLines.join("\n");
-    if (raw) {
-      try {
-        payload = JSON.parse(raw);
-      } catch {
-        payload = {};
-      }
-    }
-
-    if (eventName === "start") {
-      handlers.onStart?.(payload);
-      return;
-    }
-    if (eventName === "delta") {
-      handlers.onDelta?.(payload);
-      return;
-    }
-    if (eventName === "done") {
-      handlers.onDone?.(payload);
-      streamClosed = true;
-      return;
-    }
-    if (eventName === "error") {
-      handlers.onError?.(payload);
-      streamClosed = true;
-    }
-  };
-
-  const flushBuffer = (finalChunk = false) => {
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      processEventBlock(block);
-      boundary = buffer.indexOf("\n\n");
-    }
-    if (finalChunk && buffer.trim()) {
-      processEventBlock(buffer);
-      buffer = "";
-    }
-  };
-
-  while (!streamClosed) {
-    const { value, done } = await reader.read();
-    if (done) {
-      buffer += decoder.decode();
-      flushBuffer(true);
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    flushBuffer(false);
-  }
-
-  if (!streamClosed) {
-    handlers.onError?.({
-      error: tr("回复流意外中断，请重试。", "The reply stream ended unexpectedly. Please try again."),
-    });
-  }
-}
-
-
-function renderNormalAssistantPendingMessage(draft = state.chatStreamDraft) {
-  const content = String(draft?.content || "");
-  const waitingMarkup = `
-    <div class="assistant-copy assistant-copy--stream assistant-copy--waiting">
-      <span class="stream-wait-indicator" aria-hidden="true"></span>
-    </div>
-  `;
-  const streamingMarkup = `
-    <div class="assistant-copy assistant-copy--stream">
-      ${renderChatRichText(`${content} ▍`)}
-    </div>
-  `;
-
-  return `
-    <div class="message message--assistant">
-      <article class="assistant-card assistant-card--chat assistant-card--pending">
-        ${content ? streamingMarkup : waitingMarkup}
-      </article>
-    </div>
-  `;
-}
-
 
 function normalizeChatMessageContent(value) {
   return String(value || "").replace(/\r\n/g, "\n").trim();
@@ -4819,67 +3855,6 @@ function renderNormalChat() {
   });
 }
 
-function renderNormalAssistantMessage(message) {
-  const handoff = message.handoff?.suggested_task
-    ? `
-      <div class="message-actions">
-        <button class="secondary-button" type="button" data-start-agent-task="${escapeHtml(message.handoff.suggested_task)}">
-          ${escapeHtml(tr("转到 Agent 执行", "Send to Agent"))}
-        </button>
-        ${
-          message.handoff.reason
-            ? `<span class="message-meta">${escapeHtml(
-                state.locale === "zh-CN" ? "适合真实执行的桌面或浏览器动作。" : message.handoff.reason
-              )}</span>`
-            : ""
-        }
-      </div>
-    `
-    : "";
-
-  return `
-    <div class="message message--assistant">
-      <article class="assistant-card assistant-card--chat">
-        <div class="assistant-copy">${renderChatRichText(message.content)}</div>
-        ${handoff}
-      </article>
-    </div>
-  `;
-}
-
-function renderNormalAssistantPendingMessage() {
-  return `
-    <div class="message message--assistant">
-      <article class="assistant-card assistant-card--chat">
-        <div class="assistant-copy">
-          <p>${escapeHtml(tr("正在思考当前问题。", "Thinking about your request."))}</p>
-        </div>
-      </article>
-    </div>
-  `;
-}
-
-function renderChatRichText(text) {
-  const blocks = String(text || "")
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter(Boolean);
-
-  if (!blocks.length) {
-    return `<p>${escapeHtml(text || "")}</p>`;
-  }
-
-  return blocks
-    .map((block) => {
-      const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
-      if (lines.every((line) => line.startsWith("- "))) {
-        return `<ul>${lines.map((line) => `<li>${escapeHtml(line.slice(2))}</li>`).join("")}</ul>`;
-      }
-      return `<p>${lines.map((line) => escapeHtml(line)).join("<br />")}</p>`;
-    })
-    .join("");
-}
-
 function renderComposerSuggestions(context) {
   if (state.uiMode === "chat") {
     const session = getSelectedChatSession();
@@ -5464,29 +4439,6 @@ async function loadHelpContent() {
   renderAll();
 }
 
-function renderHelpCenter() {
-  if (elements.helpCenterTitle) {
-    elements.helpCenterTitle.textContent = state.helpTitle || tr("开发者文档", "Developer Docs");
-  }
-  if (!elements.helpContent) return;
-
-  if (state.helpLoading) {
-    elements.helpContent.innerHTML = `<div class="empty-state">${escapeHtml(tr("正在加载开发者文档…", "Loading developer docs..."))}</div>`;
-    return;
-  }
-
-  if (state.helpError) {
-    elements.helpContent.innerHTML = `<div class="empty-state">${escapeHtml(state.helpError)}</div>`;
-    return;
-  }
-
-  if (!state.helpContent) {
-    elements.helpContent.innerHTML = `<div class="empty-state">${escapeHtml(tr("暂无文档内容。", "No documentation available."))}</div>`;
-    return;
-  }
-
-  elements.helpContent.innerHTML = renderSimpleMarkdown(state.helpContent);
-}
 state.chatStreamDraft = state.chatStreamDraft || null;
 state.chatStreamRenderTimer = state.chatStreamRenderTimer || 0;
 state.chatStreamRevealTimer = state.chatStreamRevealTimer || 0;
@@ -5649,16 +4601,6 @@ function buildChatRequestMessages(messages) {
   return normalized.slice(-12);
 }
 
-function getLatestCompletedAssistantMessage(sessionMessages = []) {
-  for (let index = sessionMessages.length - 1; index >= 0; index -= 1) {
-    const message = sessionMessages[index];
-    if (message?.role === "assistant") {
-      return message;
-    }
-  }
-  return null;
-}
-
 function findRetryRequestMessages(session, assistantMessageId) {
   if (!session?.messages?.length || !assistantMessageId) return null;
 
@@ -5755,21 +4697,6 @@ function finalizeChatStreamDraft() {
   renderAll();
 }
 
-function finalizeStoppedChatDraft() {
-  const draft = state.chatStreamDraft;
-  if (!draft) return;
-
-  const stoppedContent = normalizeChatMessageContent(
-    draft.content || draft.targetContent || tr("已停止，本次回复未完成。", "Stopped before the reply was completed.")
-  );
-  draft.content = stoppedContent;
-  draft.targetContent = stoppedContent;
-  draft.waiting = false;
-  draft.completed = true;
-  draft.status = "stopped";
-  finalizeChatStreamDraft();
-}
-
 function advanceChatStreamReveal() {
   state.chatStreamRevealTimer = 0;
   const draft = state.chatStreamDraft;
@@ -5860,58 +4787,6 @@ function renderAssistantMessageShell(content, options = {}) {
   `;
 }
 
-
-function renderNormalAssistantMessage(message, options = {}) {
-  const showActions = Boolean(options.showActions);
-  const feedback = state.chatMessageActionFeedback;
-  const copyLabel =
-    feedback?.messageId === message.id && feedback?.action === "copy"
-      ? feedback.status === "success"
-        ? tr("已复制", "Copied")
-        : tr("复制失败", "Copy failed")
-      : tr("复制", "Copy");
-  const retryLabel = tr("重试", "Retry");
-  const handoffButton = message.handoff?.suggested_task
-    ? `
-        <button class="secondary-button" type="button" data-start-agent-task="${escapeHtml(message.handoff.suggested_task)}">
-          ${escapeHtml(tr("\u8f6c\u5230 Agent \u6267\u884c", "Send to Agent"))}
-        </button>
-    `
-    : "";
-  const handoffReason = message.handoff?.reason
-    ? `<span class="message-meta">${escapeHtml(
-        state.locale === "zh-CN" ? "\u9002\u5408\u771f\u5b9e\u6267\u884c\u7684\u684c\u9762\u6216\u6d4f\u89c8\u5668\u52a8\u4f5c\u3002" : message.handoff.reason
-      )}</span>`
-    : "";
-  const stoppedNote =
-    message.status === "stopped"
-      ? `<p class="assistant-status">${escapeHtml(tr("已停止，回答未完成", "Stopped before completion"))}</p>`
-      : "";
-  const actions = showActions
-    ? `
-      <div class="message-actions message-actions--assistant">
-        <div class="message-actions__buttons">
-          ${handoffButton}
-          <button class="secondary-button" type="button" data-copy-chat-message="${escapeHtml(message.id)}">
-            ${escapeHtml(copyLabel)}
-          </button>
-          <button class="secondary-button" type="button" data-retry-chat-message="${escapeHtml(message.id)}">
-            ${escapeHtml(retryLabel)}
-          </button>
-        </div>
-        ${handoffReason ? `<div class="message-actions__meta">${handoffReason}</div>` : ""}
-      </div>
-    `
-    : "";
-
-  return renderAssistantMessageShell(`
-    <article class="assistant-card assistant-card--chat">
-      <div class="assistant-copy assistant-markdown">${renderChatMarkdown(message.content)}</div>
-      ${stoppedNote}
-      ${actions}
-    </article>
-  `);
-}
 
 function renderNormalAssistantPendingMessage(draft = state.chatStreamDraft) {
   const content = String(draft?.content || "");
@@ -6705,106 +5580,6 @@ function renderHelpCenter() {
   elements.helpContent.innerHTML = `<div class="help-doc-shell">${renderSimpleMarkdown(state.helpContent)}</div>`;
 }
 
-function renderAboutPanel() {
-  if (!elements.aboutContent) return;
-  const isEnglish = state.locale === "en-US";
-  const diagnostics = state.meta?.diagnostics || {};
-  const recentRuns = (state.runs || []).slice(0, 6);
-  const appTitle = state.meta?.title || "Aoryn";
-  const version = state.meta?.version || APP_VERSION;
-  const runtimeMode =
-    state.meta?.runtime_mode === "packaged"
-      ? (isEnglish ? "Installed app" : "已安装应用")
-      : (isEnglish ? "Source runtime" : "源码运行");
-
-  if (elements.aboutTitle) {
-    elements.aboutTitle.textContent = isEnglish ? "About Aoryn" : "关于 Aoryn";
-  }
-  if (elements.aboutSubtitle) {
-    elements.aboutSubtitle.textContent = isEnglish ? "Version, diagnostics, and logs" : "版本、诊断与日志";
-  }
-
-  const pathRows = [
-    { key: "install_dir", label: isEnglish ? "Install folder" : "安装目录", value: diagnostics.install_dir || "-" },
-    { key: "config_dir", label: isEnglish ? "Config folder" : "配置目录", value: diagnostics.config_dir || "-" },
-    { key: "data_dir", label: isEnglish ? "Data folder" : "数据目录", value: diagnostics.data_dir || "-" },
-    { key: "run_root", label: isEnglish ? "Run history" : "运行记录目录", value: diagnostics.run_root || "-" },
-    { key: "cache_dir", label: isEnglish ? "Cache folder" : "缓存目录", value: diagnostics.cache_dir || "-" },
-  ];
-
-  elements.aboutContent.innerHTML = `
-    <div class="about-grid">
-      <section class="about-card about-card--hero">
-        <div class="about-card__header">
-          <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "About" : "关于")}</p>
-          <h3>${escapeHtml(appTitle)}</h3>
-        </div>
-        <div class="about-metrics">
-          <article class="about-metric"><span>${escapeHtml(isEnglish ? "Version" : "版本")}</span><strong>v${escapeHtml(version)}</strong></article>
-          <article class="about-metric"><span>${escapeHtml(isEnglish ? "Runtime" : "运行方式")}</span><strong>${escapeHtml(runtimeMode)}</strong></article>
-        </div>
-        <p class="about-card__copy">${escapeHtml(isEnglish ? "Share Setup.exe with end users. Use Review.zip when you want to send the build, release manifest, checksums, and a source snapshot for review." : "给最终用户分发时请使用 Setup.exe；如果要给模型或同事做审核，请使用 Review.zip，其中会包含安装包、发布清单、校验值和源码快照。")}</p>
-        <div class="about-card__actions button-row">
-          <button class="secondary-button" type="button" data-copy-diagnostics="true">${escapeHtml(isEnglish ? "Copy diagnostics" : "复制诊断信息")}</button>
-        </div>
-      </section>
-
-      <section class="about-card">
-        <div class="about-card__header">
-          <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "Paths" : "路径")}</p>
-          <h3>${escapeHtml(isEnglish ? "Install & data layout" : "安装与数据布局")}</h3>
-        </div>
-        <p class="about-card__copy">${escapeHtml(isEnglish ? "The install folder can be customized, but Aoryn always keeps config in %APPDATA%\\\\Aoryn and logs, cache, screenshots, and run history in %LOCALAPPDATA%\\\\Aoryn. Uninstall will ask whether you also want to remove that user data." : "安装目录可以自定义，但 Aoryn 会始终把配置保存在 %APPDATA%\\\\Aoryn，把日志、缓存、截图和运行记录保存在 %LOCALAPPDATA%\\\\Aoryn。卸载时会询问你是否同时删除这些用户数据。")}</p>
-        <div class="about-paths">
-          ${pathRows
-            .map(
-              (item) => `
-                <div class="about-path-row">
-                  <div class="about-path-row__copy">
-                    <strong>${escapeHtml(item.label)}</strong>
-                    <small>${escapeHtml(item.value)}</small>
-                  </div>
-                  <button class="secondary-button" type="button" data-open-path-key="${escapeHtml(item.key)}">${escapeHtml(isEnglish ? "Open" : "打开")}</button>
-                </div>
-              `
-            )
-            .join("")}
-        </div>
-      </section>
-
-      <section class="about-card about-card--wide">
-        <div class="about-card__header">
-          <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "Logs & run history" : "日志与运行记录")}</p>
-          <h3>${escapeHtml(isEnglish ? "Recent runs" : "最近运行")}</h3>
-        </div>
-        ${
-          recentRuns.length
-            ? `<div class="about-run-list">
-                ${recentRuns
-                  .map(
-                    (run) => `
-                      <div class="about-run-row">
-                        <div class="about-run-row__copy">
-                          <strong>${escapeHtml(cleanRunTitle(run.task || run.id))}</strong>
-                          <small>${escapeHtml(formatTimestamp(run.started_at || run.created_at))} · ${escapeHtml(renderRunState(run))}</small>
-                        </div>
-                        <button class="secondary-button" type="button" data-open-run-id="${escapeHtml(run.id)}">${escapeHtml(isEnglish ? "View" : "查看")}</button>
-                      </div>
-                    `
-                  )
-                  .join("")}
-              </div>`
-            : renderPanelEmptyState({
-                eyebrow: isEnglish ? "Runs" : "运行",
-                title: isEnglish ? "No runs yet." : "还没有运行记录。",
-                description: isEnglish ? "Run history and diagnostics shortcuts will appear here after the first task." : "执行第一条任务后，这里会显示最近运行和诊断入口。",
-              })
-        }
-      </section>
-    </div>
-  `;
-}
-
 function renderComposerState(context) {
   const configReady = isConfigHydrated();
   if (state.uiMode === "chat") {
@@ -6907,88 +5682,6 @@ function buildChatAssistantErrorMessage(payload) {
   };
 }
 
-
-function renderNormalAssistantMessage(message, options = {}) {
-  const showActions = Boolean(options.showActions);
-  const showRecovery =
-    message?.recovery_action === "switch_text_model_retry" && Boolean(message?.retry_context);
-  const feedback = state.chatMessageActionFeedback;
-  const copyLabel =
-    feedback?.messageId === message.id && feedback?.action === "copy"
-      ? feedback.status === "success"
-        ? tr("\u5df2\u590d\u5236", "Copied")
-        : tr("\u590d\u5236\u5931\u8d25", "Copy failed")
-      : tr("\u590d\u5236", "Copy");
-  const retryLabel = tr("\u91cd\u8bd5", "Retry");
-  const recoverLabel =
-    normalizeText(message?.recovery_label || "") ||
-    tr("\u5207\u6362\u5230\u6587\u672c\u6a21\u578b\u91cd\u8bd5", "Retry with a text model");
-  const handoffButton =
-    showActions && message?.handoff?.suggested_task
-      ? `
-          <button class="secondary-button" type="button" data-start-agent-task="${escapeHtml(message.handoff.suggested_task)}">
-            ${escapeHtml(tr("\u8f6c\u5230 Agent \u6267\u884c", "Send to Agent"))}
-          </button>
-        `
-      : "";
-  const handoffReason =
-    showActions && message?.handoff?.reason
-      ? `<span class="message-meta">${escapeHtml(
-          state.locale === "zh-CN"
-            ? "\u9002\u5408\u771f\u5b9e\u6267\u884c\u7684\u684c\u9762\u6216\u6d4f\u89c8\u5668\u52a8\u4f5c\u3002"
-            : message.handoff.reason
-        )}</span>`
-      : "";
-  const stoppedNote =
-    message.status === "stopped"
-      ? `<p class="assistant-status">${escapeHtml(
-          tr("\u5df2\u505c\u6b62\uff0c\u56de\u7b54\u672a\u5b8c\u6210", "Stopped before completion")
-        )}</p>`
-      : "";
-  const actionButtons = [
-    handoffButton,
-    showActions
-      ? `
-          <button class="secondary-button" type="button" data-copy-chat-message="${escapeHtml(message.id)}">
-            ${escapeHtml(copyLabel)}
-          </button>
-        `
-      : "",
-    showActions
-      ? `
-          <button class="secondary-button" type="button" data-retry-chat-message="${escapeHtml(message.id)}">
-            ${escapeHtml(retryLabel)}
-          </button>
-        `
-      : "",
-    showRecovery
-      ? `
-          <button class="secondary-button" type="button" data-recover-chat-message="${escapeHtml(message.id)}">
-            ${escapeHtml(recoverLabel)}
-          </button>
-        `
-      : "",
-  ]
-    .filter(Boolean)
-    .join("");
-  const actions =
-    actionButtons || handoffReason
-      ? `
-          <div class="message-actions message-actions--assistant">
-            ${actionButtons ? `<div class="message-actions__buttons">${actionButtons}</div>` : ""}
-            ${handoffReason ? `<div class="message-actions__meta">${handoffReason}</div>` : ""}
-          </div>
-        `
-      : "";
-
-  return renderAssistantMessageShell(`
-    <article class="assistant-card assistant-card--chat">
-      <div class="assistant-copy assistant-markdown">${renderChatMarkdown(message.content)}</div>
-      ${stoppedNote}
-      ${actions}
-    </article>
-  `);
-}
 
 async function streamChatReply(body, handlers = {}, options = {}) {
   const fallbackMessage = tr(
@@ -7664,94 +6357,6 @@ function renderOnboardingGuide() {
         <button class="secondary-button" type="button" data-onboarding-later="true">${escapeHtml(isEnglish ? "Maybe later" : "稍后再说")}</button>
         <button class="primary-button" type="button" data-onboarding-complete="true">${escapeHtml(isEnglish ? "Mark setup done" : "完成引导")}</button>
       </div>
-    </div>
-  `;
-}
-
-function renderAboutPanel() {
-  if (!elements.aboutContent) return;
-  const isEnglish = state.locale === "en-US";
-  const diagnostics = state.meta?.diagnostics || {};
-  const recentRuns = (state.runs || []).slice(0, 6);
-  const appTitle = state.meta?.title || "Aoryn";
-  const version = state.meta?.version || APP_VERSION;
-  const runtimeMode =
-    state.meta?.runtime_mode === "packaged"
-      ? (isEnglish ? "Installed app" : "已安装应用")
-      : (isEnglish ? "Source runtime" : "源码运行");
-
-  if (elements.aboutTitle) {
-    elements.aboutTitle.textContent = isEnglish ? "About Aoryn" : "关于 Aoryn";
-  }
-  if (elements.aboutSubtitle) {
-    elements.aboutSubtitle.textContent = isEnglish ? "Version, diagnostics, and logs" : "版本、诊断与日志";
-  }
-
-  const pathRows = [
-    { key: "install_dir", label: isEnglish ? "Install folder" : "安装目录", value: diagnostics.install_dir || "-" },
-    { key: "config_dir", label: isEnglish ? "Config folder" : "配置目录", value: diagnostics.config_dir || "-" },
-    { key: "data_dir", label: isEnglish ? "Data folder" : "数据目录", value: diagnostics.data_dir || "-" },
-    { key: "run_root", label: isEnglish ? "Run history" : "运行记录目录", value: diagnostics.run_root || "-" },
-    { key: "cache_dir", label: isEnglish ? "Cache folder" : "缓存目录", value: diagnostics.cache_dir || "-" },
-  ];
-
-  elements.aboutContent.innerHTML = `
-    <div class="about-grid">
-      <section class="about-card">
-        <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "About" : "关于")}</p>
-        <h3>${escapeHtml(appTitle)}</h3>
-        <div class="about-metrics">
-          <article class="about-metric"><span>${escapeHtml(isEnglish ? "Version" : "版本")}</span><strong>v${escapeHtml(version)}</strong></article>
-          <article class="about-metric"><span>${escapeHtml(isEnglish ? "Runtime" : "运行方式")}</span><strong>${escapeHtml(runtimeMode)}</strong></article>
-        </div>
-        <p class="about-card__copy">${escapeHtml(isEnglish ? "Share Setup.exe with end users. Use Review.zip when you want to send the build, release manifest, checksums, and a source snapshot for review." : "给最终用户分发时请使用 Setup.exe；如果要给模型或同事做审核，请使用 Review.zip，其中会包含安装包、发布清单、校验值和源码快照。")}</p>
-        <div class="button-row">
-          <button class="secondary-button" type="button" data-copy-diagnostics="true">${escapeHtml(isEnglish ? "Copy diagnostics" : "复制诊断信息")}</button>
-        </div>
-      </section>
-
-      <section class="about-card">
-        <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "Paths" : "路径")}</p>
-        <p class="about-card__copy">${escapeHtml(isEnglish ? "The install folder can be customized, but Aoryn always keeps config in %APPDATA%\\Aoryn and logs, cache, screenshots, and run history in %LOCALAPPDATA%\\Aoryn. Uninstall will ask whether you also want to remove that user data." : "安装目录可以自定义，但 Aoryn 会始终把配置保存在 %APPDATA%\\Aoryn，把日志、缓存、截图和运行记录保存在 %LOCALAPPDATA%\\Aoryn。卸载时会询问你是否同时删除这些用户数据。")}</p>
-        <div class="about-paths">
-          ${pathRows
-            .map(
-              (item) => `
-                <div class="about-path-row">
-                  <div>
-                    <strong>${escapeHtml(item.label)}</strong>
-                    <small>${escapeHtml(item.value)}</small>
-                  </div>
-                  <button class="secondary-button" type="button" data-open-path-key="${escapeHtml(item.key)}">${escapeHtml(isEnglish ? "Open" : "打开")}</button>
-                </div>
-              `
-            )
-            .join("")}
-        </div>
-      </section>
-
-      <section class="about-card about-card--wide">
-        <p class="about-card__eyebrow">${escapeHtml(isEnglish ? "Logs & run history" : "日志与运行记录")}</p>
-        ${
-          recentRuns.length
-            ? `<div class="about-run-list">
-                ${recentRuns
-                  .map(
-                    (run) => `
-                      <div class="about-run-row">
-                        <div>
-                          <strong>${escapeHtml(cleanRunTitle(run.task || run.id))}</strong>
-                          <small>${escapeHtml(formatTimestamp(run.started_at || run.created_at))} · ${escapeHtml(renderRunState(run))}</small>
-                        </div>
-                        <button class="secondary-button" type="button" data-open-run-id="${escapeHtml(run.id)}">${escapeHtml(isEnglish ? "View" : "查看")}</button>
-                      </div>
-                    `
-                  )
-                  .join("")}
-              </div>`
-            : `<div class="empty-state">${escapeHtml(isEnglish ? "No runs yet." : "还没有运行记录。")}</div>`
-        }
-      </section>
     </div>
   `;
 }
