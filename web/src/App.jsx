@@ -156,6 +156,11 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
       ? "桌面工作台负责真实执行与回放，官网账号只保留身份和下载权限。"
       : "The desktop workbench owns real execution and replay while the website account only keeps identity and download access.")
     : pageCopy.stage.body;
+  const stageFocusBody = authenticated
+    ? (isZh
+      ? "安装完成后直接进入本地工作台，把执行、回放和恢复都留在这台设备里。"
+      : "After install, go straight into the local workbench and keep execution, replay, and recovery on this device.")
+    : pageCopy.stage.focusBody;
   const stageStatus = authenticated
     ? (isZh ? "可直接进入工作台" : "Ready to open")
     : pageCopy.stage.status;
@@ -172,6 +177,17 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
         : item,
     )
     : pageCopy.cards;
+  const pageLabels = {
+    "/product": copy.nav.product,
+    "/workspace": copy.nav.workspace,
+    "/download": copy.nav.download,
+  };
+
+  function getHighlightActionLabel(href) {
+    const label = pageLabels[href];
+    if (!label) return isZh ? "查看" : "Explore";
+    return isZh ? `进入${label}` : `Open ${label}`;
+  }
 
   return (
     <>
@@ -191,67 +207,69 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
               {pageCopy.hero.tertiaryCta}
             </Link>
           </div>
+          <div className="hero-marquee">
+            <span>{pageCopy.stage.windowLabel}</span>
+            <span>{stageStatus}</span>
+            <span>{pageCopy.stage.windowMeta}</span>
+          </div>
         </div>
 
         <div className="hero-stage reveal" aria-label={pageCopy.stage.title} style={getRevealStyle(1, 120, 120)}>
-          <article className="stage-window">
-            <div className="stage-window__topbar">
-              <div className="brand brand--stage">
-                <img src="/aoryn-logo-web-transparent.png" alt="" />
-                <div>
-                  <strong>{pageCopy.stage.windowLabel}</strong>
-                  <span>{pageCopy.stage.windowMeta}</span>
-                </div>
-              </div>
-              <span className="status-pill">{stageStatus}</span>
+          <article className="hero-stage__frame">
+            <div className="hero-stage__heading">
+              <span className="section-heading__eyebrow">{pageCopy.stage.eyebrow}</span>
+              <strong>{pageCopy.stage.title}</strong>
+              <p>{stageBody}</p>
             </div>
 
-            <div className="stage-window__body">
-              <aside className="stage-window__rail">
-                <span>{pageCopy.stage.railLabel}</span>
-                <ul>
-                  {pageCopy.stage.railItems.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              </aside>
-
-              <div className="stage-window__content">
-                <div className="chip-row">
-                  {pageCopy.stage.chips.map((chip) => (
-                    <span className="chip" key={chip}>
-                      {chip}
-                    </span>
-                  ))}
+            <div className="hero-stage__flow" role="list" aria-label={pageCopy.stage.railLabel}>
+              {pageCopy.stage.railItems.map((item, index) => (
+                <div className="hero-flow-step" key={item} role="listitem">
+                  <span className="hero-flow-step__index">{String(index + 1).padStart(2, "0")}</span>
+                  <strong>{item}</strong>
                 </div>
+              ))}
+            </div>
 
-                <div className="stage-window__focus">
-                  <span>{pageCopy.stage.focusLabel}</span>
-                  <strong>{pageCopy.stage.focusTitle}</strong>
-                  <p>{stageBody}</p>
-                </div>
-
-                <div className="metric-row">
-                  {pageCopy.stage.metrics.map((item, index) => (
-                    <article className="metric-card" key={item.label} style={getRevealStyle(index, 220, 70)}>
-                      <strong>{item.value}</strong>
-                      <span>{item.label}</span>
-                    </article>
-                  ))}
-                </div>
+            <div className="hero-stage__band">
+              <div className="hero-stage__focus-copy">
+                <span>{pageCopy.stage.focusLabel}</span>
+                <strong>{pageCopy.stage.focusTitle}</strong>
+                <p>{stageFocusBody}</p>
               </div>
+
+              <div className="hero-stage__chips">
+                {pageCopy.stage.chips.map((chip) => (
+                  <span className="chip" key={chip}>
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="hero-stage__metrics">
+              {pageCopy.stage.metrics.map((item) => (
+                <div className="hero-metric" key={item.label}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
             </div>
           </article>
         </div>
       </section>
 
       <section className="section-shell section-shell--compact">
-        <div className="feature-grid">
+        <div className="home-highlights">
           {cards.map((item, index) => (
-            <Link className="feature-card reveal" to={item.href} key={item.title} style={getRevealStyle(index, 80, 90)}>
-              <span className="feature-card__index">{String(index + 1).padStart(2, "0")}</span>
-              <h3>{item.title}</h3>
-              <p>{item.body}</p>
+            <Link className="highlight-strip reveal" to={item.href} key={item.title} style={getRevealStyle(index, 80, 90)}>
+              <span className="highlight-strip__index">{String(index + 1).padStart(2, "0")}</span>
+              <div className="highlight-strip__main">
+                <span className="highlight-strip__eyebrow">{pageLabels[item.href] || (isZh ? "页面" : "Page")}</span>
+                <h3>{item.title}</h3>
+                <p>{item.body}</p>
+              </div>
+              <span className="highlight-strip__action">{getHighlightActionLabel(item.href)}</span>
             </Link>
           ))}
         </div>
@@ -259,8 +277,8 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
 
       {!authenticated ? (
         <section className="section-shell">
-          <article className="cta-band reveal" style={getRevealStyle(0, 100)}>
-            <div>
+          <article className="launch-ribbon reveal" style={getRevealStyle(0, 100)}>
+            <div className="launch-ribbon__copy">
               <span className="section-heading__eyebrow">{pageCopy.cta.eyebrow}</span>
               <h2>{pageCopy.cta.title}</h2>
               <p>{pageCopy.cta.body}</p>
@@ -699,8 +717,16 @@ function AuthModal({
   );
 }
 
+function getPreferredTheme() {
+  if (typeof window === "undefined") return "dark";
+  const stored = window.localStorage.getItem("aoryn-theme");
+  if (stored === "light" || stored === "dark") return stored;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 function AppFrame() {
   const [locale, setLocale] = useState(getPreferredLocale);
+  const [theme, setTheme] = useState(getPreferredTheme);
   const [isIntroActive, setIsIntroActive] = useState(true);
   const [isIntroFading, setIsIntroFading] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
@@ -781,12 +807,14 @@ function AppFrame() {
 
   useEffect(() => {
     document.documentElement.lang = locale;
+    document.documentElement.dataset.theme = theme;
     document.title = pageCopy.meta.title;
     window.localStorage.setItem(siteConfig.localeStorageKey, locale);
+    window.localStorage.setItem("aoryn-theme", theme);
 
     const metaDescription = document.querySelector('meta[name="description"]');
     metaDescription?.setAttribute("content", pageCopy.meta.description);
-  }, [locale, pageCopy.meta.description, pageCopy.meta.title]);
+  }, [locale, theme, pageCopy.meta.description, pageCopy.meta.title]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -865,6 +893,10 @@ function AppFrame() {
 
   function toggleLocale() {
     setLocale((current) => (current === "zh-CN" ? "en-US" : "zh-CN"));
+  }
+
+  function toggleTheme() {
+    setTheme((current) => (current === "dark" ? "light" : "dark"));
   }
 
   function openAuthModal(mode = "login") {
@@ -1029,6 +1061,9 @@ function AppFrame() {
         </nav>
 
         <div className="topbar-actions">
+          <button className="ghost-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
           <button className="ghost-button" type="button" onClick={toggleLocale}>
             {copy.langSwitch}
           </button>
@@ -1092,6 +1127,9 @@ function AppFrame() {
             </div>
 
             <div className="mobile-menu__actions">
+              <button className="ghost-button" type="button" onClick={toggleTheme}>
+                {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
+              </button>
               <button className="ghost-button" type="button" onClick={toggleLocale}>
                 {copy.langSwitch}
               </button>
