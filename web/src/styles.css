@@ -5242,3 +5242,518 @@ html[data-theme="light"] .site-footer::before {
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.25), transparent);
 }
+
+
+/* ============================================
+   LIGHT THEME CRITICAL FIXES
+   ============================================ */
+
+/* 1. Hero title: remove broken gradient on Chinese text */
+html[data-theme="light"] .hero-copy h1 {
+  color: #0f172a;
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+}
+
+/* 2. Hero stage frame — add glassmorphism card */
+html[data-theme="light"] .hero-stage__frame {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 46rem);
+  align-self: stretch;
+  display: grid;
+  grid-template-rows: auto auto auto auto;
+  gap: 1rem;
+  padding: 1.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 252, 0.92) 100%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.8) inset,
+    0 24px 60px rgba(15, 23, 42, 0.08),
+    0 0 40px rgba(59, 130, 246, 0.04);
+  backdrop-filter: blur(20px);
+  overflow: hidden;
+}
+
+html[data-theme="light"] .hero-stage__frame::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.6), transparent 40%);
+  pointer-events: none;
+}
+
+html[data-theme="light"] .hero-stage__heading {
+  position: relative;
+  z-index: 1;
+  padding: 0.5rem;
+}
+
+html[data-theme="light"] .hero-stage__heading strong {
+  display: block;
+  font-size: clamp(1rem, 1.8vw, 1.2rem);
+  font-weight: 700;
+  line-height: 1.3;
+  color: #0f172a;
+  margin-top: 0.3rem;
+}
+
+html[data-theme="light"] .hero-stage__heading p {
+  margin: 0.4rem 0 0;
+  font-size: 0.9rem;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+/* 3. Hero flow steps */
+html[data-theme="light"] .hero-stage__flow {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 0.5rem;
+}
+
+html[data-theme="light"] .hero-flow-step {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 12px;
+  background: rgba(241, 245, 249, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  transition: background-color 200ms ease, border-color 200ms ease;
+}
+
+html[data-theme="light"] .hero-flow-step:hover {
+  background: rgba(226, 232, 240, 0.8);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+html[data-theme="light"] .hero-flow-step__index {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #0891b2;
+  letter-spacing: 0.05em;
+}
+
+html[data-theme="light"] .hero-flow-step strong {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+/* 4. Hero stage band (focus copy + chips) */
+html[data-theme="light"] .hero-stage__band {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 0.75rem;
+}
+
+html[data-theme="light"] .hero-stage__focus-copy {
+  padding: 1rem 1.1rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+html[data-theme="light"] .hero-stage__focus-copy span {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #2563eb;
+}
+
+html[data-theme="light"] .hero-stage__focus-copy strong {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: clamp(1.1rem, 1.8vw, 1.4rem);
+  font-weight: 700;
+  line-height: 1.2;
+  color: #0f172a;
+}
+
+html[data-theme="light"] .hero-stage__focus-copy p {
+  margin: 0.4rem 0 0;
+  font-size: 0.88rem;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+html[data-theme="light"] .hero-stage__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+html[data-theme="light"] .hero-stage__chips .chip {
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* 5. Hero metrics */
+html[data-theme="light"] .hero-stage__metrics {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+  padding-top: 0.5rem;
+}
+
+html[data-theme="light"] .hero-metric {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.65rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+html[data-theme="light"] .hero-metric span {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+html[data-theme="light"] .hero-metric strong {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #334155;
+  line-height: 1.3;
+}
+
+/* 6. Highlight strips */
+html[data-theme="light"] .highlight-strip {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.3rem 1.5rem;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.95) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
+  transition: transform 300ms ease, box-shadow 300ms ease;
+  text-decoration: none;
+}
+
+html[data-theme="light"] .highlight-strip:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+}
+
+html[data-theme="light"] .highlight-strip__index {
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: #0891b2;
+  opacity: 0.7;
+}
+
+html[data-theme="light"] .highlight-strip__main h3 {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+html[data-theme="light"] .highlight-strip__main p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #64748b;
+}
+
+html[data-theme="light"] .highlight-strip__eyebrow {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #2563eb;
+}
+
+html[data-theme="light"] .highlight-strip__action {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #475569;
+  white-space: nowrap;
+}
+
+/* 7. Launch ribbon */
+html[data-theme="light"] .launch-ribbon {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2rem;
+  padding: 2rem;
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.95) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  box-shadow: 0 8px 32px rgba(15, 23, 42, 0.05);
+  position: relative;
+  overflow: hidden;
+}
+
+html[data-theme="light"] .launch-ribbon__copy h2 {
+  margin: 0.3rem 0 0.6rem;
+  font-size: clamp(1.5rem, 2.8vw, 2rem);
+  font-weight: 700;
+  line-height: 1.1;
+  color: #0f172a;
+}
+
+html[data-theme="light"] .launch-ribbon__copy p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+/* 8. Stage window (workspace preview etc) */
+html[data-theme="light"] .stage-window {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 41rem);
+  padding: 1rem;
+  border-radius: 2rem;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.06);
+}
+
+/* 9. Feature / detail cards */
+html[data-theme="light"] .feature-card,
+html[data-theme="light"] .detail-card,
+html[data-theme="light"] .download-meta-card,
+html[data-theme="light"] .legal-card {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+  transition: transform 300ms ease, box-shadow 300ms ease;
+}
+
+@media (hover: hover) {
+  html[data-theme="light"] .feature-card:hover,
+  html[data-theme="light"] .detail-card:hover,
+  html[data-theme="light"] .download-meta-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+  }
+}
+
+/* 10. CTA band */
+html[data-theme="light"] .cta-band {
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+/* 11. Workspace stage */
+html[data-theme="light"] .workspace-stage {
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+/* 12. Download gate */
+html[data-theme="light"] .download-gate {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+/* 13. FAQ items */
+html[data-theme="light"] .faq-item {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.03);
+}
+
+html[data-theme="light"] .faq-item summary {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+html[data-theme="light"] .faq-item summary:hover {
+  color: #2563eb;
+}
+
+/* 14. Modal & mobile menu */
+html[data-theme="light"] .modal-card,
+html[data-theme="light"] .mobile-menu {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  backdrop-filter: blur(24px);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.1);
+}
+
+/* 15. Auth modal */
+html[data-theme="light"] .auth-modal {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  box-shadow: 0 32px 80px rgba(15, 23, 42, 0.12);
+}
+
+html[data-theme="light"] .auth-modal__intro {
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.95), rgba(241, 245, 249, 0.98));
+  border-right: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+/* 16. Mobile menu links */
+html[data-theme="light"] .mobile-menu__link {
+  background: rgba(241, 245, 249, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  color: #334155;
+}
+
+/* 17. Section heading underline decoration */
+html[data-theme="light"] .section-heading h2 {
+  position: relative;
+}
+
+html[data-theme="light"] .section-heading h2::after {
+  content: "";
+  position: absolute;
+  bottom: -0.3rem;
+  left: 0;
+  width: 3rem;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2563eb, transparent);
+  opacity: 0.5;
+}
+
+html[data-theme="light"] .section-heading--center h2::after {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* 18. Hero marquee */
+html[data-theme="light"] .hero-marquee {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 1.1rem;
+  margin-top: 0.3rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+html[data-theme="light"] .hero-marquee span {
+  position: relative;
+}
+
+html[data-theme="light"] .hero-marquee span:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -0.65rem;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: #cbd5e1;
+  transform: translateY(-50%);
+}
+
+/* 19. Account chip */
+html[data-theme="light"] .account-chip {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  color: #475569;
+  transition: border-color 200ms ease;
+}
+
+html[data-theme="light"] .account-chip:hover {
+  border-color: rgba(148, 163, 184, 0.25);
+}
+
+/* 20. Status pill pulse for light theme */
+html[data-theme="light"] .status-pill {
+  position: relative;
+  gap: 0.4rem;
+}
+
+html[data-theme="light"] .status-pill::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #0891b2;
+  box-shadow: 0 0 6px rgba(8, 145, 178, 0.35);
+  animation: statusPulseLight 2.5s ease-in-out infinite;
+}
+
+/* 21. Detail card step number */
+html[data-theme="light"] .detail-card--step .detail-card__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.12);
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #2563eb;
+  letter-spacing: 0;
+}
+
+/* 22. Responsive fixes for light theme */
+@media (max-width: 1100px) {
+  html[data-theme="light"] .launch-ribbon {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+  html[data-theme="light"] .highlight-strip {
+    grid-template-columns: auto 1fr;
+  }
+  html[data-theme="light"] .highlight-strip__action {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  html[data-theme="light"] .hero-stage__metrics {
+    grid-template-columns: 1fr;
+  }
+  html[data-theme="light"] .hero-stage__frame {
+    padding: 1rem;
+    border-radius: 22px;
+  }
+}
+
+@media (max-width: 640px) {
+  html[data-theme="light"] .hero-stage__frame {
+    padding: 0.9rem;
+    border-radius: 20px;
+  }
+  html[data-theme="light"] .highlight-strip {
+    padding: 1.1rem;
+    border-radius: 18px;
+  }
+  html[data-theme="light"] .launch-ribbon {
+    padding: 1.5rem;
+    border-radius: 22px;
+  }
+}
