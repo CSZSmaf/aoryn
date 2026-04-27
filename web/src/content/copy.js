@@ -1,6 +1,6 @@
 export const siteCopy = {
   "zh-CN": {
-    brandDescriptor: "可见执行，本地优先的桌面工作台",
+    brandDescriptor: "可见执行，本地优先",
     langSwitch: "EN",
     nav: {
       home: "首页",
@@ -65,63 +65,63 @@ export const siteCopy = {
       },
     },
     footer: {
-      tagline: "账号在云端，工作流和运行记录留在本地。",
+      tagline: "身份在云端，工作流和运行记录留在本地。",
       copyright: "Aoryn. All rights reserved.",
     },
     pages: {
       home: {
         meta: {
           title: "Aoryn | 可见执行，本地优先的桌面工作台",
-          description: "让桌面任务保持可见、可恢复、可交接。",
+          description: "让桌面执行清晰、可控、可恢复。",
         },
         hero: {
-          eyebrow: "本地优先桌面 Agent 工作台",
-          title: "让桌面任务保持可见、可恢复、可交接。",
-          body: "Aoryn 把对话、执行、截图和时间线放进同一个工作台里，让你始终知道它做了什么、停在了哪里、下一步该怎么接手。",
+          eyebrow: "本地优先的桌面 Agent",
+          title: "让桌面执行清晰、可控、可恢复。",
+          body: "Aoryn 把对话、执行、截图和时间线收进同一个工作台，让每一次自动化都有可观察的过程和可接手的状态。",
           primaryCta: "下载桌面版",
           secondaryCta: "查看工作台",
           tertiaryCta: "了解产品",
         },
         cards: [
           {
-            title: "从一句目标到真实执行",
-            body: "先说清你想完成什么，再让桌面执行层按当前环境逐步推进。",
+            title: "从目标到执行",
+            body: "描述你想完成的结果，再让桌面执行层按当前环境逐步推进。",
             href: "/product",
           },
           {
-            title: "每次运行都能回看和恢复",
-            body: "截图、状态变化和关键步骤沿着同一条时间线留下来。",
+            title: "运行过程可回看、可恢复",
+            body: "截图、状态变化和关键步骤沿着同一条时间线沉淀下来。",
             href: "/workspace",
           },
           {
-            title: "下载前登录，安装后直接进入工作台",
-            body: "账号只管理身份和下载权限，不接管你的本地任务数据。",
+            title: "登录下载，安装后进入工作台",
+            body: "账号只管理身份和下载权限，本地任务数据仍留在设备上。",
             href: "/download",
           },
         ],
         stage: {
           eyebrow: "工作台视角",
-          title: "桌面执行在本地，账号只管理访问入口。",
-          body: "桌面应用负责真正的执行和回放，官网账号只负责身份、下载和后续访问边界。",
+          title: "执行留在本地，访问由账号管理。",
+          body: "桌面应用负责真实执行和回放，官网账号只负责身份、下载和访问边界。",
           windowLabel: "Aoryn Workbench",
           windowMeta: "Visible runs, local history, recoverable workflow",
           status: "Ready after install",
           railLabel: "Workbench",
           railItems: ["Agent", "Chat", "Timeline", "History"],
           focusLabel: "当前主线",
-          focusTitle: "任务 → 执行 → 时间线",
-          focusBody: "把一次桌面任务拆成你能观察、暂停、恢复和交接的一条工作链。",
+          focusTitle: "任务 / 执行 / 时间线",
+          focusBody: "把一次桌面任务整理成可观察、可暂停、可恢复的工作链。",
           chips: ["Visible execution", "Local-first data", "Recoverable runs"],
           metrics: [
             { label: "云端保存", value: "身份与下载权限" },
-            { label: "运行记录", value: "保留在本地" },
-            { label: "桌面端", value: "安装后可直接使用" },
+            { label: "运行记录", value: "留在本地设备" },
+            { label: "桌面端", value: "安装后直接使用" },
           ],
         },
         cta: {
           eyebrow: "开始使用",
-          title: "了解产品后登录下载，安装完成后直接进入本地工作台。",
-          body: "Aoryn 不会把你的任务历史、截图和设置自动上传到云端。账号只负责官网身份和安装包访问，桌面端负责实际工作流。",
+          title: "登录下载，进入本地工作台。",
+          body: "Aoryn 不会把任务历史、截图和设置自动上传到云端。账号只负责官网身份和安装包访问，桌面端负责实际工作流。",
           primaryCta: "前往下载",
           secondaryCta: "登录 / 注册",
         },
@@ -133,35 +133,35 @@ export const siteCopy = {
         },
         hero: {
           eyebrow: "产品",
-          title: "不是只会回答，而是能把执行过程完整交给你看。",
-          body: "Aoryn 用工作台把目标理解、桌面动作、截图回放和恢复入口连成同一条产品路径。",
+          title: "不只回答问题，也呈现完整执行路径。",
+          body: "Aoryn 用工作台把目标理解、桌面动作、截图回放和恢复入口连成同一条清晰路径。",
         },
         pillars: {
           eyebrow: "核心能力",
-          title: "三条主线，定义 Aoryn 是什么。",
-          body: "它不是开发者面板的集合，而是一套面向真实任务闭环的桌面产品体验。",
+          title: "三条主线，定义 Aoryn。",
+          body: "它不是面板集合，而是一套面向真实任务闭环的桌面产品体验。",
           items: [
             {
               note: "Visible execution",
-              title: "执行不是黑盒，而是你看得见的过程",
-              body: "任务推进、截图变化和运行状态始终留在工作台里，而不是消失在一段不可见的后台逻辑中。",
+              title: "执行不是黑盒，而是可见过程",
+              body: "任务推进、截图变化和运行状态留在工作台里，不消失在不可见的后台逻辑中。",
             },
             {
               note: "Local-first",
-              title: "工作数据留在设备，不被账号接管",
+              title: "工作数据留在设备",
               body: "历史、截图、模型设置和浏览器设置继续保存在本地，账号只负责身份和下载入口。",
             },
             {
               note: "Recoverable workflow",
-              title: "停下来之后，依然能从当前状态继续",
-              body: "你可以回看时间线、处理人工复核节点，再从中断的位置继续，而不是每次都从头开始。",
+              title: "中断之后，仍能继续",
+              body: "你可以回看时间线、处理人工复核节点，再从中断的位置继续推进。",
             },
           ],
         },
         workflow: {
           eyebrow: "产品流程",
-          title: "从一句目标开始，到一条可恢复的桌面工作流结束。",
-          body: "Aoryn 的重点不是隐藏复杂度，而是把复杂度整理成你能理解和接手的执行路径。",
+          title: "从一句目标，到一条可恢复的桌面工作流。",
+          body: "Aoryn 不隐藏复杂度，而是把复杂度整理成你能理解和接手的执行路径。",
           items: [
             { step: "01", title: "说明目标", body: "先告诉 Aoryn 想完成的结果，而不是提前把每一步点击都写死。" },
             { step: "02", title: "读取当前环境", body: "系统结合屏幕、浏览器、窗口和本地设置，决定下一步最合理的动作。" },
@@ -177,8 +177,8 @@ export const siteCopy = {
         },
         hero: {
           eyebrow: "工作台",
-          title: "把 Agent、执行和回放放进一个更像产品的主界面里。",
-          body: "安装后直接进入工作台，用 Agent 作为主入口，把聊天、时间线、历史和设置作为辅助能力组织起来。",
+          title: "把 Agent、执行和回放放进同一个主界面。",
+          body: "安装后直接进入工作台，用 Agent 作为主入口，把聊天、时间线、历史和设置组织在一处。",
         },
         sections: [
           {
@@ -196,8 +196,8 @@ export const siteCopy = {
         ],
         preview: {
           eyebrow: "工作台预览",
-          title: "安装完成后就能直接进入的主界面。",
-          body: "账号解决的是官网访问和下载权限，桌面应用负责的是本地执行和回放，而数据始终由你的设备掌握。",
+          title: "安装后直接进入的主界面。",
+          body: "账号负责官网访问和下载权限，桌面应用负责本地执行和回放，数据始终由你的设备掌握。",
           cards: [
             { label: "账号职责", value: "身份与下载" },
             { label: "本地历史", value: "不上传云端" },
@@ -212,7 +212,7 @@ export const siteCopy = {
         },
         hero: {
           eyebrow: "下载",
-          title: "下载入口受账号保护，桌面工作流仍然保持本地优先。",
+          title: "账号保护下载入口，桌面工作流保持本地优先。",
           body: "官网账号用于身份验证和安装包访问。安装完成后，桌面版会直接进入本地工作台，不再追加登录门槛。",
         },
         locked: {
@@ -235,7 +235,7 @@ export const siteCopy = {
         },
         steps: {
           eyebrow: "下载路径",
-          title: "从官网到桌面工作台，一条清晰的路径。",
+          title: "从官网到桌面工作台，路径清晰。",
           body: "下载保持登录门槛，但桌面端安装完成后会直接进入本地工作台，让首次用户尽快跑通第一条任务。",
           items: [
             { step: "01", title: "了解产品并完成注册", body: "先创建账号并完成邮箱验证，明确你的下载权限和身份信息。" },
@@ -332,7 +332,7 @@ export const siteCopy = {
     },
   },
   "en-US": {
-    brandDescriptor: "Visible execution, local-first desktop workbench",
+    brandDescriptor: "Visible execution, local-first",
     langSwitch: "中",
     nav: {
       home: "Home",
@@ -404,56 +404,56 @@ export const siteCopy = {
       home: {
         meta: {
           title: "Aoryn | Visible execution, local-first desktop workbench",
-          description: "Keep desktop work visible, recoverable, and ready for handoff.",
+          description: "Keep desktop execution clear, controllable, and recoverable.",
         },
         hero: {
-          eyebrow: "Local-first desktop agent workbench",
-          title: "Keep desktop work visible, recoverable, and ready for handoff.",
-          body: "Aoryn brings conversation, execution, screenshots, and timelines into one workbench so you can always see what happened, where it paused, and how to continue.",
+          eyebrow: "Local-first desktop agent",
+          title: "Keep desktop execution clear, controllable, and recoverable.",
+          body: "Aoryn brings conversation, execution, screenshots, and timelines into one workbench so every automated run has an observable path and a state you can take over.",
           primaryCta: "Download desktop app",
           secondaryCta: "View workbench",
           tertiaryCta: "Explore product",
         },
         cards: [
           {
-            title: "From one goal to real execution",
-            body: "Start with the outcome you want, then let the desktop execution layer move step by step in the current environment.",
+            title: "From goal to execution",
+            body: "Describe the outcome you want, then let the desktop execution layer move through the current environment.",
             href: "/product",
           },
           {
-            title: "Every run stays reviewable and recoverable",
-            body: "Screenshots, status changes, and key steps stay aligned on one timeline you can reopen later.",
+            title: "Runs stay reviewable and recoverable",
+            body: "Screenshots, status changes, and key steps settle into one timeline you can reopen later.",
             href: "/workspace",
           },
           {
-            title: "Sign in before download, open the workbench after install",
-            body: "The account handles identity and release access. Your local work data stays outside that boundary.",
+            title: "Sign in, download, open the workbench",
+            body: "The account handles identity and release access while local work data stays on your device.",
             href: "/download",
           },
         ],
         stage: {
           eyebrow: "Workbench view",
-          title: "Desktop execution stays local while the account only manages access.",
-          body: "The desktop app owns execution and replay. The website account only owns identity, downloads, and future access boundaries.",
+          title: "Execution stays local. Access stays managed.",
+          body: "The desktop app owns execution and replay. The website account only handles identity, downloads, and access boundaries.",
           windowLabel: "Aoryn Workbench",
           windowMeta: "Visible runs, local history, recoverable workflow",
           status: "Ready after install",
           railLabel: "Workbench",
           railItems: ["Agent", "Chat", "Timeline", "History"],
           focusLabel: "Current flow",
-          focusTitle: "Task -> Execution -> Timeline",
-          focusBody: "Turn one desktop goal into a chain you can observe, pause, resume, and hand off.",
+          focusTitle: "Task / Execution / Timeline",
+          focusBody: "Turn one desktop goal into a chain you can observe, pause, and recover.",
           chips: ["Visible execution", "Local-first data", "Recoverable runs"],
           metrics: [
             { label: "Cloud scope", value: "Identity and download access" },
-            { label: "Run history", value: "Stays local" },
+            { label: "Run history", value: "Stays on-device" },
             { label: "Desktop app", value: "Ready after install" },
           ],
         },
         cta: {
           eyebrow: "Get started",
-          title: "Explore the product, sign in to download, then launch straight into the local workbench.",
-          body: "Aoryn does not automatically upload your task history, screenshots, or settings. The account only gates website identity and installer access while the desktop app owns the workflow.",
+          title: "Sign in to download, then enter the local workbench.",
+          body: "Aoryn does not automatically upload task history, screenshots, or settings. The account only gates website identity and installer access while the desktop app owns the workflow.",
           primaryCta: "Go to download",
           secondaryCta: "Login / Register",
         },
@@ -465,18 +465,18 @@ export const siteCopy = {
         },
         hero: {
           eyebrow: "Product",
-          title: "Not just answers, but a full execution path you can actually inspect.",
-          body: "Aoryn turns task understanding, desktop action, screenshot replay, and recovery points into one product flow.",
+          title: "Not just answers, but an execution path you can inspect.",
+          body: "Aoryn turns task understanding, desktop action, screenshot replay, and recovery points into one clear product flow.",
         },
         pillars: {
           eyebrow: "Core ideas",
-          title: "Three product principles define Aoryn.",
-          body: "It is not a loose collection of developer panels. It is a desktop product built around the first successful task loop.",
+          title: "Three principles define Aoryn.",
+          body: "It is not a loose collection of panels. It is a desktop product built around the first successful task loop.",
           items: [
             {
               note: "Visible execution",
-              title: "Execution stays observable instead of hidden",
-              body: "Progress, screenshots, and run state remain inside the workbench instead of disappearing behind a single opaque response.",
+              title: "Execution stays observable",
+              body: "Progress, screenshots, and run state remain inside the workbench instead of disappearing behind an opaque response.",
             },
             {
               note: "Local-first",
@@ -485,15 +485,15 @@ export const siteCopy = {
             },
             {
               note: "Recoverable workflow",
-              title: "A stopped run can continue from where it paused",
-              body: "You can reopen timelines, review human-check moments, and keep moving from the current state instead of restarting everything.",
+              title: "A stopped run can continue",
+              body: "You can reopen timelines, review human-check moments, and keep moving from the current state.",
             },
           ],
         },
         workflow: {
           eyebrow: "Workflow",
-          title: "Start from one goal and finish with a recoverable desktop run.",
-          body: "Aoryn does not try to hide complexity. It organizes complexity into an execution path you can understand and take over.",
+          title: "Start from one goal and finish with a recoverable run.",
+          body: "Aoryn does not hide complexity. It organizes complexity into an execution path you can understand and take over.",
           items: [
             { step: "01", title: "Describe the goal", body: "Tell Aoryn what outcome you want instead of hard-coding every click in advance." },
             { step: "02", title: "Read the current environment", body: "The system combines screen state, browser state, windows, and local settings before choosing the next action." },
@@ -509,7 +509,7 @@ export const siteCopy = {
         },
         hero: {
           eyebrow: "Workbench",
-          title: "A main interface that feels like a product, not a debug surface.",
+          title: "Agent, execution, and replay in one main interface.",
           body: "Launch directly into a workbench where Agent is the primary entry, chat is supportive, and timelines, history, and settings stay within reach.",
         },
         sections: [
@@ -528,8 +528,8 @@ export const siteCopy = {
         ],
         preview: {
           eyebrow: "Workbench preview",
-          title: "The main desktop surface you enter right after install.",
-          body: "The account owns website access and downloads. The desktop app owns execution and replay. Your device still owns the data.",
+          title: "The desktop surface you enter after install.",
+          body: "The account owns website access and downloads. The desktop app owns execution and replay. Your device owns the data.",
           cards: [
             { label: "Account scope", value: "Identity and downloads" },
             { label: "History", value: "Local-only" },
@@ -544,7 +544,7 @@ export const siteCopy = {
         },
         hero: {
           eyebrow: "Download",
-          title: "Downloads are protected by account access, while the desktop workflow stays local-first.",
+          title: "Account-protected downloads. Local-first desktop workflow.",
           body: "The website account handles identity verification and installer access. After installation, the desktop app opens straight into the local workbench without another sign-in gate.",
         },
         locked: {
@@ -567,7 +567,7 @@ export const siteCopy = {
         },
         steps: {
           eyebrow: "Install flow",
-          title: "One clear path from website to desktop workbench.",
+          title: "A clear path from website to desktop workbench.",
           body: "Download remains gated by account access, but the desktop app is designed to get first-time users to their first successful task quickly.",
           items: [
             { step: "01", title: "Learn the product and register", body: "Create an account and verify your email so your download access and identity are in place." },

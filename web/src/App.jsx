@@ -718,10 +718,10 @@ function AuthModal({
 }
 
 function getPreferredTheme() {
-  if (typeof window === "undefined") return "dark";
+  if (typeof window === "undefined") return "light";
   const stored = window.localStorage.getItem("aoryn-theme");
   if (stored === "light" || stored === "dark") return stored;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return "light";
 }
 
 function AppFrame() {
@@ -753,6 +753,12 @@ function AppFrame() {
   const pageKey = getPageKey(location.pathname);
   const pageCopy = copy.pages[pageKey] || copy.pages.home;
   const currentYear = new Date().getFullYear();
+  const themeToggleLabel = theme === "dark"
+    ? (locale === "zh-CN" ? "浅色" : "Light")
+    : (locale === "zh-CN" ? "深色" : "Dark");
+  const themeToggleAriaLabel = theme === "dark"
+    ? (locale === "zh-CN" ? "切换到浅色主题" : "Switch to light mode")
+    : (locale === "zh-CN" ? "切换到深色主题" : "Switch to dark mode");
 
   useEffect(() => {
     let cancelled = false;
@@ -1061,8 +1067,8 @@ function AppFrame() {
         </nav>
 
         <div className="topbar-actions">
-          <button className="ghost-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
-            {theme === "dark" ? "☀️" : "🌙"}
+          <button className="ghost-button" type="button" onClick={toggleTheme} aria-label={themeToggleAriaLabel}>
+            {themeToggleLabel}
           </button>
           <button className="ghost-button" type="button" onClick={toggleLocale}>
             {copy.langSwitch}
@@ -1128,7 +1134,7 @@ function AppFrame() {
 
             <div className="mobile-menu__actions">
               <button className="ghost-button" type="button" onClick={toggleTheme}>
-                {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
+                {themeToggleLabel}
               </button>
               <button className="ghost-button" type="button" onClick={toggleLocale}>
                 {copy.langSwitch}
