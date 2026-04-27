@@ -1366,6 +1366,10 @@ if QApplication is not None:
             self.address_bar.setObjectName("AddressBar")
             self.address_bar.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.address_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.address_bar.addAction(
+                browser_chrome_icon("search", color="#7a8594", size=18),
+                QLineEdit.ActionPosition.LeadingPosition,
+            )
             self.address_bar.returnPressed.connect(self._navigate_from_address_bar)
             self.top_chrome.set_address_widget(self.address_bar)
 
@@ -1378,7 +1382,7 @@ if QApplication is not None:
             self.top_chrome.add_action_widget(self.new_tab_button)
 
             self.assistant_toggle_button = self._create_toolbar_button(
-                text="AI",
+                icon=browser_chrome_icon("spark", color="#1d4ed8"),
                 tooltip="Open browser help",
                 handler=self._toggle_assistant_panel,
                 object_name="AssistantToggleButton",

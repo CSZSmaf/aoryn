@@ -21,8 +21,8 @@ QFrame#TopChromeSection {
 }
 QFrame#TopChromeAddressShell {
     border-radius: 18px;
-    background: #ffffff;
-    border-color: #dfe3e7;
+    background: #fbfcfd;
+    border-color: #d8dee6;
     min-height: 36px;
     max-height: 36px;
 }
@@ -71,15 +71,15 @@ QToolButton#BrowserMenuButton {
     min-height: 28px;
 }
 QToolButton#AssistantToggleButton {
-    min-width: 34px;
-    min-height: 26px;
-    padding: 2px 8px;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 2px 6px;
     color: #1d4ed8;
     font: 600 11px "Segoe UI Variable Text";
 }
 QToolButton#AssistantToggleButton:checked {
-    background: rgba(29, 78, 216, 0.10);
-    border-color: transparent;
+    background: rgba(29, 78, 216, 0.08);
+    border-color: rgba(29, 78, 216, 0.12);
 }
 QToolButton#BrowserMenuButton::menu-indicator {
     image: none;
@@ -91,7 +91,7 @@ QLineEdit#AddressBar {
     color: #18212f;
     min-height: 34px;
     max-height: 34px;
-    padding: 0 14px;
+    padding: 0 14px 0 6px;
     selection-background-color: rgba(29, 78, 216, 0.18);
     font: 13px "Segoe UI Variable Text";
 }

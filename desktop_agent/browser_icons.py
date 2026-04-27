@@ -14,40 +14,53 @@ except Exception as exc:  # pragma: no cover - GUI runtime availability depends 
 
 _ICON_TEMPLATES = {
     "back": """
-        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 20 20" fill="none">
-          <path d="M11.8 4.8L6.3 10l5.5 5.2" stroke="{color}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M7.1 10H14.7" stroke="{color}" stroke-width="1.9" stroke-linecap="round"/>
+        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none">
+          <path d="M14.4 6.4L8.8 12l5.6 5.6" stroke="{color}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M9.4 12H19" stroke="{color}" stroke-width="1.75" stroke-linecap="round"/>
         </svg>
     """,
     "forward": """
-        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 20 20" fill="none">
-          <path d="M8.2 4.8L13.7 10l-5.5 5.2" stroke="{color}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M12.9 10H5.3" stroke="{color}" stroke-width="1.9" stroke-linecap="round"/>
+        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none">
+          <path d="M9.6 6.4L15.2 12l-5.6 5.6" stroke="{color}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M14.6 12H5" stroke="{color}" stroke-width="1.75" stroke-linecap="round"/>
         </svg>
     """,
     "reload": """
-        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 20 20" fill="none">
-          <path d="M14.6 6.8A5.8 5.8 0 1 0 15.3 12" stroke="{color}" stroke-width="1.8" stroke-linecap="round"/>
-          <path d="M11.9 4.9H15.8V8.8" stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none">
+          <path d="M17.1 8.2A6.3 6.3 0 1 0 18 13.3" stroke="{color}" stroke-width="1.72" stroke-linecap="round"/>
+          <path d="M13.8 6.2H18.1V10.5" stroke="{color}" stroke-width="1.72" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
     """,
     "home": """
-        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 20 20" fill="none">
-          <path d="M4.7 9.1L10 4.6l5.3 4.5" stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M6.2 8.2V15h7.6V8.2" stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none">
+          <path d="M5.6 11.3L12 6.1L18.4 11.3" stroke="{color}" stroke-width="1.72" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M7.7 10.3V18H16.3V10.3" stroke="{color}" stroke-width="1.72" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M10.3 18V14.4H13.7V18" stroke="{color}" stroke-width="1.72" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
     """,
     "add": """
-        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 20 20" fill="none">
-          <path d="M10 4.8V15.2" stroke="{color}" stroke-width="1.9" stroke-linecap="round"/>
-          <path d="M4.8 10H15.2" stroke="{color}" stroke-width="1.9" stroke-linecap="round"/>
+        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none">
+          <path d="M12 6.4V17.6" stroke="{color}" stroke-width="1.75" stroke-linecap="round"/>
+          <path d="M6.4 12H17.6" stroke="{color}" stroke-width="1.75" stroke-linecap="round"/>
         </svg>
     """,
     "more": """
-        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 20 20" fill="none">
-          <circle cx="5" cy="10" r="1.35" fill="{color}"/>
-          <circle cx="10" cy="10" r="1.35" fill="{color}"/>
-          <circle cx="15" cy="10" r="1.35" fill="{color}"/>
+        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="6.8" r="1.45" fill="{color}"/>
+          <circle cx="12" cy="12" r="1.45" fill="{color}"/>
+          <circle cx="12" cy="17.2" r="1.45" fill="{color}"/>
+        </svg>
+    """,
+    "search": """
+        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none">
+          <circle cx="10.7" cy="10.7" r="5.7" stroke="{color}" stroke-width="1.65"/>
+          <path d="M15.1 15.1L19 19" stroke="{color}" stroke-width="1.65" stroke-linecap="round"/>
+        </svg>
+    """,
+    "spark": """
+        <svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none">
+          <path d="M12 4.8L13.7 9.9L18.8 11.8L13.7 13.7L12 18.8L10.3 13.7L5.2 11.8L10.3 9.9L12 4.8Z" stroke="{color}" stroke-width="1.55" stroke-linejoin="round"/>
+          <path d="M18.7 4.8L19.3 6.7L21.2 7.3L19.3 8L18.7 9.8L18 8L16.2 7.3L18 6.7L18.7 4.8Z" stroke="{color}" stroke-width="1.25" stroke-linejoin="round"/>
         </svg>
     """,
     "window": """
