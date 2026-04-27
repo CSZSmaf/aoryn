@@ -152,8 +152,7 @@ img {
 }
 
 .topbar {
-  position: sticky;
-  top: 12px;
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
@@ -1366,7 +1365,6 @@ html[data-theme="dark"] .primary-button {
   }
 
   .topbar {
-    top: 8px;
     width: min(calc(100% - 1.25rem), var(--page-width));
   }
 
