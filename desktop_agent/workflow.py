@@ -14,8 +14,15 @@ RISK_LEVELS = {"low", "medium", "high", "critical"}
 FAILURE_KINDS = {
     "transient_failure",
     "blocked_by_ui",
+    "blocked_ui",
+    "stale_target",
+    "missing_data",
+    "verification_failed",
+    "safety_gate",
+    "requires_user",
     "requires_auth",
     "requires_human",
+    "requires_clarification",
     "capability_mismatch",
     "goal_ambiguous",
     "approval_rejected",
@@ -32,6 +39,7 @@ GOAL_TYPES = {
     "confirm",
     "transfer",
     "save",
+    "clarify",
     "handoff",
 }
 
@@ -354,6 +362,8 @@ class TaskGraph:
     constraints: list[str] = field(default_factory=list)
     risk_points: list[str] = field(default_factory=list)
     completion_summary: str | None = None
+    intent: dict[str, Any] | None = None
+    recipes: list[dict[str, Any]] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 
     @classmethod
@@ -372,6 +382,8 @@ class TaskGraph:
             constraints=[str(item).strip() for item in payload.get("constraints", []) or [] if str(item).strip()],
             risk_points=[str(item).strip() for item in payload.get("risk_points", []) or [] if str(item).strip()],
             completion_summary=_optional_str(payload.get("completion_summary")),
+            intent=dict(payload.get("intent") or {}) if isinstance(payload.get("intent"), dict) else None,
+            recipes=[dict(item) for item in payload.get("recipes", []) or [] if isinstance(item, dict)],
             created_at=float(payload.get("created_at", time.time()) or time.time()),
         )
 
@@ -384,6 +396,8 @@ class TaskGraph:
             "constraints": list(self.constraints),
             "risk_points": list(self.risk_points),
             "completion_summary": self.completion_summary,
+            "intent": dict(self.intent) if isinstance(self.intent, dict) else None,
+            "recipes": [dict(item) for item in self.recipes],
             "created_at": self.created_at,
         }
 
@@ -447,6 +461,7 @@ class PendingDecision:
     summary: str
     reason: str
     risk_level: str
+    decision_type: str = "step_approval"
     actions: list[Action] = field(default_factory=list)
     requested_at: float = field(default_factory=time.time)
     status: str = "pending"
@@ -459,6 +474,7 @@ class PendingDecision:
             summary=str(payload.get("summary", "")).strip() or "Approval required.",
             reason=str(payload.get("reason", "")).strip() or "The agent needs a decision before continuing.",
             risk_level=_normalize_risk_level(payload.get("risk_level")),
+            decision_type=_normalize_decision_type(payload.get("decision_type")),
             actions=[Action.from_dict(item) for item in payload.get("actions", []) or []],
             requested_at=float(payload.get("requested_at", time.time()) or time.time()),
             status=str(payload.get("status", "pending")).strip() or "pending",
@@ -471,6 +487,7 @@ class PendingDecision:
             "summary": self.summary,
             "reason": self.reason,
             "risk_level": self.risk_level,
+            "decision_type": self.decision_type,
             "actions": [item.to_dict() for item in self.actions],
             "requested_at": self.requested_at,
             "status": self.status,
@@ -487,7 +504,9 @@ class WorldModel:
     visible_windows: list[dict[str, Any]] = field(default_factory=list)
     downloads: list[dict[str, Any]] = field(default_factory=list)
     facts: list[ObservedFact] = field(default_factory=list)
+    fact_sources: list[str] = field(default_factory=list)
     observations: list[str] = field(default_factory=list)
+    state_delta: dict[str, Any] = field(default_factory=dict)
     active_app: str | None = None
     active_window_title: str | None = None
     target_window_title: str | None = None
@@ -519,7 +538,9 @@ class WorldModel:
             "visible_windows": list(self.visible_windows),
             "downloads": list(self.downloads),
             "facts": [item.to_dict() for item in self.facts],
+            "fact_sources": list(self.fact_sources),
             "observations": list(self.observations),
+            "state_delta": dict(self.state_delta),
             "active_app": self.active_app,
             "active_window_title": self.active_window_title,
             "target_window_title": self.target_window_title,
@@ -547,10 +568,123 @@ class WorldModel:
 
 
 @dataclass(slots=True)
+class TaskWorkspace:
+    notes: list[str] = field(default_factory=list)
+    facts: list[dict[str, Any]] = field(default_factory=list)
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+    decisions: list[dict[str, Any]] = field(default_factory=list)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    anchors: list[dict[str, Any]] = field(default_factory=list)
+    updated_at: float = field(default_factory=time.time)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "TaskWorkspace":
+        if not isinstance(payload, dict):
+            return cls()
+        return cls(
+            notes=[str(item).strip() for item in payload.get("notes", []) or [] if str(item).strip()],
+            facts=[dict(item) for item in payload.get("facts", []) or [] if isinstance(item, dict)],
+            sources=[dict(item) for item in payload.get("sources", []) or [] if isinstance(item, dict)],
+            artifacts=[dict(item) for item in payload.get("artifacts", []) or [] if isinstance(item, dict)],
+            open_questions=[
+                str(item).strip() for item in payload.get("open_questions", []) or [] if str(item).strip()
+            ],
+            decisions=[dict(item) for item in payload.get("decisions", []) or [] if isinstance(item, dict)],
+            evidence=[dict(item) for item in payload.get("evidence", []) or [] if isinstance(item, dict)],
+            anchors=[dict(item) for item in payload.get("anchors", []) or [] if isinstance(item, dict)],
+            updated_at=float(payload.get("updated_at", time.time()) or time.time()),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "notes": list(self.notes),
+            "facts": [dict(item) for item in self.facts],
+            "sources": [dict(item) for item in self.sources],
+            "artifacts": [dict(item) for item in self.artifacts],
+            "open_questions": list(self.open_questions),
+            "decisions": [dict(item) for item in self.decisions],
+            "evidence": [dict(item) for item in self.evidence],
+            "anchors": [dict(item) for item in self.anchors],
+            "updated_at": self.updated_at,
+        }
+
+    def add_note(self, note: str | None) -> None:
+        text = _optional_str(note)
+        if not text or text in self.notes:
+            return
+        self.notes.append(text)
+        del self.notes[:-12]
+        self.updated_at = time.time()
+
+    def add_facts(self, facts: list[ObservedFact]) -> None:
+        for fact in facts:
+            payload = fact.to_dict()
+            if payload not in self.facts:
+                self.facts.append(payload)
+        del self.facts[:-24]
+        self.updated_at = time.time()
+
+    def add_decision(self, payload: dict[str, Any]) -> None:
+        self.decisions.append(dict(payload))
+        del self.decisions[:-12]
+        self.updated_at = time.time()
+
+    def add_evidence(self, payload: dict[str, Any]) -> None:
+        self.evidence.append(dict(payload))
+        del self.evidence[:-24]
+        self.updated_at = time.time()
+
+    def add_world_model(self, world_model: WorldModel) -> None:
+        browser = world_model.browser_snapshot or {}
+        if browser:
+            source = {
+                "kind": "browser",
+                "url": browser.get("url"),
+                "title": browser.get("title"),
+                "captured_at": world_model.captured_at,
+            }
+            if source not in self.sources:
+                self.sources.append(source)
+        if world_model.file_observations:
+            for item in world_model.file_observations[:6]:
+                if isinstance(item, dict) and item not in self.artifacts:
+                    self.artifacts.append(dict(item))
+        for anchor in world_model.anchor_candidates[:8]:
+            payload = {"value": str(anchor), "captured_at": world_model.captured_at}
+            if payload not in self.anchors:
+                self.anchors.append(payload)
+        del self.sources[:-16]
+        del self.artifacts[:-16]
+        del self.anchors[:-24]
+        self.updated_at = time.time()
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "notes": list(self.notes[-3:]),
+            "facts": [dict(item) for item in self.facts[-5:]],
+            "sources": [dict(item) for item in self.sources[-4:]],
+            "artifacts": [dict(item) for item in self.artifacts[-4:]],
+            "open_questions": list(self.open_questions[-3:]),
+            "decisions": [dict(item) for item in self.decisions[-3:]],
+            "evidence": [dict(item) for item in self.evidence[-5:]],
+            "anchors": [dict(item) for item in self.anchors[-5:]],
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(slots=True)
 class ExecutionState:
     task: str
     run_id: str
     task_graph: TaskGraph
+    orchestration_phase: str = "planning"
+    active_specialist: str | None = None
+    workspace: TaskWorkspace = field(default_factory=TaskWorkspace)
+    stage_decisions: list[dict[str, Any]] = field(default_factory=list)
+    failure_budget: dict[str, int] = field(default_factory=dict)
+    last_replan_reason: str | None = None
     world_model: WorldModel | None = None
     memory: list[str] = field(default_factory=list)
     facts: list[ObservedFact] = field(default_factory=list)
@@ -576,6 +710,16 @@ class ExecutionState:
             task=str(payload.get("task", "")).strip(),
             run_id=str(payload.get("run_id", "")).strip(),
             task_graph=TaskGraph.from_dict(payload.get("task_graph", {}) or {}),
+            orchestration_phase=str(payload.get("orchestration_phase", "planning")).strip() or "planning",
+            active_specialist=_optional_str(payload.get("active_specialist")),
+            workspace=TaskWorkspace.from_dict(payload.get("workspace") if isinstance(payload, dict) else None),
+            stage_decisions=list(payload.get("stage_decisions", []) or []),
+            failure_budget={
+                str(key).strip(): max(0, int(value or 0))
+                for key, value in dict(payload.get("failure_budget", {}) or {}).items()
+                if str(key).strip()
+            },
+            last_replan_reason=_optional_str(payload.get("last_replan_reason")),
             world_model=None,
             memory=[str(item).strip() for item in payload.get("memory", []) or [] if str(item).strip()],
             facts=[ObservedFact.from_dict(item) for item in payload.get("facts", []) or [] if isinstance(item, dict)],
@@ -609,6 +753,12 @@ class ExecutionState:
             "task": self.task,
             "run_id": self.run_id,
             "task_graph": self.task_graph.to_dict(),
+            "orchestration_phase": self.orchestration_phase,
+            "active_specialist": self.active_specialist,
+            "workspace": self.workspace.to_dict(),
+            "stage_decisions": [dict(item) for item in self.stage_decisions],
+            "failure_budget": dict(self.failure_budget),
+            "last_replan_reason": self.last_replan_reason,
             "world_model": self.world_model.to_dict() if self.world_model is not None else None,
             "memory": list(self.memory),
             "facts": [item.to_dict() for item in self.facts],
@@ -635,9 +785,29 @@ class ExecutionState:
 
 def build_execution_plan_summary(state: ExecutionState) -> dict[str, Any]:
     current_subgoal = state.current_subgoal()
+    last_step = state.last_step
+    last_verification = state.last_verification
+    pending_repair = state.app_context.get("pending_repair") if isinstance(state.app_context, dict) else None
+    recovery_reason = None
+    if isinstance(pending_repair, dict):
+        recovery_reason = _optional_str(pending_repair.get("failure_kind")) or _optional_str(pending_repair.get("message"))
+    if recovery_reason is None and state.failures:
+        latest_failure = state.failures[-1]
+        if isinstance(latest_failure, dict):
+            recovery_reason = _optional_str(latest_failure.get("message")) or _optional_str(latest_failure.get("failure_kind"))
     return {
         "task": state.task,
         "completed": state.completed,
+        "intent": dict(state.task_graph.intent) if isinstance(state.task_graph.intent, dict) else None,
+        "orchestration_phase": state.orchestration_phase,
+        "active_specialist": state.active_specialist,
+        "workspace_summary": state.workspace.summary(),
+        "stage_review_status": state.app_context.get("stage_review_status") if isinstance(state.app_context, dict) else None,
+        "last_replan_reason": state.last_replan_reason,
+        "current_goal": current_subgoal.title if current_subgoal is not None else None,
+        "chosen_capability": last_step.capability if last_step is not None else None,
+        "verification_status": last_verification.status if last_verification is not None else None,
+        "recovery_reason": recovery_reason,
         "current_subgoal": current_subgoal.to_dict() if current_subgoal is not None else None,
         "completion_summary": state.task_graph.completion_summary,
         "subgoals": [item.to_dict() for item in state.task_graph.subgoals],
@@ -663,6 +833,11 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _normalize_decision_type(value: Any) -> str:
+    normalized = str(value or "step_approval").strip().lower()
+    return normalized if normalized in {"plan_review", "stage_review", "step_approval"} else "step_approval"
 
 
 def _optional_float(value: Any) -> float | None:

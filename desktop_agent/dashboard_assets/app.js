@@ -55,6 +55,9 @@ const state = {
   sidebarCollapsed: false,
   mobileSidebarOpen: false,
   pollingHandle: null,
+  overviewFetchInFlight: false,
+  lastOverviewSignature: "",
+  startupDiagnosticsScheduled: false,
   providerSnapshot: null,
   providerStatusMessage: "",
   connected: false,
@@ -146,6 +149,8 @@ const elements = {
   sendShortcutSelect: document.getElementById("sendShortcutSelect"),
   maxStepsInput: document.getElementById("maxStepsInput"),
   pauseInput: document.getElementById("pauseInput"),
+  cursorMotionEnabled: document.getElementById("cursorMotionEnabled"),
+  cursorMotionDuration: document.getElementById("cursorMotionDuration"),
   displaySettingsTitle: document.getElementById("displaySettingsTitle"),
   displaySettingsHint: document.getElementById("displaySettingsHint"),
   displayDetectionSummaryGrid: document.getElementById("displayDetectionSummaryGrid"),
@@ -374,6 +379,8 @@ function bindEvents() {
     elements.structuredOutput,
     elements.browserDomBackend,
     elements.browserDomTimeout,
+    elements.cursorMotionEnabled,
+    elements.cursorMotionDuration,
     elements.browserChannel,
     elements.browserExecutablePath,
     elements.browserHeadless,
@@ -404,45 +411,69 @@ function bindEvents() {
 }
 
 async function refreshOverview(options = {}) {
-  const payload = await fetchJson("/api/overview");
-  if (!payload) {
-    state.connected = false;
-    if (!state.meta) {
-      restoreOverviewSnapshot();
-    }
-    renderAll();
+  if (state.overviewFetchInFlight) {
     return;
   }
+  state.overviewFetchInFlight = true;
+  try {
+    const payload = await fetchJson("/api/overview");
+    if (!payload) {
+      state.connected = false;
+      if (!state.meta) {
+        restoreOverviewSnapshot();
+      }
+      renderAll();
+      return;
+    }
 
-  state.connected = true;
-  state.usingCachedSnapshot = false;
-  state.meta = payload.meta || null;
-  state.runtimePreferences = payload.runtime_preferences || state.runtimePreferences;
-  ensureRuntimePreferencesState();
-  syncChatLaunchState(state.meta);
-  state.activeJob = payload.active_job || null;
-  state.jobs = payload.jobs || [];
-  state.runs = payload.runs || [];
-  persistOverviewSnapshot(payload);
-  clearPendingTaskIfObserved();
+    const nextOverviewSignature = buildOverviewSignature(payload);
+    if (options.background && nextOverviewSignature && state.lastOverviewSignature === nextOverviewSignature) {
+      state.connected = true;
+      state.usingCachedSnapshot = false;
+      return;
+    }
 
-  hydrateDefaults();
-  restoreInitialHistorySelection(options);
-  ensureSelectedRun(options);
-  renderAll();
+    state.connected = true;
+    state.usingCachedSnapshot = false;
+    state.lastOverviewSignature = nextOverviewSignature;
+    state.meta = payload.meta || null;
+    state.runtimePreferences = payload.runtime_preferences || state.runtimePreferences;
+    ensureRuntimePreferencesState();
+    syncChatLaunchState(state.meta);
+    state.activeJob = payload.active_job || null;
+    state.jobs = payload.jobs || [];
+    state.runs = payload.runs || [];
+    persistOverviewSnapshot(payload);
+    clearPendingTaskIfObserved();
 
-  if (state.selectedRunId && shouldRefreshSelectedRunDetails(options)) {
-    await loadRunDetails(state.selectedRunId, { background: Boolean(options.background) });
-  } else {
+    hydrateDefaults();
+    restoreInitialHistorySelection(options);
+    ensureSelectedRun(options);
     renderAll();
+
+    if (state.selectedRunId && shouldRefreshSelectedRunDetails(options)) {
+      await loadRunDetails(state.selectedRunId, { background: Boolean(options.background) });
+    } else {
+      renderAll();
+    }
+    maybeAutoOpenOnboarding();
+    scheduleStartupDiagnostics();
+  } finally {
+    state.overviewFetchInFlight = false;
   }
-  maybeAutoOpenOnboarding();
-  if (!state.environmentCheck && !state.environmentCheckLoading) {
-    scheduleEnvironmentCheck({ immediate: true });
-  }
-  if (!state.displayDetection && !state.displayDetectionLoading) {
-    scheduleDisplayDetection({ immediate: true });
-  }
+}
+
+function scheduleStartupDiagnostics() {
+  if (state.startupDiagnosticsScheduled) return;
+  state.startupDiagnosticsScheduled = true;
+  window.setTimeout(() => {
+    if (!state.environmentCheck && !state.environmentCheckLoading) {
+      scheduleEnvironmentCheck();
+    }
+    if (!state.displayDetection && !state.displayDetectionLoading) {
+      scheduleDisplayDetection();
+    }
+  }, 500);
 }
 
 function updateJobSnapshot(jobId, patch) {
@@ -499,6 +530,8 @@ function hydrateDefaults() {
   if (firstHydration) {
     elements.maxStepsInput.value = defaults.max_steps ?? "";
     elements.pauseInput.value = defaults.pause_after_action ?? "";
+    elements.cursorMotionEnabled.checked = defaults.cursor_motion_enabled !== false;
+    elements.cursorMotionDuration.value = defaults.cursor_motion_duration ?? "";
     elements.modelBaseUrl.value = defaults.model_base_url ?? "";
     elements.modelName.value = defaults.model_name ?? "";
     elements.modelApiKey.value = defaults.model_api_key ?? "";
@@ -515,7 +548,6 @@ function hydrateDefaults() {
   handleProviderChange({ force: firstHydration });
   updateProviderStatusHints();
   updateProviderActionButtons();
-  scheduleRuntimePreferencesSync();
 }
 
 function ensureSelectedRun(options = {}) {
@@ -600,18 +632,30 @@ function renderAll() {
   applyStaticCopy();
   applySupplementalStaticCopy();
   renderTopbar();
-  renderSettingsProfile();
-  renderDisplayDetection();
+  if (state.settingsOpen) {
+    renderSettingsProfile();
+    renderDisplayDetectionSettings();
+    renderProviderCatalogNote();
+  }
   renderOnboardingGuide();
-  renderAboutPanel();
+  if (state.aboutOpen) {
+    renderAboutPanel();
+  }
   renderSidebarRuns();
   renderChat();
-  renderDeveloper();
-  renderHelpCenter();
-  renderInspector();
-  renderProviderCatalogNote();
+  if (state.uiMode === "developer") {
+    renderDeveloper();
+  }
+  if (state.helpOpen) {
+    renderHelpCenter();
+  }
+  if (state.drawerOpen) {
+    renderInspector();
+  }
   updateProviderActionButtons();
-  syncCustomSelects();
+  if (state.settingsOpen) {
+    syncCustomSelects();
+  }
 }
 
 function applyShellState() {
@@ -2238,6 +2282,8 @@ function buildConfigOverrides() {
     browser_control_mode: "hybrid",
     browser_dom_backend: elements.browserDomBackend.value || undefined,
     browser_dom_timeout: elements.browserDomTimeout.value ? Number(elements.browserDomTimeout.value) : undefined,
+    cursor_motion_enabled: Boolean(elements.cursorMotionEnabled?.checked),
+    cursor_motion_duration: elements.cursorMotionDuration?.value ? Number(elements.cursorMotionDuration.value) : undefined,
     browser_channel: elements.browserChannel.value.trim() || undefined,
     browser_executable_path: elements.browserExecutablePath.value.trim() || undefined,
     browser_headless: Boolean(elements.browserHeadless.checked),
@@ -2311,28 +2357,28 @@ function buildStarterSuggestions() {
 
 function buildFollowUpSuggestions(details) {
   const baseTask = normalizeText(details.task || tr("这个任务", "this task"));
-  const items = [
-    {
-      title: tr("继续这个任务", "Continue this task"),
-      description: tr("从当前状态继续。", "Resume from the current state."),
-      task: tr(`继续刚才的任务：${baseTask}。请从当前状态继续。`, `Continue the previous task: ${baseTask}. Resume from the current state.`),
-      actionLabel: tr("继续", "Continue"),
-    },
-  ];
-
   if (needsHumanVerification(details) || details.error || details.cancelled) {
-    items.unshift({
+    return [
+      {
       title: tr("恢复并继续", "Recover and continue"),
-      description: tr("先处理当前中断，再继续。", "Handle the interruption, then resume."),
+      description: tr("先处理当前中断，再从这里恢复。", "Handle the interruption, then resume from here."),
       task: tr(
         `继续刚才的任务：${baseTask}。请先处理当前中断，再从当前状态继续。`,
         `Continue the previous task: ${baseTask}. Resolve the interruption and resume from the current state.`
       ),
-      actionLabel: tr("继续", "Continue"),
-    });
+      actionLabel: tr("恢复", "Recover"),
+    },
+    ];
   }
 
-  return items.slice(0, 2);
+  return [
+    {
+      title: tr("继续这个任务", "Continue this task"),
+      description: tr("从当前状态继续。", "Resume from the current state."),
+      task: tr(`继续刚才的任务：${baseTask}。请从当前状态继续。`, `Continue the previous task: ${baseTask}. Resume from the current state.`),
+      actionLabel: tr("继续任务", "Continue task"),
+    },
+  ];
 }
 
 function localizePreset(item) {
@@ -2376,6 +2422,41 @@ function collectRunScreenshots(details) {
       step: step.step,
     }))
     .reverse();
+}
+
+function buildTimelineStepSignature(step = {}) {
+  const summary = normalizeText(step.plan?.status_summary || step.task || "").toLowerCase();
+  const focus = normalizeText(step.plan?.current_focus || "").toLowerCase();
+  const actionSignature = (step.executed_actions || [])
+    .map((action) => {
+      const type = normalizeText(action?.type || "").toLowerCase();
+      const target = normalizeText(
+        action?.selector ||
+          action?.text ||
+          action?.url ||
+          action?.key ||
+          action?.app ||
+          action?.title ||
+          action?.recipe ||
+          ""
+      ).toLowerCase();
+      return `${type}:${target}`;
+    })
+    .join("|");
+  return [summary, focus, actionSignature].filter(Boolean).join("::");
+}
+
+function collectLatestTimelineMilestones(details, limit = 4) {
+  const seen = new Set();
+  const milestones = [];
+  for (const step of (details.timeline || []).slice().reverse()) {
+    const signature = buildTimelineStepSignature(step) || `step:${step.step}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    milestones.push(step);
+    if (milestones.length >= limit) break;
+  }
+  return milestones;
 }
 
 function collectLatestActions(details) {
@@ -2803,6 +2884,7 @@ function restoreOverviewSnapshot() {
     const raw = window.localStorage.getItem(OVERVIEW_CACHE_KEY);
     if (!raw) return false;
     const snapshot = JSON.parse(raw);
+    state.lastOverviewSignature = buildOverviewSignature(snapshot);
     state.meta = snapshot.meta || null;
     state.runtimePreferences = snapshot.runtime_preferences || state.runtimePreferences;
     ensureRuntimePreferencesState();
@@ -2819,6 +2901,86 @@ function restoreOverviewSnapshot() {
 
 function persistOverviewSnapshot(payload) {
   safeStorageSet(OVERVIEW_CACHE_KEY, JSON.stringify(payload));
+}
+
+function buildOverviewSignature(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const runtimePreferences = payload.runtime_preferences || {};
+  const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+  const runs = Array.isArray(payload.runs) ? payload.runs : [];
+
+  return JSON.stringify({
+    active_job: summarizeOverviewJob(payload.active_job || null),
+    jobs: jobs.slice(0, 8).map((job) => summarizeOverviewJob(job)),
+    runs: runs.slice(0, 12).map((run) => summarizeOverviewRun(run)),
+    runtime_preferences_updated_at: runtimePreferences.updated_at ?? null,
+  });
+}
+
+function summarizeOverviewJob(job) {
+  if (!job || typeof job !== "object") return null;
+  const result = job.result && typeof job.result === "object" ? job.result : {};
+  const executionState =
+    result.execution_state && typeof result.execution_state === "object" ? result.execution_state : {};
+  const pendingDecision =
+    result.pending_decision && typeof result.pending_decision === "object" ? result.pending_decision : null;
+
+  return {
+    id: job.id ?? null,
+    status: job.status ?? null,
+    task: job.task ?? null,
+    updated_at: job.status === "running" ? null : job.updated_at ?? null,
+    cancel_requested: Boolean(job.cancel_requested),
+    cancelled: Boolean(job.cancelled),
+    requires_human: Boolean(job.requires_human),
+    interruption_kind: job.interruption_kind ?? null,
+    interruption_reason: job.interruption_reason ?? null,
+    run_id: result.run_id ?? null,
+    finished_at: result.finished_at ?? null,
+    latest_summary: result.latest_summary ?? null,
+    current_goal: result.current_goal ?? executionState.current_goal ?? null,
+    chosen_capability: result.chosen_capability ?? executionState.chosen_capability ?? null,
+    verification_status: result.verification_status ?? executionState.verification_status ?? null,
+    recovery_reason: result.recovery_reason ?? executionState.recovery_reason ?? null,
+    latest_screenshot: result.latest_screenshot ?? null,
+    latest_actions: Array.isArray(result.latest_actions)
+      ? result.latest_actions.slice(0, 4).map((action) => summarizeOverviewAction(action))
+      : [],
+    live_action: result.live_action ? summarizeOverviewAction(result.live_action) : null,
+    pending_decision: pendingDecision
+      ? {
+          summary: pendingDecision.summary ?? null,
+          reason: pendingDecision.reason ?? null,
+        }
+      : null,
+  };
+}
+
+function summarizeOverviewAction(action) {
+  if (!action || typeof action !== "object") return null;
+  return {
+    type: action.type ?? null,
+    label: action.label ?? action.text ?? action.selector ?? action.url ?? null,
+    status: action.status ?? null,
+    phase: action.phase ?? null,
+  };
+}
+
+function summarizeOverviewRun(run) {
+  if (!run || typeof run !== "object") return null;
+  return {
+    id: run.id ?? null,
+    steps: run.steps ?? null,
+    completed: Boolean(run.completed),
+    cancelled: Boolean(run.cancelled),
+    cancel_reason: run.cancel_reason ?? null,
+    requires_human: Boolean(run.requires_human),
+    interruption_kind: run.interruption_kind ?? null,
+    interruption_reason: run.interruption_reason ?? null,
+    error: run.error ?? null,
+    started_at: run.started_at ?? null,
+    finished_at: run.finished_at ?? null,
+  };
 }
 
 function normalizeLocale(locale) {
@@ -4932,31 +5094,41 @@ function renderAgentRunSection({
   `;
 }
 
-function renderAgentRunHero({ src = "", alt = "", caption = "", supporting = "", runId = "", task = "" } = {}) {
+function renderAgentRunHero({
+  src = "",
+  alt = "",
+  caption = "",
+  supporting = "",
+  runId = "",
+  task = "",
+  livePointer = null,
+  livePointerTrail = [],
+  liveAction = null,
+} = {}) {
   if (!src) return "";
   const zoomButton = `
     <button class="secondary-button" type="button" data-lightbox-src="${escapeHtml(src)}" data-lightbox-caption="${escapeHtml(
-      caption || task || tr("最新截图", "Latest screenshot")
+      caption || task || tr("Latest screenshot", "Latest screenshot")
     )}">
-      ${escapeHtml(tr("放大", "Zoom"))}
+      ${escapeHtml(tr("Zoom", "Zoom"))}
     </button>
   `;
   const detailButton = runId
     ? `
         <button class="secondary-button" type="button" data-open-inspector="${escapeHtml(runId)}">
-          ${escapeHtml(tr("详情", "Details"))}
+          ${escapeHtml(tr("Details", "Details"))}
         </button>
       `
     : "";
   return `
     <figure class="assistant-run__hero">
       <div class="assistant-run__hero-media">
-        <img src="${escapeHtml(src)}" alt="${escapeHtml(alt || caption || task || tr("运行截图", "Run screenshot"))}" />
+        <img src="${escapeHtml(src)}" alt="${escapeHtml(alt || caption || task || tr("Run screenshot", "Run screenshot"))}" />
       </div>
       <figcaption class="assistant-run__hero-caption">
         <div class="assistant-run__hero-copy">
-          <span class="assistant-run__section-label">${escapeHtml(tr("最新画面", "Latest view"))}</span>
-          <strong>${escapeHtml(caption || tr("捕获状态", "Captured state"))}</strong>
+          <span class="assistant-run__section-label">${escapeHtml(tr("Latest view", "Latest view"))}</span>
+          <strong>${escapeHtml(caption || tr("Captured state", "Captured state"))}</strong>
           ${supporting ? `<p>${escapeHtml(supporting)}</p>` : ""}
         </div>
         <div class="assistant-run__hero-actions">
@@ -4965,7 +5137,10 @@ function renderAgentRunHero({ src = "", alt = "", caption = "", supporting = "",
         </div>
       </figcaption>
     </figure>
-  `;
+  `.replace(
+    /(<div class="assistant-run__hero-media">\s*<img[^>]+>)/,
+    `$1${renderLivePointerOverlay(livePointer, livePointerTrail, liveAction)}`
+  );
 }
 
 function renderAgentRunActionPreview(actions = []) {
@@ -4991,7 +5166,10 @@ function renderAgentRunStepPreview(details, steps = []) {
   return renderAgentRunSection({
     label: tr("流程", "Flow"),
     title: tr("步骤预览", "Step preview"),
-    description: tr("保留最近的重要里程碑，剩余内容可在详情里继续查看。", "The freshest milestones from this run."),
+    description: tr(
+      "合并重复动作后，保留最近的重要里程碑；完整记录可在详情里查看。",
+      "Recent milestones with repeated actions collapsed; open details for the full record."
+    ),
     action: timelineButton,
     modifier: "timeline",
     body: `
@@ -5018,8 +5196,8 @@ function renderAgentRunFollowUps(items = []) {
   if (!items.length) return "";
   return renderAgentRunSection({
     label: tr("下一步", "Next"),
-    title: tr("继续推进", "Continue from here"),
-    description: tr("给你一组更顺手的后续操作入口。", "Suggested follow-up prompts to keep momentum."),
+    title: tr("下一步建议", "Suggested next step"),
+    description: tr("保留一个清晰的后续入口。", "Keep one clear action ready for the next move."),
     modifier: "followups",
     body: `
       <div class="assistant-run__followups">
@@ -5029,7 +5207,7 @@ function renderAgentRunFollowUps(items = []) {
               <article class="assistant-run__followup-card">
                 <span class="assistant-run__followup-label">${escapeHtml(item.title)}</span>
                 <p>${escapeHtml(item.description)}</p>
-                <button class="secondary-button" type="button" data-prefill-task="${escapeHtml(item.task)}">
+                <button class="primary-button" type="button" data-prefill-task="${escapeHtml(item.task)}">
                   ${escapeHtml(item.actionLabel)}
                 </button>
               </article>
@@ -5154,11 +5332,33 @@ function renderRunningMessage(active) {
   const executionState = progress.execution_state || {};
   const pendingDecision = progress.pending_decision || executionState.pending_decision || null;
   const currentSubgoal = executionState.current_subgoal || null;
+  const livePointer = progress.live_pointer || null;
+  const livePointerTrail = Array.isArray(progress.live_pointer_trail) ? progress.live_pointer_trail : [];
+  const liveAction = progress.live_action || null;
   const previewUrl =
     progress.run_id && progress.latest_screenshot
       ? buildArtifactUrl(progress.run_id, progress.latest_screenshot)
       : null;
   const latestSummary = normalizeText(progress.latest_summary) || tr("Waiting for the next step.", "Waiting for the next step.");
+  const currentGoal =
+    normalizeText(progress.current_goal || executionState.current_goal || currentSubgoal?.title || "") || latestSummary;
+  const chosenCapability = normalizeText(
+    progress.chosen_capability || executionState.chosen_capability || progress.step_proposal?.capability || ""
+  );
+  const orchestrationPhase = normalizeText(progress.orchestration_phase || executionState.orchestration_phase || "");
+  const activeSpecialist = normalizeText(progress.active_specialist || executionState.active_specialist || "");
+  const workspaceSummary = progress.workspace_summary || executionState.workspace_summary || {};
+  const stageReviewStatus = normalizeText(progress.stage_review_status || executionState.stage_review_status || "");
+  const lastReplanReason = normalizeText(progress.last_replan_reason || executionState.last_replan_reason || "");
+  const verificationStatus = normalizeText(progress.verification_status || executionState.verification_status || "");
+  const recoveryReason = normalizeText(progress.recovery_reason || executionState.recovery_reason || "");
+  const workspaceFacts = Array.isArray(workspaceSummary.facts) ? workspaceSummary.facts.slice(-2) : [];
+  const workspaceSources = Array.isArray(workspaceSummary.sources) ? workspaceSummary.sources.slice(-2) : [];
+  const workspaceLine = [...workspaceFacts, ...workspaceSources]
+    .map((item) => normalizeText(item?.value || item?.title || item?.url || item?.key || ""))
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" | ");
   const latestActions = (progress.latest_actions || []).slice(0, 4);
   const jobState = active.cancel_requested
     ? { label: tr("Stopping", "Stopping"), tone: "warn" }
@@ -5170,16 +5370,29 @@ function renderRunningMessage(active) {
   const approvalSection = pendingDecision
     ? renderAgentRunSection({
         label: tr("Approval", "Approval"),
-        title: tr("Waiting for your approval", "Waiting for your approval"),
+        title:
+          pendingDecision.decision_type === "plan_review"
+            ? tr("Review the task plan", "Review the task plan")
+            : pendingDecision.decision_type === "stage_review"
+              ? tr("Review the replanned stage", "Review the replanned stage")
+            : tr("Waiting for your approval", "Waiting for your approval"),
         description:
           pendingDecision.reason ||
-          tr("This higher-risk step needs approval before the run can continue.", "This higher-risk step needs approval before the run can continue."),
+          (pendingDecision.decision_type === "plan_review" || pendingDecision.decision_type === "stage_review"
+            ? tr("Aoryn will wait before executing this generated plan.", "Aoryn will wait before executing this generated plan.")
+            : tr("This higher-risk step needs approval before the run can continue.", "This higher-risk step needs approval before the run can continue.")),
         modifier: "status",
         body: `
           <div class="assistant-run__callout">
             <div>
               <strong>${escapeHtml(pendingDecision.summary || "")}</strong>
-              <p>${escapeHtml(currentSubgoal?.title || "")}</p>
+              <p>${escapeHtml(
+                pendingDecision.decision_type === "plan_review"
+                  ? (executionState.subgoals || []).map((item) => item.title).filter(Boolean).slice(0, 4).join(" -> ")
+                  : pendingDecision.decision_type === "stage_review"
+                    ? lastReplanReason || stageReviewStatus || currentSubgoal?.title || ""
+                  : currentSubgoal?.title || ""
+              )}</p>
             </div>
           </div>
         `,
@@ -5194,24 +5407,43 @@ function renderRunningMessage(active) {
 
   const liveStateSection = renderAgentRunSection({
     label: tr("Live", "Live"),
-    title: tr("Run is actively progressing", "Run is actively progressing"),
-    description: tr("The card refreshes with the latest captured view and recent execution trace.", "The card refreshes with the latest captured view and recent execution trace."),
+    title: currentGoal,
+    description: recoveryReason
+      ? tr("Aoryn is repairing the current step instead of repeating the same action.", "Aoryn is repairing the current step instead of repeating the same action.")
+      : tr("The card refreshes with the latest captured view and recent execution trace.", "The card refreshes with the latest captured view and recent execution trace."),
     modifier: "status",
     body: `
       <div class="assistant-run__callout">
         <span class="assistant-run__live-dot" aria-hidden="true"></span>
         <div>
-          <strong>${escapeHtml(tr("Streaming execution", "Streaming execution"))}</strong>
-          <p>${escapeHtml(tr("Aoryn is still clicking, typing, and observing the desktop for you.", "Aoryn is still clicking, typing, and observing the desktop for you."))}</p>
+          <strong>${escapeHtml(recoveryReason ? tr("Recovery in progress", "Recovery in progress") : tr("Goal-driven execution", "Goal-driven execution"))}</strong>
+          <p>${escapeHtml(recoveryReason || latestSummary)}</p>
+          ${
+            chosenCapability || activeSpecialist || orchestrationPhase || verificationStatus
+              ? `<p>${escapeHtml(
+                  [
+                    orchestrationPhase ? `${tr("Phase", "Phase")}: ${orchestrationPhase}` : "",
+                    activeSpecialist ? `${tr("Specialist", "Specialist")}: ${activeSpecialist}` : "",
+                    chosenCapability ? `${tr("Capability", "Capability")}: ${chosenCapability}` : "",
+                    verificationStatus ? `${tr("Verification", "Verification")}: ${verificationStatus}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                )}</p>`
+              : ""
+          }
+          ${lastReplanReason ? `<p>${escapeHtml(`${tr("Replan", "Replan")}: ${lastReplanReason}`)}</p>` : ""}
+          ${workspaceLine ? `<p>${escapeHtml(`${tr("Workspace", "Workspace")}: ${workspaceLine}`)}</p>` : ""}
         </div>
       </div>
+      ${renderLiveActionSummary(liveAction)}
     `,
   });
 
   return renderAgentRunCard({
     eyebrow: tr("Agent run", "Agent run"),
     title: cleanRunTitle(active.task || latestSummary),
-    summary: latestSummary,
+    summary: currentGoal || latestSummary,
     stateLabel: effectiveJobState.label,
     stateTone: effectiveJobState.tone,
     metrics: [
@@ -5230,6 +5462,9 @@ function renderRunningMessage(active) {
       supporting: tr("Latest captured frame from the active run.", "Latest captured frame from the active run."),
       runId: progress.run_id,
       task: active.task || "",
+      livePointer,
+      livePointerTrail,
+      liveAction,
     }),
     trace: renderAgentRunActionPreview(latestActions),
     timeline: `${liveStateSection}${approvalSection}`,
@@ -5250,7 +5485,7 @@ function renderRunningMessage(active) {
 
 function renderCompletedConversation(details) {
   const screenshots = collectRunScreenshots(details);
-  const steps = (details.timeline || []).slice(-4).reverse();
+  const steps = collectLatestTimelineMilestones(details, 4);
   const followUps = buildFollowUpSuggestions(details);
   const heroShot = screenshots[0] || null;
   const actions = collectLatestActions(details).slice(0, 4);
@@ -5286,9 +5521,6 @@ function renderCompletedConversation(details) {
       dock: renderAgentRunDock([
         `<button class="secondary-button" type="button" data-open-inspector="${escapeHtml(details.id)}">${escapeHtml(
           tr("详情", "Details")
-        )}</button>`,
-        `<button class="secondary-button" type="button" data-prefill-task="${escapeHtml(details.task || "")}">${escapeHtml(
-          tr("继续", "Continue")
         )}</button>`,
       ]),
       variant: "complete",
@@ -5423,25 +5655,99 @@ function renderDeveloperTimelineItem(step) {
 
 function renderLiveDeveloperTimeline() {
   const progress = state.activeJob?.result || {};
+  const livePointer = progress.live_pointer || null;
+  const livePointerTrail = Array.isArray(progress.live_pointer_trail) ? progress.live_pointer_trail : [];
+  const liveAction = progress.live_action || null;
   const previewUrl =
     progress.run_id && progress.latest_screenshot
       ? buildArtifactUrl(progress.run_id, progress.latest_screenshot)
       : null;
   const actions = (progress.latest_actions || []).slice(0, 4);
+  const liveActionPill = renderLiveActionPill(liveAction);
 
   return `
     <article class="timeline-item timeline-item--developer timeline-item--live">
       <div class="timeline-item__head">
         <div>
-          <p>${escapeHtml(tr("实时", "Live"))}</p>
-          <h3>${escapeHtml(normalizeText(progress.latest_summary) || tr("等待进度", "Waiting for progress"))}</h3>
+          <p>${escapeHtml(tr("Live", "Live"))}</p>
+          <h3>${escapeHtml(normalizeText(progress.latest_summary) || tr("Waiting for progress", "Waiting for progress"))}</h3>
         </div>
-        <span class="status-pill ok">${escapeHtml(tr("执行中", "Running"))}</span>
+        <span class="status-pill ok">${escapeHtml(tr("Running", "Running"))}</span>
       </div>
-      ${actions.length ? `<div class="action-row">${actions.map(renderActionPill).join("")}</div>` : ""}
-      ${previewUrl ? `<img class="timeline-shot" src="${escapeHtml(previewUrl)}" alt="${escapeHtml(tr("最新截图", "Latest screenshot"))}" />` : ""}
-      <div class="timeline-item__meta">${escapeHtml(tr("实时执行中", "Live run in progress"))}</div>
+      ${actions.length || liveActionPill ? `<div class="action-row">${liveActionPill}${actions.map(renderActionPill).join("")}</div>` : ""}
+      ${previewUrl ? renderTimelineShot({ src: previewUrl, alt: tr("Latest screenshot", "Latest screenshot"), livePointer, livePointerTrail, liveAction }) : ""}
+      <div class="timeline-item__meta">${escapeHtml(tr("Live run in progress", "Live run in progress"))}</div>
     </article>
+  `;
+}
+
+function hasRenderableLivePointer(point) {
+  return Number.isFinite(Number(point?.norm_x)) && Number.isFinite(Number(point?.norm_y));
+}
+
+function livePointerPercent(value) {
+  const normalized = Math.min(Math.max(Number(value) || 0, 0), 1) * 100;
+  return `${normalized.toFixed(3)}%`;
+}
+
+function renderLivePointerOverlay(livePointer, livePointerTrail = [], liveAction = null) {
+  const pointerVisible = hasRenderableLivePointer(livePointer);
+  const trail = (Array.isArray(livePointerTrail) ? livePointerTrail : [])
+    .filter(hasRenderableLivePointer)
+    .slice(-10);
+  if (!pointerVisible && !trail.length) return "";
+  const label = normalizeText(liveAction?.label || "");
+  const phase = normalizeText(livePointer?.phase || "");
+  return `
+    <div class="live-pointer-layer" aria-hidden="true">
+      ${trail
+        .map((point, index) => {
+          const intensity = ((index + 1) / trail.length).toFixed(2);
+          return `<span class="live-pointer__trail-dot" style="left:${livePointerPercent(point.norm_x)};top:${livePointerPercent(point.norm_y)};opacity:${intensity};"></span>`;
+        })
+        .join("")}
+      ${
+        pointerVisible
+          ? `
+            <span class="live-pointer" style="left:${livePointerPercent(livePointer.norm_x)};top:${livePointerPercent(livePointer.norm_y)};">
+              <span class="live-pointer__core"></span>
+              ${label || phase ? `<span class="live-pointer__label">${escapeHtml(truncate(label || phase, 40))}</span>` : ""}
+            </span>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderLiveActionSummary(liveAction) {
+  const label = normalizeText(liveAction?.label || "");
+  if (!label) return "";
+  return `
+    <div class="assistant-run__callout assistant-run__callout--compact">
+      <span class="assistant-run__live-dot assistant-run__live-dot--soft" aria-hidden="true"></span>
+      <div>
+        <strong>${escapeHtml(tr("Cursor motion", "Cursor motion"))}</strong>
+        <p>${escapeHtml(label)}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderLiveActionPill(liveAction) {
+  const label = normalizeText(liveAction?.label || "");
+  if (!label) return "";
+  const type = normalizeText(liveAction?.type || tr("Action", "Action"));
+  return `<span class="action-pill action-pill--live">${escapeHtml(type)}<code>${escapeHtml(truncate(label, 32))}</code></span>`;
+}
+
+function renderTimelineShot({ src = "", alt = "", livePointer = null, livePointerTrail = [], liveAction = null } = {}) {
+  if (!src) return "";
+  return `
+    <div class="timeline-shot-wrap">
+      <img class="timeline-shot" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" />
+      ${renderLivePointerOverlay(livePointer, livePointerTrail, liveAction)}
+    </div>
   `;
 }
 
@@ -6306,7 +6612,7 @@ async function refreshDisplayDetection() {
   renderAll();
 }
 
-function scheduleEnvironmentCheck({ immediate = false } = {}) {
+function scheduleEnvironmentCheck({ immediate = false, delayMs = 240 } = {}) {
   if (state.environmentCheckTimer) {
     window.clearTimeout(state.environmentCheckTimer);
   }
@@ -6318,7 +6624,7 @@ function scheduleEnvironmentCheck({ immediate = false } = {}) {
     run();
     return;
   }
-  state.environmentCheckTimer = window.setTimeout(run, 240);
+  state.environmentCheckTimer = window.setTimeout(run, delayMs);
 }
 
 async function refreshEnvironmentCheck() {
@@ -6338,6 +6644,17 @@ async function refreshEnvironmentCheck() {
     state.environmentCheck = { items: [] };
   }
   renderAll();
+  if (environmentCheckHasBackgroundProvider(payload)) {
+    scheduleEnvironmentCheck({ delayMs: 1400 });
+  }
+}
+
+function environmentCheckHasBackgroundProvider(payload) {
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  return items.some((item) => {
+    const detail = String(item?.detail || "").toLowerCase();
+    return item?.id === "provider_connection" && detail.includes("background");
+  });
 }
 
 function getEnvironmentStatusLabel(status) {

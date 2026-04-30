@@ -56,6 +56,18 @@ def test_web_agent_plans_generic_shopping_search():
     assert "购物" in (plan.actions[0].text or "")
 
 
+def test_web_agent_treats_plain_chinese_news_search_as_search_not_shopping():
+    agent = WebAgent()
+
+    plan = agent.try_plan("搜索体育方面新闻")
+
+    assert plan is not None
+    assert plan.done is True
+    assert plan.actions[0].type == "browser_search"
+    assert plan.actions[0].text == "体育方面新闻"
+    assert "shopping" not in plan.status_summary.lower()
+
+
 def test_web_agent_plans_open_url():
     agent = WebAgent(requests_module=_RaisingRequests())
     plan = agent.try_plan("visit openai.com/docs")

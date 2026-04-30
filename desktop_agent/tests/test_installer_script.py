@@ -47,6 +47,10 @@ def test_inno_setup_script_detects_existing_and_legacy_installs_for_cleanup():
     assert "FindFirst(AddBackslash(InstallDirValue) + 'unins???.exe', FindRec)" in source
     assert "UpgradeUninstallKeepUserDataSwitch()" in source
     assert "function IsLikelyAorynInstallEntry(" in source
+    assert "function IsKnownAorynBrowserInstallEntry(" in source
+    assert "Aoryn Browser" in source
+    assert "AorynBrowser.exe" in source
+    assert "if IsKnownAorynBrowserInstallEntry(" in source
     assert "RegGetSubkeyNames" in source
     assert "'DisplayName'" in source
     assert "'Publisher'" in source

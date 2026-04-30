@@ -514,7 +514,7 @@ def _parse_shopping_command(task: str) -> WebCommand | None:
     chinese_patterns = (
         re.compile(
             r"^(?:(?:在|去|上)?(?P<site>淘宝|京东|天猫|亚马逊|amazon|ebay|walmart|target|jd|taobao|tmall|temu|aliexpress|购物网站|电商网站)?(?:上)?)"
-            r"?(?:搜索|找|挑|挑选|看看|购买)(?P<product>.+)$",
+            r"?(?P<verb>搜索|找|挑|挑选|看看|购买|买)(?P<product>.+)$",
             re.I,
         ),
     )
@@ -531,6 +531,14 @@ def _parse_shopping_command(task: str) -> WebCommand | None:
         follow_up = base_follow_up or inline_follow_up
         follow_up_steps = _normalize_follow_up_steps(follow_up)
         marketplace = _normalize_marketplace(match.groupdict().get("site"))
+        verb = str(match.groupdict().get("verb") or "").strip()
+        if pattern in chinese_patterns and not _is_chinese_shopping_command(
+            base_task=base_task,
+            shopping_query=shopping_query,
+            marketplace=marketplace,
+            verb=verb,
+        ):
+            continue
         target = _build_shopping_target(shopping_query, marketplace)
         return WebCommand(
             intent="shopping_search",
@@ -542,6 +550,43 @@ def _parse_shopping_command(task: str) -> WebCommand | None:
         )
 
     return None
+
+
+def _is_chinese_shopping_command(
+    *,
+    base_task: str,
+    shopping_query: str,
+    marketplace: str | None,
+    verb: str,
+) -> bool:
+    if marketplace:
+        return True
+    if verb in {"购买", "买", "挑", "挑选"}:
+        return True
+    lowered = f"{base_task} {shopping_query}".lower()
+    shopping_markers = (
+        "购物",
+        "电商",
+        "商城",
+        "商品",
+        "产品",
+        "店铺",
+        "下单",
+        "加入购物车",
+        "高性价比",
+        "优惠",
+        "折扣",
+        "比价",
+        "淘宝",
+        "京东",
+        "天猫",
+        "亚马逊",
+        "amazon",
+        "jd",
+        "taobao",
+        "tmall",
+    )
+    return any(marker in lowered for marker in shopping_markers)
 
 
 def _normalize_text(text: str) -> str:

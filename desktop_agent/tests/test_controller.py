@@ -114,6 +114,60 @@ def test_desktop_agent_marks_repeated_failed_attempts_as_stuck():
         shutil.rmtree(scratch_root, ignore_errors=True)
 
 
+def test_desktop_agent_stops_repeated_visible_steps_before_third_retry():
+    scratch_root = Path("test_artifacts") / f"controller_visible_loop_{uuid4().hex}"
+    run_root = scratch_root / "runs"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    class _VisibleLoopCapabilityExecutor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def observe(self, world_model):
+            return []
+
+        def propose_step(self, execution_state, world_model):
+            self.calls += 1
+            return StepProposal(
+                intent="Search the web for openai.",
+                actions=[Action.from_dict({"type": "click", "x": 400 + self.calls, "y": 320})],
+                capability="browser_gui",
+                current_focus="search for openai",
+                completes_subgoal=False,
+            )
+
+        def verify_step(self, execution_state, step, before, after):
+            return VerificationResult(
+                success=False,
+                status="failed",
+                failure_kind="blocked_by_ui",
+                message="The page did not advance.",
+            )
+
+    try:
+        config = AgentConfig(dry_run=False, max_steps=6, run_root=run_root)
+        executor = _ExecutorStub()
+        agent = DesktopAgent(
+            config=config,
+            planner=_TwoStepPlanner(),
+            executor=executor,
+            perception=_PerceptionStub(),
+            logger=RunLogger(run_root),
+            guard=ActionGuard(config),
+            capability_executor=_VisibleLoopCapabilityExecutor(),
+        )
+
+        result = agent.run("search the web for openai")
+
+        assert result.completed is False
+        assert result.cancelled is False
+        assert "execution loop" in (result.error or "")
+        assert executor.executed_batches == 2
+        assert result.steps == 3
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
 def test_desktop_agent_respects_stop_requested_between_steps():
     scratch_root = Path("test_artifacts") / f"controller_stop_{uuid4().hex}"
     run_root = scratch_root / "runs"
@@ -175,6 +229,158 @@ def test_desktop_agent_logs_environment_payload():
         assert '"effective"' in step_payload
         assert '"detected"' in step_payload
         assert '"dpi_scale"' in step_payload
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
+def test_desktop_agent_emits_live_pointer_updates_from_executor_progress():
+    scratch_root = Path("test_artifacts") / f"controller_live_pointer_{uuid4().hex}"
+    run_root = scratch_root / "runs"
+    run_root.mkdir(parents=True, exist_ok=True)
+    progress_payloads: list[dict] = []
+
+    class _ProgressExecutor(_ExecutorStub):
+        def __init__(self) -> None:
+            super().__init__()
+            self._progress_callback = None
+
+        def set_action_progress_callback(self, callback):
+            self._progress_callback = callback
+
+        def execute_many(self, actions, pause_after_action, stop_requested=None):
+            super().execute_many(actions, pause_after_action, stop_requested=stop_requested)
+            assert self._progress_callback is not None
+            self._progress_callback(
+                {
+                    "event": "cursor_motion",
+                    "x": 320,
+                    "y": 180,
+                    "target_x": 640,
+                    "target_y": 360,
+                    "phase": "moving",
+                    "updated_at": 1711000000.0,
+                    "live_action": {
+                        "type": "click",
+                        "label": "click(640,360)",
+                        "status": "running",
+                    },
+                }
+            )
+            self._progress_callback({"event": "cursor_motion", "clear": True, "updated_at": 1711000000.1})
+
+    class _LivePointerCapabilityExecutor:
+        def observe(self, world_model):
+            return []
+
+        def propose_step(self, execution_state, world_model):
+            return StepProposal(
+                intent="Click the current target.",
+                actions=[Action.from_dict({"type": "click", "x": 640, "y": 360})],
+                capability="desktop_gui",
+                current_focus="click the current target",
+                completes_subgoal=True,
+            )
+
+        def verify_step(self, execution_state, step, before, after):
+            return VerificationResult(success=True, status="success", evidence=[{"kind": "action", "value": "clicked"}])
+
+    try:
+        config = AgentConfig(dry_run=False, max_steps=1, run_root=run_root)
+        agent = DesktopAgent(
+            config=config,
+            planner=_TwoStepPlanner(),
+            executor=_ProgressExecutor(),
+            perception=_PerceptionStub(),
+            logger=RunLogger(run_root),
+            guard=ActionGuard(config),
+            capability_executor=_LivePointerCapabilityExecutor(),
+            progress_callback=lambda payload: progress_payloads.append(dict(payload)),
+        )
+
+        result = agent.run("click the center target")
+
+        assert result.completed is True
+        pointer_payload = next(item for item in progress_payloads if item.get("live_pointer"))
+        assert pointer_payload["live_pointer"]["x"] == 320
+        assert pointer_payload["live_pointer"]["norm_x"] == 0.25
+        assert pointer_payload["live_pointer"]["norm_y"] == 0.25
+        assert pointer_payload["live_action"]["label"] == "click(640,360)"
+        cleared_payload = next(item for item in reversed(progress_payloads) if item.get("live_pointer") is None)
+        assert cleared_payload["live_pointer_trail"] == []
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
+def test_desktop_agent_requires_plan_review_before_high_risk_task_actions():
+    scratch_root = Path("test_artifacts") / f"controller_plan_review_{uuid4().hex}"
+    run_root = scratch_root / "runs"
+    run_root.mkdir(parents=True, exist_ok=True)
+    decisions: list[dict] = []
+
+    try:
+        config = AgentConfig(dry_run=False, max_steps=3, run_root=run_root)
+        executor = _ExecutorStub()
+        agent = DesktopAgent(
+            config=config,
+            planner=_TwoStepPlanner(),
+            executor=executor,
+            perception=_PerceptionStub(),
+            logger=RunLogger(run_root),
+            guard=ActionGuard(config),
+            decision_callback=lambda payload: decisions.append(payload) or {"decision": "reject"},
+        )
+
+        result = agent.run("visit openai.com and click login")
+
+        assert result.completed is False
+        assert "plan was rejected" in (result.error or "")
+        assert executor.executed_batches == 0
+        assert decisions[0]["pending_decision"]["decision_type"] == "plan_review"
+        assert decisions[0]["pending_decision"]["risk_level"] == "high"
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
+def test_desktop_agent_auto_runs_low_risk_plan_without_plan_review():
+    scratch_root = Path("test_artifacts") / f"controller_low_risk_auto_{uuid4().hex}"
+    run_root = scratch_root / "runs"
+    run_root.mkdir(parents=True, exist_ok=True)
+    decisions: list[dict] = []
+
+    class _LowRiskCapabilityExecutor:
+        def observe(self, world_model):
+            return []
+
+        def propose_step(self, execution_state, world_model):
+            return StepProposal(
+                intent="Open Calculator.",
+                actions=[Action.from_dict({"type": "open_app_if_needed", "app": "calculator"})],
+                capability="desktop_gui",
+                completes_subgoal=True,
+            )
+
+        def verify_step(self, execution_state, step, before, after):
+            return VerificationResult(success=True, status="success", evidence=[{"kind": "state", "value": "calculator"}])
+
+    try:
+        config = AgentConfig(dry_run=False, max_steps=1, run_root=run_root)
+        executor = _ExecutorStub()
+        agent = DesktopAgent(
+            config=config,
+            planner=_TwoStepPlanner(),
+            executor=executor,
+            perception=_PerceptionStub(),
+            logger=RunLogger(run_root),
+            guard=ActionGuard(config),
+            capability_executor=_LowRiskCapabilityExecutor(),
+            decision_callback=lambda payload: decisions.append(payload) or {"decision": "reject"},
+        )
+
+        result = agent.run("open calculator")
+
+        assert result.completed is True
+        assert decisions == []
+        assert executor.executed_batches == 1
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
 
@@ -275,6 +481,94 @@ def test_desktop_agent_replans_after_recoverable_execution_error():
         assert result.completed is True
         assert result.error is None
         assert result.steps == 2
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
+def test_desktop_agent_replans_remaining_work_after_repeated_verification_failure():
+    scratch_root = Path("test_artifacts") / f"controller_replan_remaining_{uuid4().hex}"
+    run_root = scratch_root / "runs"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    class _ReplanTaskGraphPlanner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def plan(self, task, history=None, world_model=None):
+            return TaskGraph(
+                task=task,
+                subgoals=[
+                    Subgoal(
+                        id="subgoal_01",
+                        title="Complete the brittle step",
+                        goal="Complete the brittle step",
+                        goal_type="confirm",
+                        success_condition="The brittle step completes.",
+                        fallback_goal="Complete the repaired step",
+                        capability_preference="desktop_gui",
+                        completion_evidence={"kind": "state_change"},
+                    )
+                ],
+                dependencies={"subgoal_01": []},
+                intent={"task_type": "multi_step_workflow", "risk_level": "low", "ambiguity": "low"},
+            )
+
+        def replan_remaining(self, execution_state, world_model, failure):
+            self.calls += 1
+            graph = execution_state.task_graph
+            graph.subgoals[0].title = "Complete the repaired step"
+            graph.subgoals[0].goal = "Complete the repaired step"
+            graph.subgoals[0].status = "pending"
+            graph.subgoals[0].failed_capabilities = []
+            return graph
+
+    class _ReplanningCapabilityExecutor:
+        def __init__(self) -> None:
+            self.proposals = 0
+
+        def observe(self, world_model):
+            return []
+
+        def propose_step(self, execution_state, world_model):
+            self.proposals += 1
+            return StepProposal(
+                intent=f"Try visible route {self.proposals}.",
+                actions=[Action.from_dict({"type": "click", "x": 100 + self.proposals, "y": 220})],
+                capability="desktop_gui",
+                current_focus=f"attempt {self.proposals}",
+                completes_subgoal=self.proposals >= 4,
+            )
+
+        def verify_step(self, execution_state, step, before, after):
+            if self.proposals >= 4:
+                return VerificationResult(success=True, status="success", evidence=[{"kind": "state", "value": "repaired"}])
+            return VerificationResult(
+                success=False,
+                status="failed",
+                failure_kind="blocked_by_ui",
+                message="The route did not move the task forward.",
+            )
+
+    try:
+        config = AgentConfig(dry_run=False, max_steps=5, run_root=run_root)
+        graph_planner = _ReplanTaskGraphPlanner()
+        agent = DesktopAgent(
+            config=config,
+            planner=_TwoStepPlanner(),
+            executor=_ExecutorStub(),
+            perception=_PerceptionStub(),
+            logger=RunLogger(run_root),
+            guard=ActionGuard(config),
+            task_graph_planner=graph_planner,
+            capability_executor=_ReplanningCapabilityExecutor(),
+        )
+
+        result = agent.run("complete a brittle low risk workflow")
+
+        assert result.completed is True
+        assert graph_planner.calls == 1
+        plan_payload = json.loads((result.run_dir / "plan.json").read_text(encoding="utf-8"))
+        assert plan_payload["subgoals"][0]["title"] == "Complete the repaired step"
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
 
@@ -425,6 +719,241 @@ def test_launch_dashboard_cli_browser_flag_keeps_browser_dashboard(monkeypatch):
     ]
 
 
+def test_build_floating_view_state_idle_and_expanded_input():
+    from desktop_agent.desktop_shell import build_floating_view_state
+
+    idle = build_floating_view_state()
+    expanded = build_floating_view_state(input_expanded=True)
+
+    assert idle.mode == "idle"
+    assert (idle.width, idle.height) == (220, 46)
+    assert idle.show_open is True
+    assert idle.show_add is True
+    assert idle.show_input is False
+
+    assert expanded.mode == "idle_input"
+    assert (expanded.width, expanded.height) == (440, 54)
+    assert expanded.show_input is True
+    assert expanded.show_submit is True
+    assert expanded.show_cancel is True
+    assert expanded.submit_label == "开始"
+
+
+def test_build_floating_view_state_running_stopping_and_queued_input():
+    from desktop_agent.desktop_shell import build_floating_view_state
+
+    active_job = {
+        "id": "job-1",
+        "status": "running",
+        "task": "点击浏览器里的继续按钮然后等待页面刷新",
+    }
+
+    running = build_floating_view_state(active_job=active_job)
+    queued = build_floating_view_state(active_job=active_job, follow_up_draft="下一步搜索文档")
+    expanded = build_floating_view_state(
+        active_job=active_job,
+        follow_up_draft="下一步搜索文档",
+        input_expanded=True,
+    )
+    stopping = build_floating_view_state(active_job={**active_job, "status": "stopping", "cancel_requested": True})
+
+    assert running.mode == "running"
+    assert (running.width, running.height) == (280, 46)
+    assert running.show_timer is True
+    assert running.show_stop is True
+    assert running.show_open is True
+    assert running.show_add is True
+
+    assert queued.mode == "running_queued"
+    assert queued.add_label == "编辑"
+
+    assert expanded.mode == "running_input"
+    assert (expanded.width, expanded.height) == (440, 54)
+    assert expanded.show_input is True
+    assert expanded.submit_label == "排队"
+    assert expanded.input_text == "下一步搜索文档"
+
+    assert stopping.mode == "stopping"
+    assert (stopping.width, stopping.height) == (220, 46)
+    assert stopping.title == "正在停止"
+    assert stopping.show_add is False
+    assert stopping.show_stop is False
+    assert stopping.show_open is True
+
+
+def test_build_floating_view_state_approval_resume_and_waiting_follow_up():
+    from desktop_agent.desktop_shell import build_floating_view_state
+
+    approval = build_floating_view_state(
+        active_job={
+            "id": "job-approve",
+            "status": "approval",
+            "result": {"pending_decision": {"summary": "确认是否点击付款按钮"}},
+        }
+    )
+    resume = build_floating_view_state(
+        resume_run_id="run-human",
+        resume_task="完成验证码后继续",
+        resume_reason="等待人工处理",
+    )
+    waiting = build_floating_view_state(follow_up_draft="继续整理结果")
+    editing = build_floating_view_state(follow_up_draft="继续整理结果", input_expanded=True)
+
+    assert approval.mode == "approval"
+    assert (approval.width, approval.height) == (360, 50)
+    assert approval.show_continue is True
+    assert approval.continue_label == "批准"
+    assert approval.show_stop is True
+    assert approval.stop_label == "驳回"
+
+    assert resume.mode == "resume"
+    assert (resume.width, resume.height) == (360, 50)
+    assert resume.show_continue is True
+    assert resume.continue_label == "恢复"
+    assert resume.show_open is True
+
+    assert waiting.mode == "followup"
+    assert waiting.show_continue is True
+    assert waiting.add_label == "编辑"
+
+    assert editing.mode == "followup_input"
+    assert editing.show_input is True
+    assert editing.submit_label == "更新"
+    assert editing.input_text == "继续整理结果"
+
+
+def test_desktop_shell_controller_stages_follow_up_while_running_without_submitting():
+    from desktop_agent.desktop_shell import DesktopShellController
+
+    floating_updates: list[tuple[dict[str, object], str]] = []
+    controller_stub = SimpleNamespace(
+        current_active_job_id="job-1",
+        current_active_job={"id": "job-1", "status": "running"},
+        follow_up_draft="",
+        main_window=SimpleNamespace(isVisible=lambda: False),
+        floating=SimpleNamespace(
+            update_active_job=lambda job, draft: floating_updates.append((job, draft)),
+            show_waiting_follow_up=lambda draft: floating_updates.append(({}, draft)),
+        ),
+    )
+
+    result = DesktopShellController._submit_or_stage_follow_up(controller_stub, "  下一步打开设置  ")
+
+    assert result is True
+    assert controller_stub.follow_up_draft == "下一步打开设置"
+    assert floating_updates == [({"id": "job-1", "status": "running"}, "下一步打开设置")]
+
+
+def test_desktop_shell_controller_updates_waiting_follow_up_without_submitting():
+    from desktop_agent.desktop_shell import DesktopShellController
+
+    shown: list[str] = []
+    controller_stub = SimpleNamespace(
+        current_active_job_id=None,
+        current_active_job=None,
+        follow_up_draft="旧任务",
+        main_window=SimpleNamespace(isVisible=lambda: False),
+        floating=SimpleNamespace(
+            update_active_job=lambda *_: None,
+            show_waiting_follow_up=lambda draft: shown.append(draft),
+        ),
+    )
+
+    result = DesktopShellController._submit_or_stage_follow_up(controller_stub, "  新任务  ")
+
+    assert result is True
+    assert controller_stub.follow_up_draft == "新任务"
+    assert shown == ["新任务"]
+
+
+def test_desktop_shell_controller_continue_follow_up_clears_only_after_success():
+    from desktop_agent.desktop_shell import DesktopShellController
+
+    hidden: list[str] = []
+    controller_stub = SimpleNamespace(
+        follow_up_draft="继续完成任务",
+        success_feedback_deadline=123.0,
+        _submit_task=lambda task: True,
+        _hide_main_window_for_floating=lambda: hidden.append("hide"),
+    )
+
+    result = DesktopShellController._continue_follow_up(controller_stub)
+
+    assert result is True
+    assert controller_stub.follow_up_draft == ""
+    assert controller_stub.success_feedback_deadline == 0
+    assert hidden == ["hide"]
+
+    failing_stub = SimpleNamespace(
+        follow_up_draft="不要丢掉",
+        success_feedback_deadline=123.0,
+        _submit_task=lambda task: False,
+        _hide_main_window_for_floating=lambda: hidden.append("unexpected"),
+    )
+
+    result = DesktopShellController._continue_follow_up(failing_stub)
+
+    assert result is False
+    assert failing_stub.follow_up_draft == "不要丢掉"
+
+
+def test_desktop_shell_controller_stop_task_updates_state_only_after_success(monkeypatch):
+    from desktop_agent.desktop_shell import DesktopShellController
+
+    updates: list[tuple[dict[str, object], str]] = []
+
+    class _Response:
+        ok = True
+        content = b"{}"
+
+        def json(self):
+            return {"status": "stopping"}
+
+    monkeypatch.setattr("desktop_agent.desktop_shell.requests.post", lambda *_, **__: _Response())
+
+    controller_stub = SimpleNamespace(
+        base_url="http://127.0.0.1:8765",
+        current_active_job={"id": "job-1", "status": "running"},
+        follow_up_draft="保留草稿",
+        main_window=SimpleNamespace(isVisible=lambda: False),
+        floating=SimpleNamespace(update_active_job=lambda job, draft: updates.append((job, draft))),
+    )
+
+    result = DesktopShellController._stop_active_task(controller_stub)
+
+    assert result is True
+    assert controller_stub.current_active_job["status"] == "stopping"
+    assert controller_stub.current_active_job["cancel_requested"] is True
+    assert updates == [(controller_stub.current_active_job, "保留草稿")]
+
+    def _raise(*_, **__):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr("desktop_agent.desktop_shell.requests.post", _raise)
+    failing_stub = SimpleNamespace(
+        base_url="http://127.0.0.1:8765",
+        current_active_job={"id": "job-2", "status": "running"},
+        follow_up_draft="不要清空",
+        main_window=SimpleNamespace(isVisible=lambda: False),
+        floating=SimpleNamespace(update_active_job=lambda *_: None),
+    )
+
+    result = DesktopShellController._stop_active_task(failing_stub)
+
+    assert result is False
+    assert failing_stub.current_active_job == {"id": "job-2", "status": "running"}
+    assert failing_stub.follow_up_draft == "不要清空"
+
+
+def test_desktop_shell_source_keeps_single_current_floating_implementation():
+    source = Path("desktop_agent/desktop_shell.py").read_text(encoding="utf-8")
+
+    assert "class _LegacyFloatingExecutionWindow" not in source
+    assert "class _LegacyDesktopShellController" not in source
+    assert source.count("class FloatingExecutionWindow") == 1
+    assert source.count("class DesktopShellController") == 1
+
+
 def test_desktop_shell_controller_ignores_tray_activation_while_menu_open():
     from desktop_agent.desktop_shell import DesktopShellController
 
@@ -562,7 +1091,7 @@ def test_desktop_shell_controller_keeps_failed_run_in_floating_prompt():
     )
 
     assert controller_stub.last_finished_run_id == "run-failed-1"
-    assert prompted == ["Task needs review"]
+    assert prompted == ["需要处理"]
     assert opened == []
 
 
@@ -677,6 +1206,117 @@ def test_desktop_shell_controller_loads_versioned_dashboard_url(monkeypatch):
     )
 
     assert captured["url"] == f"http://127.0.0.1:8765/index.html?v={desktop_shell.APP_ASSET_VERSION}"
+
+
+def test_desktop_shell_controller_request_overview_refresh_skips_reentrant_calls(monkeypatch):
+    import desktop_agent.desktop_shell as desktop_shell
+
+    started: list[str] = []
+
+    class _ThreadStub:
+        def __init__(self, *, target=None, name=None, daemon=None):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            started.append(self.name or "thread")
+
+    monkeypatch.setattr(desktop_shell.threading, "Thread", _ThreadStub)
+
+    controller_stub = SimpleNamespace(
+        _overview_request_in_flight=False,
+        _fetch_overview_payload=lambda: None,
+    )
+
+    first = desktop_shell.DesktopShellController._request_overview_refresh(controller_stub)
+    second = desktop_shell.DesktopShellController._request_overview_refresh(controller_stub)
+
+    assert first is True
+    assert second is False
+    assert controller_stub._overview_request_in_flight is True
+    assert started == ["desktop-agent-overview-refresh"]
+
+
+def test_desktop_shell_controller_handle_overview_payload_skips_unchanged_snapshots():
+    import desktop_agent.desktop_shell as desktop_shell
+
+    applied: list[dict[str, object]] = []
+    payload = {
+        "active_job": {"id": "job-1", "status": "running", "task": "demo", "result": {"run_id": "run-1"}},
+        "jobs": [{"id": "job-1", "status": "running", "task": "demo", "result": {"run_id": "run-1"}}],
+        "runs": [{"id": "run-1", "steps": 1, "completed": False}],
+        "runtime_preferences": {"updated_at": 12.0},
+    }
+    controller_stub = SimpleNamespace(
+        _overview_request_in_flight=True,
+        _last_overview_signature="",
+        success_feedback_deadline=0.0,
+        _apply_overview_payload=lambda incoming: applied.append(incoming),
+    )
+
+    first = desktop_shell.DesktopShellController._handle_overview_payload(controller_stub, payload)
+    second = desktop_shell.DesktopShellController._handle_overview_payload(controller_stub, payload)
+
+    assert first is True
+    assert second is False
+    assert controller_stub._overview_request_in_flight is False
+    assert len(applied) == 1
+
+
+def test_desktop_shell_controller_handle_overview_payload_applies_changed_snapshots():
+    import desktop_agent.desktop_shell as desktop_shell
+
+    applied: list[dict[str, object]] = []
+    controller_stub = SimpleNamespace(
+        _overview_request_in_flight=True,
+        _last_overview_signature="",
+        success_feedback_deadline=0.0,
+        _apply_overview_payload=lambda incoming: applied.append(incoming),
+    )
+
+    payload_one = {
+        "active_job": {"id": "job-1", "status": "running", "task": "demo", "result": {"run_id": "run-1"}},
+        "jobs": [{"id": "job-1", "status": "running", "task": "demo", "result": {"run_id": "run-1"}}],
+        "runs": [{"id": "run-1", "steps": 1, "completed": False}],
+        "runtime_preferences": {"updated_at": 12.0},
+    }
+    payload_two = {
+        "active_job": None,
+        "jobs": [{"id": "job-1", "status": "completed", "task": "demo", "result": {"run_id": "run-1"}}],
+        "runs": [{"id": "run-1", "steps": 2, "completed": True}],
+        "runtime_preferences": {"updated_at": 12.0},
+    }
+
+    desktop_shell.DesktopShellController._handle_overview_payload(controller_stub, payload_one)
+    changed = desktop_shell.DesktopShellController._handle_overview_payload(controller_stub, payload_two)
+
+    assert changed is True
+    assert len(applied) == 2
+
+
+def test_desktop_shell_controller_handle_overview_error_resets_idle_feedback_after_deadline():
+    import desktop_agent.desktop_shell as desktop_shell
+
+    hidden: list[str] = []
+    shown: list[str] = []
+    controller_stub = SimpleNamespace(
+        _overview_request_in_flight=True,
+        success_feedback_deadline=time.time() - 0.1,
+        main_window=SimpleNamespace(isVisible=lambda: False),
+        floating=SimpleNamespace(
+            hide_floating=lambda: hidden.append("hide"),
+            show_idle=lambda **kwargs: shown.append(kwargs.get("status", "")),
+        ),
+    )
+
+    result = desktop_shell.DesktopShellController._handle_overview_error(controller_stub, "offline")
+
+    assert result is False
+    assert controller_stub._overview_request_in_flight is False
+    assert controller_stub.success_feedback_deadline == 0
+    assert hidden == []
+    assert shown == [""]
 
 
 def test_desktop_main_window_show_policy_uses_work_area_on_windows(monkeypatch):
@@ -801,11 +1441,28 @@ def test_configure_qtwebengine_profile_storage_uses_resolved_root(monkeypatch):
         shutil.rmtree(scratch_root, ignore_errors=True)
 
 
-def test_configure_qtwebengine_environment_enables_single_process_on_windows(monkeypatch):
+def test_configure_qtwebengine_environment_omits_single_process_by_default_on_windows(monkeypatch):
     import desktop_agent.desktop_shell as desktop_shell
 
     monkeypatch.delenv("QTWEBENGINE_CHROMIUM_FLAGS", raising=False)
     monkeypatch.delenv("QTWEBENGINE_DISABLE_SANDBOX", raising=False)
+    monkeypatch.delenv("AORYN_QTWEBENGINE_SINGLE_PROCESS", raising=False)
+    monkeypatch.setattr(desktop_shell.sys, "platform", "win32")
+
+    desktop_shell._configure_qtwebengine_environment()
+
+    flags = set((os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS") or "").split())
+    assert "--no-sandbox" in flags
+    assert "--single-process" not in flags
+    assert os.environ.get("QTWEBENGINE_DISABLE_SANDBOX") == "1"
+
+
+def test_configure_qtwebengine_environment_honors_single_process_escape_hatch(monkeypatch):
+    import desktop_agent.desktop_shell as desktop_shell
+
+    monkeypatch.delenv("QTWEBENGINE_CHROMIUM_FLAGS", raising=False)
+    monkeypatch.delenv("QTWEBENGINE_DISABLE_SANDBOX", raising=False)
+    monkeypatch.setenv("AORYN_QTWEBENGINE_SINGLE_PROCESS", "1")
     monkeypatch.setattr(desktop_shell.sys, "platform", "win32")
 
     desktop_shell._configure_qtwebengine_environment()

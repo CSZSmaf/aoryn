@@ -287,6 +287,7 @@ class CapabilityAdapter:
                     "kind": requirement.kind,
                     "value": requirement.value,
                     "detail": requirement.detail,
+                    "selector": requirement.selector,
                     "required": requirement.required,
                     "satisfied": satisfied,
                 }
@@ -308,6 +309,7 @@ class CapabilityAdapter:
                     "kind": completion_requirement.kind,
                     "value": completion_requirement.value,
                     "detail": completion_requirement.detail,
+                    "selector": completion_requirement.selector,
                     "required": True,
                     "satisfied": completion_satisfied,
                     "scope": "subgoal_completion",
@@ -328,7 +330,7 @@ class CapabilityAdapter:
                 success=False,
                 status="partial_progress",
                 evidence=evidence_results,
-                failure_kind="transient_failure" if completion_satisfied else "goal_ambiguous",
+                failure_kind="verification_failed",
                 message=f"Observed partial progress for {subgoal.title}, but completion evidence is still missing.",
             )
 
@@ -336,7 +338,7 @@ class CapabilityAdapter:
             success=False,
             status="failed",
             evidence=evidence_results,
-            failure_kind="capability_mismatch",
+            failure_kind=_classify_verification_failure(evidence_results),
             message=f"Could not verify subgoal progress for {subgoal.title}.",
         )
 
@@ -660,10 +662,13 @@ class CapabilityRegistry:
         candidates = self.enabled(config)
         driver = driver_registry.detect(world_model) if driver_registry is not None else None
         preferred = set(driver.preferred_capabilities()) if driver is not None else set()
+        intent_preferred = _intent_preferred_capabilities(execution_state)
         completion_kind = _completion_requirement_kind(subgoal)
         ranked: list[tuple[CapabilityAdapter, float]] = []
         for capability in candidates:
             score = capability.can_handle(subgoal, world_model)
+            if capability.name in intent_preferred:
+                score += max(0.0, 0.18 - (0.03 * intent_preferred.index(capability.name)))
             if capability.name == subgoal.capability_preference:
                 score += 0.2
             if capability.name in preferred:
@@ -679,7 +684,7 @@ class CapabilityRegistry:
                 recent_results = execution_state.capability_failures.get(_failure_key(subgoal.id, capability.name), [])[-3:]
                 recent_failures = sum(1 for item in recent_results if item in {"failed", "partial_progress"})
                 if recent_failures >= 2:
-                    score -= 0.45
+                    score -= 0.7
                 elif recent_failures == 1:
                     score -= 0.15
                 if recent_results and recent_results[-1] == "success":
@@ -728,12 +733,18 @@ class CapabilityExecutor:
                 continue
         return _dedupe_facts(facts)
 
-    def choose_capability(self, *, subgoal: Subgoal, world_model: WorldModel) -> CapabilityAdapter:
+    def choose_capability(
+        self,
+        *,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        execution_state: ExecutionState | None = None,
+    ) -> CapabilityAdapter:
         return self.registry.select(
             subgoal=subgoal,
             world_model=world_model,
             config=self.config,
-            execution_state=None,
+            execution_state=execution_state,
             driver_registry=self.driver_registry,
         )
 
@@ -773,6 +784,7 @@ class CapabilityExecutor:
             world_model=world_model,
             execution_state=execution_state,
         )
+        execution_state.app_context["capability_ranking"] = _summarize_capability_ranking(ranked_capabilities)
         selected_capability = ranked_capabilities[0][0]
         capability = selected_capability
         proposal: StepProposal | None = None
@@ -809,6 +821,19 @@ class CapabilityExecutor:
             )
 
         proposal.risk_level = _normalize_text(proposal.risk_level) or infer_step_risk_level(subgoal.title, proposal.actions)
+        if not proposal.rationale:
+            proposal.rationale = _build_capability_choice_rationale(
+                selected=capability.name,
+                ranked=ranked_capabilities,
+                subgoal=subgoal,
+                execution_state=execution_state,
+            )
+        if not proposal.fallbacks:
+            proposal.fallbacks = [
+                candidate.name
+                for candidate, _score in ranked_capabilities
+                if candidate.name != capability.name
+            ][:3]
         if not proposal.expected_evidence:
             proposal.expected_evidence = capability.build_expected_evidence(
                 subgoal=subgoal,
@@ -887,7 +912,13 @@ class CapabilityExecutor:
             verification=verification,
             config=self.config,
         )
-        if proposal is None and verification is not None and verification.failure_kind in {"capability_mismatch", "goal_ambiguous"}:
+        if proposal is None and verification is not None and verification.failure_kind in {
+            "capability_mismatch",
+            "goal_ambiguous",
+            "verification_failed",
+            "stale_target",
+            "missing_data",
+        }:
             for candidate, _score in ranked_capabilities:
                 if previous_step is not None and candidate.name == previous_step.capability:
                     continue
@@ -903,6 +934,18 @@ class CapabilityExecutor:
                     break
         if proposal is None:
             return None
+        proposal.rationale = proposal.rationale or _build_capability_choice_rationale(
+            selected=proposal.capability,
+            ranked=ranked_capabilities,
+            subgoal=subgoal,
+            execution_state=execution_state,
+        )
+        if not proposal.fallbacks:
+            proposal.fallbacks = [
+                candidate.name
+                for candidate, _score in ranked_capabilities
+                if candidate.name != proposal.capability
+            ][:3]
         if not proposal.expected_evidence:
             proposal.expected_evidence = primary.build_expected_evidence(
                 subgoal=subgoal,
@@ -975,6 +1018,7 @@ class CapabilityExecutor:
                 f"The next subgoal requires approval because it is classified as {step.risk_level} risk."
             ),
             risk_level=step.risk_level,
+            decision_type="step_approval",
             actions=list(step.actions),
         )
 
@@ -1066,6 +1110,48 @@ def _failure_key(subgoal_id: str, capability_name: str) -> str:
     return f"{subgoal_id}:{capability_name}"
 
 
+def _intent_preferred_capabilities(execution_state: ExecutionState | None) -> list[str]:
+    if execution_state is None:
+        return []
+    intent = execution_state.task_graph.intent if isinstance(execution_state.task_graph.intent, dict) else {}
+    values = intent.get("preferred_capabilities") if isinstance(intent, dict) else None
+    if not isinstance(values, list):
+        return []
+    preferred: list[str] = []
+    for item in values:
+        name = str(item or "").strip()
+        if name and name not in preferred:
+            preferred.append(name)
+    return preferred
+
+
+def _summarize_capability_ranking(ranked: list[tuple[CapabilityAdapter, float]]) -> list[dict[str, Any]]:
+    return [
+        {"name": capability.name, "score": round(float(score), 3)}
+        for capability, score in ranked[:5]
+    ]
+
+
+def _build_capability_choice_rationale(
+    *,
+    selected: str,
+    ranked: list[tuple[CapabilityAdapter, float]],
+    subgoal: Subgoal,
+    execution_state: ExecutionState,
+) -> str:
+    intent_caps = _intent_preferred_capabilities(execution_state)
+    score = next((score for capability, score in ranked if capability.name == selected), 0.0)
+    reasons: list[str] = [f"Selected {selected} for {subgoal.goal_type} subgoal with score {score:.2f}."]
+    if selected == subgoal.capability_preference:
+        reasons.append("It matches the subgoal capability preference.")
+    if selected in intent_caps:
+        reasons.append("It matches the task intent preference.")
+    recent_results = execution_state.capability_failures.get(_failure_key(subgoal.id, selected), [])
+    if recent_results:
+        reasons.append(f"Recent verification history: {', '.join(recent_results[-3:])}.")
+    return " ".join(reasons)
+
+
 def _world_model_facts(world_model: WorldModel) -> list[ObservedFact]:
     facts: list[ObservedFact] = []
     if world_model.active_app:
@@ -1074,6 +1160,18 @@ def _world_model_facts(world_model: WorldModel) -> list[ObservedFact]:
         facts.append(ObservedFact(source="world_model", key="active_window", value=str(world_model.active_window_title)))
     if world_model.surface_kind:
         facts.append(ObservedFact(source="world_model", key="surface_kind", value=str(world_model.surface_kind)))
+    for source in world_model.fact_sources[:6]:
+        if source:
+            facts.append(ObservedFact(source="world_model", key="fact_source", value=str(source), confidence=0.7))
+    if world_model.state_delta:
+        facts.append(
+            ObservedFact(
+                source="world_model",
+                key="state_delta",
+                value=", ".join(str(key) for key in world_model.state_delta.keys())[:240],
+                confidence=0.75,
+            )
+        )
     if isinstance(world_model.browser_observation, dict):
         runtime = str(world_model.browser_observation.get("runtime") or "").strip()
         if runtime:
@@ -1181,6 +1279,23 @@ def _merge_evidence_requirements(
         seen.add(key)
         merged.append(item)
     return merged
+
+
+def _classify_verification_failure(evidence_results: list[dict[str, Any]]) -> str:
+    unsatisfied = [
+        item
+        for item in evidence_results
+        if isinstance(item, dict) and item.get("required", True) and not item.get("satisfied")
+    ]
+    if any(str(item.get("kind") or "") == "browser_available" for item in unsatisfied):
+        return "stale_target"
+    if any(str(item.get("kind") or "") in {"browser_text_contains", "fact_contains", "file_observation"} for item in unsatisfied):
+        return "missing_data"
+    if any(str(item.get("scope") or "") == "subgoal_completion" for item in unsatisfied):
+        return "verification_failed"
+    if any(str(item.get("selector") or "").strip() for item in unsatisfied):
+        return "stale_target"
+    return "capability_mismatch"
 
 
 def _default_repair_strategy(*, subgoal: Subgoal, proposal: StepProposal) -> list[str]:

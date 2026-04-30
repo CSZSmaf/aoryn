@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
@@ -8,7 +9,7 @@ import time
 import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from desktop_agent.actions import Action
 from desktop_agent.browser_runtime import BrowserRuntimeBridge, BrowserRuntimeError
@@ -47,12 +48,16 @@ class BaseExecutor:
     def __init__(self) -> None:
         self.current_environment: DesktopEnvironment | None = None
         self._active_stop_requested: Callable[[], bool] | None = None
+        self._action_progress_callback: Callable[[dict[str, Any]], None] | None = None
 
     def execute(self, action: Action) -> None:
         raise NotImplementedError
 
     def update_environment(self, environment: DesktopEnvironment | None) -> None:
         self.current_environment = environment
+
+    def set_action_progress_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        self._action_progress_callback = callback
 
     def execute_many(
         self,
@@ -104,6 +109,14 @@ class BaseExecutor:
             time.sleep(chunk)
             remaining -= chunk
 
+    def _emit_action_progress(self, payload: dict[str, Any]) -> None:
+        if self._action_progress_callback is None:
+            return
+        try:
+            self._action_progress_callback(payload)
+        except Exception:
+            return
+
     def browser_snapshot(self) -> dict[str, str | None] | None:
         return None
 
@@ -114,6 +127,8 @@ class ActionExecutor(BaseExecutor):
 
 class RealDesktopExecutor(ActionExecutor):
     """Real desktop executor based on pyautogui."""
+
+    _CURSOR_MOTION_SAMPLE_SECONDS = 0.04
 
     def __init__(self, config: AgentConfig):
         super().__init__()
@@ -152,6 +167,7 @@ class RealDesktopExecutor(ActionExecutor):
                 self._wait_for_window(action.title or action.text or "", action.seconds)
             elif action.type == "relative_click":
                 self._relative_click(
+                    action,
                     action.title or action.text or "",
                     float(action.relative_x or 0.0),
                     float(action.relative_y or 0.0),
@@ -211,12 +227,22 @@ class RealDesktopExecutor(ActionExecutor):
                 gui = _load_pyautogui()
                 gui.write(action.text or "", interval=0.02)
             elif action.type == "drag":
-                gui = _load_pyautogui()
-                gui.moveTo(action.x, action.y)
-                gui.dragTo(action.end_x, action.end_y, duration=0.2, button=action.button)
+                self._drag_between(
+                    action,
+                    start_x=int(action.x or 0),
+                    start_y=int(action.y or 0),
+                    end_x=int(action.end_x or 0),
+                    end_y=int(action.end_y or 0),
+                    button=action.button,
+                )
             elif action.type == "click":
-                gui = _load_pyautogui()
-                gui.click(action.x, action.y, clicks=action.clicks, button=action.button)
+                self._click_at(
+                    action,
+                    x=int(action.x or 0),
+                    y=int(action.y or 0),
+                    clicks=action.clicks,
+                    button=action.button,
+                )
             elif action.type == "scroll":
                 gui = _load_pyautogui()
                 gui.scroll(action.amount or 0)
@@ -507,6 +533,7 @@ class RealDesktopExecutor(ActionExecutor):
 
     def _relative_click(
         self,
+        action: Action,
         title: str,
         relative_x: float,
         relative_y: float,
@@ -522,8 +549,7 @@ class RealDesktopExecutor(ActionExecutor):
         rect = match.rect
         click_x = rect.left + _resolve_relative_axis(relative_x, rect.width)
         click_y = rect.top + _resolve_relative_axis(relative_y, rect.height)
-        gui = _load_pyautogui()
-        gui.click(click_x, click_y, clicks=clicks, button=button)
+        self._click_at(action, x=click_x, y=click_y, clicks=clicks, button=button)
 
     def _dismiss_known_blockers(self) -> None:
         mode = self.config.desktop_autonomy_mode.lower().strip()
@@ -656,6 +682,136 @@ class RealDesktopExecutor(ActionExecutor):
         if target:
             command.append(target)
         subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _click_at(self, action: Action, *, x: int, y: int, clicks: int, button: str) -> None:
+        gui = _load_pyautogui()
+        if not self.config.cursor_motion_enabled:
+            gui.click(x, y, clicks=clicks, button=button)
+            return
+        try:
+            self._move_cursor_smoothly(action, gui, target_x=x, target_y=y, phase="moving")
+            gui.click(clicks=clicks, button=button)
+        finally:
+            self._emit_cursor_motion(action, clear=True)
+
+    def _drag_between(
+        self,
+        action: Action,
+        *,
+        start_x: int,
+        start_y: int,
+        end_x: int,
+        end_y: int,
+        button: str,
+    ) -> None:
+        gui = _load_pyautogui()
+        if not self.config.cursor_motion_enabled:
+            gui.moveTo(start_x, start_y)
+            gui.dragTo(end_x, end_y, duration=0.2, button=button)
+            return
+        mouse_down = False
+        try:
+            self._move_cursor_smoothly(action, gui, target_x=start_x, target_y=start_y, phase="moving")
+            gui.mouseDown(button=button)
+            mouse_down = True
+            self._move_cursor_smoothly(action, gui, target_x=end_x, target_y=end_y, phase="dragging")
+            gui.mouseUp(button=button)
+            mouse_down = False
+        finally:
+            if mouse_down:
+                try:
+                    gui.mouseUp(button=button)
+                except Exception:
+                    pass
+            self._emit_cursor_motion(action, clear=True)
+
+    def _move_cursor_smoothly(
+        self,
+        action: Action,
+        gui,
+        *,
+        target_x: int,
+        target_y: int,
+        phase: str,
+    ) -> None:
+        start_x, start_y = _current_cursor_position(gui, fallback=(target_x, target_y))
+        duration = float(self.config.cursor_motion_duration or 0.2)
+        self._emit_cursor_motion(
+            action,
+            x=start_x,
+            y=start_y,
+            target_x=target_x,
+            target_y=target_y,
+            phase=phase,
+        )
+        if start_x == target_x and start_y == target_y:
+            _move_cursor(gui, target_x, target_y)
+            self._emit_cursor_motion(
+                action,
+                x=target_x,
+                y=target_y,
+                target_x=target_x,
+                target_y=target_y,
+                phase=phase,
+            )
+            return
+
+        steps = max(1, int(math.ceil(duration / self._CURSOR_MOTION_SAMPLE_SECONDS)))
+        step_duration = duration / steps
+        previous_pause = _set_gui_pause(gui, 0)
+        try:
+            for step_index in range(1, steps + 1):
+                self._ensure_not_stopped()
+                progress = step_index / steps
+                next_x = int(round(start_x + (target_x - start_x) * progress))
+                next_y = int(round(start_y + (target_y - start_y) * progress))
+                _move_cursor(gui, next_x, next_y)
+                self._emit_cursor_motion(
+                    action,
+                    x=next_x,
+                    y=next_y,
+                    target_x=target_x,
+                    target_y=target_y,
+                    phase=phase,
+                )
+                if step_index < steps:
+                    self._sleep_interruptibly(step_duration)
+        finally:
+            _set_gui_pause(gui, previous_pause)
+
+    def _emit_cursor_motion(
+        self,
+        action: Action,
+        *,
+        x: int | None = None,
+        y: int | None = None,
+        target_x: int | None = None,
+        target_y: int | None = None,
+        phase: str | None = None,
+        clear: bool = False,
+    ) -> None:
+        if clear:
+            self._emit_action_progress({"event": "cursor_motion", "clear": True, "updated_at": time.time()})
+            return
+        if x is None or y is None or target_x is None or target_y is None:
+            return
+        self._emit_action_progress(
+            {
+                "event": "cursor_motion",
+                "clear": False,
+                "x": int(x),
+                "y": int(y),
+                "target_x": int(target_x),
+                "target_y": int(target_y),
+                "phase": str(phase or "moving"),
+                "updated_at": time.time(),
+                "live_action": {
+                    "type": action.type,
+                    "label": _summarize_live_action(action),
+                    "status": "running",
+                },
+            }
+        )
 
 
 @dataclass(slots=True)
@@ -844,6 +1000,54 @@ def _load_pyautogui():
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.1
     return pyautogui
+
+
+def _current_cursor_position(gui, *, fallback: tuple[int, int]) -> tuple[int, int]:
+    try:
+        position = gui.position()
+    except Exception:
+        return int(fallback[0]), int(fallback[1])
+    if isinstance(position, tuple) and len(position) >= 2:
+        return int(position[0]), int(position[1])
+    try:
+        return int(position.x), int(position.y)
+    except Exception:
+        return int(fallback[0]), int(fallback[1])
+
+
+def _move_cursor(gui, x: int, y: int) -> None:
+    gui.moveTo(int(x), int(y))
+
+
+def _set_gui_pause(gui, value):
+    try:
+        previous = gui.PAUSE
+    except Exception:
+        return None
+    gui.PAUSE = value
+    return previous
+
+
+def _summarize_live_action(action: Action) -> str:
+    if action.type == "click":
+        return f"click({action.x},{action.y})"
+    if action.type == "relative_click":
+        target = action.title or action.text or "window"
+        return f"relative_click({target})"
+    if action.type == "drag":
+        return f"drag({action.x},{action.y}->{action.end_x},{action.end_y})"
+    if action.type == "type":
+        text = (action.text or "").strip()
+        if len(text) > 32:
+            text = text[:29] + "..."
+        return f"type({text})"
+    if action.type == "press":
+        return f"press({action.key})"
+    if action.type == "hotkey":
+        return f"hotkey({'+'.join(action.keys)})"
+    if action.type == "browser_dom_click":
+        return f"browser_dom_click({action.selector or action.text})"
+    return action.type
 
 
 def _resolve_uia_element(*, title: str | None, selector: str | None, text: str | None):

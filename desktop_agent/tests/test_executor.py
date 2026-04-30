@@ -281,8 +281,20 @@ def test_relative_click_targets_window_rect(monkeypatch):
     )
 
     class FakeGui:
-        def click(self, x, y, clicks=1, button="left"):
-            events.append(("click", (x, y, clicks, button)))
+        PAUSE = 0.1
+
+        def __init__(self):
+            self.cursor = (20, 20)
+
+        def position(self):
+            return self.cursor
+
+        def moveTo(self, x, y):
+            self.cursor = (x, y)
+            events.append(("moveTo", (x, y)))
+
+        def click(self, x=None, y=None, clicks=1, button="left"):
+            events.append(("click", (x, y, clicks, button, self.cursor)))
 
     monkeypatch.setattr(
         "desktop_agent.executor.capture_effective_desktop_environment",
@@ -294,6 +306,7 @@ def test_relative_click_targets_window_rect(monkeypatch):
     )
     monkeypatch.setattr("desktop_agent.executor.focus_window", lambda handle: events.append(("focus", handle)) or True)
     monkeypatch.setattr("desktop_agent.executor._load_pyautogui", lambda: FakeGui())
+    monkeypatch.setattr("desktop_agent.executor.time.sleep", lambda seconds: None)
 
     executor = RealDesktopExecutor(AgentConfig(dry_run=False))
     executor.execute(
@@ -309,7 +322,133 @@ def test_relative_click_targets_window_rect(monkeypatch):
     )
 
     assert ("focus", 21) in events
-    assert ("click", (300, 350, 2, "left")) in events
+    assert any(name == "moveTo" for name, _payload in events)
+    assert ("click", (None, None, 2, "left", (300, 350))) in events
+
+
+def test_click_action_moves_cursor_before_click_and_emits_progress(monkeypatch):
+    events: list[tuple[str, object]] = []
+    progress_events: list[dict[str, object]] = []
+
+    class FakeGui:
+        PAUSE = 0.1
+
+        def __init__(self):
+            self.cursor = (10, 15)
+
+        def position(self):
+            return self.cursor
+
+        def moveTo(self, x, y):
+            self.cursor = (x, y)
+            events.append(("moveTo", (x, y)))
+
+        def click(self, x=None, y=None, clicks=1, button="left"):
+            events.append(("click", (x, y, clicks, button, self.cursor)))
+
+    monkeypatch.setattr("desktop_agent.executor._load_pyautogui", lambda: FakeGui())
+    monkeypatch.setattr("desktop_agent.executor.time.sleep", lambda seconds: None)
+
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False, cursor_motion_duration=0.2))
+    executor.set_action_progress_callback(lambda payload: progress_events.append(dict(payload)))
+    action = Action.from_dict({"type": "click", "x": 160, "y": 120, "clicks": 2})
+
+    executor.execute_many([action], pause_after_action=0)
+
+    assert any(name == "moveTo" for name, _payload in events)
+    assert ("click", (None, None, 2, "left", (160, 120))) in events
+    assert any(item.get("event") == "cursor_motion" and not item.get("clear") for item in progress_events)
+    assert progress_events[-1].get("clear") is True
+    assert progress_events[0]["live_action"]["status"] == "running"
+
+
+def test_click_action_can_disable_cursor_motion(monkeypatch):
+    events: list[tuple[str, object]] = []
+
+    class FakeGui:
+        def click(self, x=None, y=None, clicks=1, button="left"):
+            events.append(("click", (x, y, clicks, button)))
+
+    monkeypatch.setattr("desktop_agent.executor._load_pyautogui", lambda: FakeGui())
+
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False, cursor_motion_enabled=False))
+    executor.execute(Action.from_dict({"type": "click", "x": 300, "y": 180, "clicks": 1}))
+
+    assert events == [("click", (300, 180, 1, "left"))]
+
+
+def test_drag_action_moves_cursor_in_stages_and_emits_progress(monkeypatch):
+    events: list[tuple[str, object]] = []
+    progress_events: list[dict[str, object]] = []
+
+    class FakeGui:
+        PAUSE = 0.1
+
+        def __init__(self):
+            self.cursor = (40, 40)
+
+        def position(self):
+            return self.cursor
+
+        def moveTo(self, x, y):
+            self.cursor = (x, y)
+            events.append(("moveTo", (x, y)))
+
+        def mouseDown(self, button="left"):
+            events.append(("mouseDown", (button, self.cursor)))
+
+        def mouseUp(self, button="left"):
+            events.append(("mouseUp", (button, self.cursor)))
+
+    monkeypatch.setattr("desktop_agent.executor._load_pyautogui", lambda: FakeGui())
+    monkeypatch.setattr("desktop_agent.executor.time.sleep", lambda seconds: None)
+
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False, cursor_motion_duration=0.2))
+    executor.set_action_progress_callback(lambda payload: progress_events.append(dict(payload)))
+    action = Action.from_dict({"type": "drag", "x": 100, "y": 120, "end_x": 220, "end_y": 260})
+
+    executor.execute_many([action], pause_after_action=0)
+
+    assert any(name == "moveTo" and payload == (100, 120) for name, payload in events)
+    assert ("mouseDown", ("left", (100, 120))) in events
+    assert ("mouseUp", ("left", (220, 260))) in events
+    assert any(item.get("phase") == "moving" for item in progress_events if not item.get("clear"))
+    assert any(item.get("phase") == "dragging" for item in progress_events if not item.get("clear"))
+    assert progress_events[-1].get("clear") is True
+
+
+def test_click_motion_stops_quickly_when_stop_is_requested(monkeypatch):
+    class FakeGui:
+        PAUSE = 0.1
+
+        def __init__(self):
+            self.cursor = (0, 0)
+
+        def position(self):
+            return self.cursor
+
+        def moveTo(self, x, y):
+            self.cursor = (x, y)
+
+        def click(self, x=None, y=None, clicks=1, button="left"):
+            raise AssertionError("click should not happen after cancellation")
+
+    stop_state = {"checks": 0}
+
+    def stop_requested() -> bool:
+        stop_state["checks"] += 1
+        return stop_state["checks"] >= 3
+
+    monkeypatch.setattr("desktop_agent.executor._load_pyautogui", lambda: FakeGui())
+    monkeypatch.setattr("desktop_agent.executor.time.sleep", lambda seconds: None)
+
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False, cursor_motion_duration=0.2))
+    action = Action.from_dict({"type": "click", "x": 300, "y": 220})
+
+    with pytest.raises(ExecutionCancelled) as exc:
+        executor.execute_many([action], pause_after_action=0, stop_requested=stop_requested)
+
+    assert exc.value.executed_actions == []
 
 
 def test_find_known_blockers_ignores_vscode_main_window():

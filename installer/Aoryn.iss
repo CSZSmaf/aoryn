@@ -208,6 +208,28 @@ begin
   Result := Pos(Uppercase(Needle), Uppercase(Value)) > 0;
 end;
 
+function IsKnownAorynBrowserInstallEntry(
+  const DisplayNameValue: string;
+  const AppNameValue: string;
+  const InstallLocationValue: string;
+  const AppPathValue: string;
+  const UninstallStringValue: string;
+  const QuietUninstallValue: string
+): Boolean;
+begin
+  Result :=
+    (CompareText(Trim(DisplayNameValue), 'Aoryn Browser') = 0) or
+    (CompareText(Trim(AppNameValue), 'Aoryn Browser') = 0) or
+    StringContainsText(InstallLocationValue, 'Aoryn Browser') or
+    StringContainsText(AppPathValue, 'Aoryn Browser') or
+    StringContainsText(UninstallStringValue, 'Aoryn Browser') or
+    StringContainsText(QuietUninstallValue, 'Aoryn Browser') or
+    StringContainsText(InstallLocationValue, 'AorynBrowser.exe') or
+    StringContainsText(AppPathValue, 'AorynBrowser.exe') or
+    StringContainsText(UninstallStringValue, 'AorynBrowser.exe') or
+    StringContainsText(QuietUninstallValue, 'AorynBrowser.exe');
+end;
+
 procedure ResetExistingInstallState();
 begin
   ExistingInstallDetected := False;
@@ -579,6 +601,19 @@ begin
   RegQueryStringValue(RootKey, KeyPath, 'Inno Setup: App Path', AppPathValue);
   RegQueryStringValue(RootKey, KeyPath, 'UninstallString', UninstallStringValue);
   RegQueryStringValue(RootKey, KeyPath, 'QuietUninstallString', QuietUninstallValue);
+
+  if IsKnownAorynBrowserInstallEntry(
+    DisplayNameValue,
+    AppNameValue,
+    InstallLocationValue,
+    AppPathValue,
+    UninstallStringValue,
+    QuietUninstallValue
+  ) then
+  begin
+    Result := False;
+    exit;
+  end;
 
   NameMatch :=
     (CompareText(Trim(DisplayNameValue), '{#AppName}') = 0) or

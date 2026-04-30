@@ -3,6 +3,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -27,6 +28,8 @@ def test_clean_config_overrides_accepts_model_browser_and_display_fields():
         "browser_control_mode": "dom",
         "browser_dom_backend": "playwright",
         "browser_dom_timeout": "12.5",
+        "cursor_motion_enabled": "false",
+        "cursor_motion_duration": "1.8",
         "browser_headless": "true",
         "browser_channel": "chrome",
         "browser_executable_path": "C:/Apps/chrome.exe",
@@ -52,6 +55,8 @@ def test_clean_config_overrides_accepts_model_browser_and_display_fields():
         "browser_control_mode": "dom",
         "browser_dom_backend": "playwright",
         "browser_dom_timeout": 12.5,
+        "cursor_motion_enabled": False,
+        "cursor_motion_duration": 1.8,
         "browser_headless": True,
         "browser_channel": "chrome",
         "browser_executable_path": "C:/Apps/chrome.exe",
@@ -106,6 +111,8 @@ def test_dashboard_meta_exposes_dom_and_model_defaults(monkeypatch):
         assert meta["defaults"]["dry_run"] is False
         assert meta["defaults"]["model_provider"] == "lmstudio_local"
         assert meta["defaults"]["browser_control_mode"] == "hybrid"
+        assert meta["defaults"]["cursor_motion_enabled"] is True
+        assert meta["defaults"]["cursor_motion_duration"] == 0.2
         assert meta["dom_status"]["detail"] == "Playwright missing"
         assert any(item["value"] == "openai_api" for item in meta["model_providers"])
         assert any(item["value"] == "openai_compatible" for item in meta["model_providers"])
@@ -122,6 +129,36 @@ def test_dashboard_meta_exposes_dom_and_model_defaults(monkeypatch):
         assert any(item["id"] == "shopping_refine" for item in meta["workflow_recipes"])
         assert any(item["id"] == "provider_check" for item in meta["workflow_recipes"])
         assert any(item["id"] == "openai_overview" for item in meta["documentation_links"])
+    finally:
+        if config_path.exists():
+            config_path.unlink()
+        temp_root.rmdir()
+
+
+def test_dashboard_overview_does_not_block_on_managed_browser_status(monkeypatch):
+    calls: list[str] = []
+
+    def slow_browser_status(_config):
+        calls.append(threading.current_thread().name)
+        time.sleep(0.2)
+        return {"available": False, "detail": "slow", "base_url": "http://127.0.0.1:38991"}
+
+    monkeypatch.setattr(dashboard, "browser_runtime_status", slow_browser_status)
+
+    temp_root = Path("test_artifacts") / f"dashboard_fast_overview_{uuid4().hex}"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    try:
+        config_path = temp_root / "config.yaml"
+        config_path.write_text("model_provider: lmstudio_local\n", encoding="utf-8")
+        app = DashboardApp(host="127.0.0.1", port=8765, config_path=config_path)
+
+        started = time.perf_counter()
+        payload = app.overview()
+        elapsed = time.perf_counter() - started
+
+        assert elapsed < 0.15
+        assert payload["meta"]["managed_browser_status"]["available"] is False
+        assert payload["meta"]["managed_browser_status"]["detail"] == "Aoryn Browser is not running."
     finally:
         if config_path.exists():
             config_path.unlink()
@@ -186,6 +223,29 @@ def test_load_agent_config_allows_dashboard_to_disable_dry_run():
         config = load_agent_config(config_path, dry_run=False)
 
         assert config.dry_run is False
+    finally:
+        if config_path.exists():
+            config_path.unlink()
+        temp_root.rmdir()
+
+
+def test_load_agent_config_clamps_cursor_motion_duration():
+    temp_root = Path("test_artifacts") / f"dashboard_cursor_motion_{uuid4().hex}"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    try:
+        config_path = temp_root / "config.yaml"
+        config_path.write_text("cursor_motion_duration: 2.4\n", encoding="utf-8")
+
+        config = load_agent_config(
+            config_path,
+            config_overrides={
+                "cursor_motion_enabled": False,
+                "cursor_motion_duration": 0.02,
+            },
+        )
+
+        assert config.cursor_motion_enabled is False
+        assert config.cursor_motion_duration == 0.1
     finally:
         if config_path.exists():
             config_path.unlink()
@@ -606,6 +666,8 @@ def test_dashboard_assets_remove_browser_install_entry_points():
     assert 'id="authLogoutButton"' not in index_html
     assert 'id="authGateOverlay"' not in index_html
     assert 'id="displayOverrideEnabled"' in index_html
+    assert 'id="cursorMotionEnabled"' in index_html
+    assert 'id="cursorMotionDuration"' in index_html
     assert 'id="displayDetectionJsonView"' in index_html
     assert 'id="closeAboutButton"' in index_html
     assert ">脳<" not in index_html
@@ -622,8 +684,15 @@ def test_dashboard_assets_remove_browser_install_entry_points():
         app_js.find("function bindEvents()")
     ]
     render_section = app_js[app_js.find("function renderAll()") : app_js.find("function applyShellState()")]
+    hydrate_section = app_js[app_js.find("function hydrateDefaults()") : app_js.find("function ensureSelectedRun")]
+    overview_signature_section = app_js[
+        app_js.find("function summarizeOverviewJob") : app_js.find("function summarizeOverviewRun")
+    ]
     assert 'loadAuthSession({ silent: true })' not in dom_ready_section
     assert "renderAuthGate();" not in render_section
+    assert "scheduleRuntimePreferencesSync();" not in hydrate_section
+    assert 'updated_at: job.status === "running" ? null' in overview_signature_section
+    assert "summarizeOverviewAction" in overview_signature_section
 
 
 def test_dashboard_chinese_copy_integrity_and_no_known_mojibake_tokens():
@@ -681,6 +750,8 @@ def test_dashboard_runtime_preferences_roundtrip():
                     "model_provider": "openai_compatible",
                     "model_base_url": " https://api.example.com/v1 ",
                     "model_api_key": " secret \n",
+                    "cursor_motion_enabled": False,
+                    "cursor_motion_duration": 0.35,
                     "browser_headless": True,
                 },
                 "ui_preferences": {
@@ -702,6 +773,8 @@ def test_dashboard_runtime_preferences_roundtrip():
                 "model_provider": "openai_compatible",
                 "model_base_url": "https://api.example.com/v1",
                 "model_api_key": "secret",
+                "cursor_motion_enabled": False,
+                "cursor_motion_duration": 0.35,
                 "browser_headless": True,
             }
             assert snapshot["ui_preferences"]["onboarding_completed"] is True
@@ -711,6 +784,8 @@ def test_dashboard_runtime_preferences_roundtrip():
             assert response.status == 200
             assert persisted["config_overrides"]["model_provider"] == "openai_compatible"
             assert persisted["config_overrides"]["model_api_key"] == "secret"
+            assert persisted["config_overrides"]["cursor_motion_enabled"] is False
+            assert persisted["config_overrides"]["cursor_motion_duration"] == 0.35
             assert persisted["ui_preferences"]["onboarding_completed"] is True
             assert isinstance(persisted["updated_at"], float)
     finally:
@@ -1157,6 +1232,93 @@ def test_dashboard_environment_check_reports_missing_api_key(monkeypatch):
     assert payload["items"][3]["status"] == "Ready"
     assert payload["items"][4]["status"] == "Needs setup"
     assert "API key" in payload["items"][4]["detail"]
+
+
+def test_dashboard_environment_check_uses_background_provider_cache(monkeypatch):
+    monkeypatch.setattr(
+        dashboard,
+        "dom_backend_status",
+        lambda backend: type(
+            "Status",
+            (),
+            {"available": True, "backend": backend, "detail": "Playwright ready"},
+        )(),
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "load_agent_config",
+        lambda *args, **kwargs: type(
+            "Config",
+            (),
+            {
+                "model_provider": "lmstudio_local",
+                "model_base_url": "http://127.0.0.1:1234/v1",
+                "model_name": "auto",
+                "model_api_key": "",
+                "model_auto_discover": True,
+                "model_request_timeout": 90.0,
+                "browser_dom_backend": "playwright",
+                "browser_channel": "msedge",
+                "browser_executable_path": "",
+                "run_root": Path("runs"),
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "detect_display_environment",
+        lambda config: type(
+            "DisplayDetection",
+            (),
+            {
+                "override": type(
+                    "Override",
+                    (),
+                    {"status": "auto", "warnings": [], "editable": True},
+                )(),
+            },
+        )(),
+    )
+    provider_checked = threading.Event()
+    calls: list[float] = []
+
+    def fake_fetch_provider_snapshot(*, provider, base_url, api_key, timeout):
+        calls.append(timeout)
+        provider_checked.set()
+        return ProviderSnapshot(
+            ok=False,
+            provider=provider,
+            api_base=base_url,
+            root_base=base_url.removesuffix("/v1"),
+            loaded_models=[],
+            catalog_models=[],
+            error="LM Studio offline",
+        )
+
+    monkeypatch.setattr(dashboard, "fetch_provider_snapshot", fake_fetch_provider_snapshot)
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+
+    first_payload = app.environment_check()
+    first_connection = next(item for item in first_payload["items"] if item["id"] == "provider_connection")
+
+    assert first_connection["status"] == "Needs setup"
+    assert "background" in first_connection["detail"]
+    assert provider_checked.wait(1.0)
+
+    second_connection = first_connection
+    for _ in range(20):
+        second_payload = app.environment_check()
+        second_connection = next(item for item in second_payload["items"] if item["id"] == "provider_connection")
+        if second_connection["detail"] == "LM Studio offline":
+            break
+        time.sleep(0.01)
+
+    assert second_connection["status"] == "Connection failed"
+    assert second_connection["detail"] == "LM Studio offline"
+    assert len(calls) == 1
+    assert calls[0] == pytest.approx(0.9)
+    app.environment_check()
+    assert len(calls) == 1
 
 
 def test_dashboard_environment_check_route_returns_items(monkeypatch):

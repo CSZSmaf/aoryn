@@ -65,3 +65,71 @@ def test_history_lists_runs_and_loads_details():
         assert artifact.name == "step_01.png"
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
+
+
+def test_history_index_refreshes_when_runs_change():
+    scratch_root = Path("test_history_artifacts")
+    run_root = scratch_root / uuid.uuid4().hex
+    first_run_dir = run_root / "20260409_000001_first"
+    second_run_dir = run_root / "20260409_000002_second"
+    first_run_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        (first_run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "task": "first task",
+                    "completed": False,
+                    "steps": 1,
+                    "started_at": 100.0,
+                    "finished_at": 101.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        initial_runs = list_runs(run_root, limit=10)
+        assert [item["id"] for item in initial_runs] == ["20260409_000001_first"]
+        assert initial_runs[0]["steps"] == 1
+
+        (first_run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "task": "first task updated",
+                    "completed": True,
+                    "steps": 3,
+                    "started_at": 100.0,
+                    "finished_at": 103.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        second_run_dir.mkdir(parents=True, exist_ok=True)
+        (second_run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "task": "second task",
+                    "completed": True,
+                    "steps": 2,
+                    "started_at": 200.0,
+                    "finished_at": 201.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        updated_runs = list_runs(run_root, limit=10)
+        assert [item["id"] for item in updated_runs] == [
+            "20260409_000002_second",
+            "20260409_000001_first",
+        ]
+        assert updated_runs[1]["task"] == "first task updated"
+        assert updated_runs[1]["steps"] == 3
+
+        shutil.rmtree(second_run_dir, ignore_errors=True)
+
+        after_delete_runs = list_runs(run_root, limit=10)
+        assert [item["id"] for item in after_delete_runs] == ["20260409_000001_first"]
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)

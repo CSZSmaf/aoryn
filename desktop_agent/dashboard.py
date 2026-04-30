@@ -35,6 +35,7 @@ from desktop_agent.controller import discover_config_path, load_agent_config, re
 from desktop_agent.history import list_runs, load_run_details, resolve_artifact_path
 from desktop_agent.provider_tools import (
     ProviderModelEntry,
+    ProviderSnapshot,
     ProviderToolError,
     build_request_headers,
     fetch_provider_snapshot,
@@ -475,6 +476,9 @@ class RuntimePreferencesStore:
 _CHAT_PROVIDER_ERROR_LIMIT = 320
 _VISION_CHAT_COMPAT_MAX_HISTORY = 2
 _VISION_CHAT_COMPAT_MAX_MESSAGE_CHARS = 900
+_MANAGED_BROWSER_STATUS_CACHE_SECONDS = 10.0
+_PROVIDER_ENVIRONMENT_CACHE_SECONDS = 20.0
+_PROVIDER_ENVIRONMENT_REFRESH_TIMEOUT_SECONDS = 0.9
 _VISION_MODEL_PATTERN = re.compile(r"(^|[\/._:-])vl([\/._:-]|$)")
 _MODEL_SIZE_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*([bm])", re.I)
 _MATH_LATEX_COMMAND_PATTERN = re.compile(
@@ -852,6 +856,12 @@ class DashboardApp:
         self.run_root = config.run_root
         self.runtime_preferences = RuntimePreferencesStore(runtime_preferences_path_for(self.config_path))
         self.cache_root = default_cache_root()
+        self._managed_browser_status_lock = threading.Lock()
+        self._managed_browser_status_cache: dict[str, Any] | None = None
+        self._managed_browser_status_refreshing = False
+        self._provider_environment_lock = threading.Lock()
+        self._provider_environment_cache: dict[str, dict[str, Any]] = {}
+        self._provider_environment_refreshing: set[str] = set()
 
     def create_server(self) -> ThreadingHTTPServer:
         app = self
@@ -1140,7 +1150,7 @@ class DashboardApp:
         config = load_agent_config(self.config_path)
         dom_status = dom_backend_status(config.browser_dom_backend)
         diagnostics = self.system_paths()
-        managed_browser = browser_runtime_status(config)
+        managed_browser = self._managed_browser_status(config)
         return {
             "title": APP_NAME,
             "version": APP_VERSION,
@@ -1159,6 +1169,8 @@ class DashboardApp:
                 "dry_run": False,
                 "max_steps": config.max_steps,
                 "pause_after_action": config.pause_after_action,
+                "cursor_motion_enabled": config.cursor_motion_enabled,
+                "cursor_motion_duration": config.cursor_motion_duration,
                 "primary_model_profile": config.primary_model_profile,
                 "fallback_model_profile": config.fallback_model_profile,
                 "model_provider": config.model_provider,
@@ -1386,6 +1398,42 @@ class DashboardApp:
             "runs": list_runs(self.run_root, limit=12),
         }
 
+    def _managed_browser_status(self, config: Any) -> dict[str, Any]:
+        now = time.time()
+        signature = _managed_browser_status_signature(config)
+        with self._managed_browser_status_lock:
+            cached = self._managed_browser_status_cache
+            if (
+                cached
+                and cached.get("signature") == signature
+                and now - float(cached.get("updated_at") or 0.0) < _MANAGED_BROWSER_STATUS_CACHE_SECONDS
+            ):
+                return dict(cached.get("payload") or _default_managed_browser_status(config))
+            if not self._managed_browser_status_refreshing:
+                self._managed_browser_status_refreshing = True
+                threading.Thread(
+                    target=self._refresh_managed_browser_status,
+                    args=(config, signature),
+                    name="dashboard-managed-browser-status",
+                    daemon=True,
+                ).start()
+            if cached and cached.get("signature") == signature:
+                return dict(cached.get("payload") or _default_managed_browser_status(config))
+        return _default_managed_browser_status(config)
+
+    def _refresh_managed_browser_status(self, config: Any, signature: str) -> None:
+        try:
+            payload = browser_runtime_status(config)
+        except Exception as exc:
+            payload = _default_managed_browser_status(config, detail=f"Aoryn Browser status unavailable: {exc}")
+        with self._managed_browser_status_lock:
+            self._managed_browser_status_cache = {
+                "signature": signature,
+                "updated_at": time.time(),
+                "payload": dict(payload),
+            }
+            self._managed_browser_status_refreshing = False
+
     def system_paths(self) -> dict[str, Any]:
         config_path = self.config_path or (
             default_packaged_config_path() if is_frozen_runtime() else (self.project_root / "config.yaml")
@@ -1540,13 +1588,15 @@ class DashboardApp:
             connection_item["detail"] = "Add an API key in Settings before checking the provider connection."
             connection_item["action"] = "open_settings"
         else:
-            snapshot = fetch_provider_snapshot(
+            snapshot = self._environment_provider_snapshot(
                 provider=provider_value,
                 base_url=api_base,
                 api_key=api_key,
-                timeout=min(float(config.model_request_timeout), 10.0),
+                timeout=float(config.model_request_timeout),
             )
-            if snapshot.ok:
+            if snapshot is None:
+                connection_item["detail"] = "Checking the provider connection in the background."
+            elif snapshot.ok:
                 catalog_count = len(snapshot.catalog_models)
                 loaded_count = len(snapshot.loaded_models)
                 if provider_value == "lmstudio_local":
@@ -1585,6 +1635,74 @@ class DashboardApp:
             "provider": provider_value,
             "model_name": model_name,
         }
+
+    def _environment_provider_snapshot(
+        self,
+        *,
+        provider: str,
+        base_url: str,
+        api_key: str,
+        timeout: float,
+    ) -> ProviderSnapshot | None:
+        now = time.time()
+        signature = _provider_environment_signature(provider=provider, base_url=base_url, api_key=api_key)
+        with self._provider_environment_lock:
+            cached = self._provider_environment_cache.get(signature)
+            if cached and now - float(cached.get("updated_at") or 0.0) < _PROVIDER_ENVIRONMENT_CACHE_SECONDS:
+                snapshot = cached.get("snapshot")
+                return snapshot if isinstance(snapshot, ProviderSnapshot) else None
+            if signature not in self._provider_environment_refreshing:
+                self._provider_environment_refreshing.add(signature)
+                threading.Thread(
+                    target=self._refresh_environment_provider_snapshot,
+                    kwargs={
+                        "signature": signature,
+                        "provider": provider,
+                        "base_url": base_url,
+                        "api_key": api_key,
+                        "timeout": timeout,
+                    },
+                    name="dashboard-provider-environment-check",
+                    daemon=True,
+                ).start()
+            if cached:
+                snapshot = cached.get("snapshot")
+                return snapshot if isinstance(snapshot, ProviderSnapshot) else None
+        return None
+
+    def _refresh_environment_provider_snapshot(
+        self,
+        *,
+        signature: str,
+        provider: str,
+        base_url: str,
+        api_key: str,
+        timeout: float,
+    ) -> None:
+        try:
+            snapshot = fetch_provider_snapshot(
+                provider=provider,
+                base_url=base_url,
+                api_key=api_key,
+                timeout=min(float(timeout), _PROVIDER_ENVIRONMENT_REFRESH_TIMEOUT_SECONDS),
+            )
+        except Exception as exc:
+            api_base = normalize_api_base_url(base_url)
+            snapshot = ProviderSnapshot(
+                ok=False,
+                provider=provider,
+                api_base=api_base,
+                root_base=api_base,
+                loaded_models=[],
+                catalog_models=[],
+                error=f"Could not check provider connection: {exc}",
+            )
+        with self._provider_environment_lock:
+            self._provider_environment_cache[signature] = {
+                "updated_at": time.time(),
+                "snapshot": snapshot,
+            }
+            self._provider_environment_refreshing.discard(signature)
 
     def display_detection(self) -> dict[str, Any]:
         config = load_agent_config(self.config_path, config_overrides=self._runtime_config_overrides())
@@ -2405,6 +2523,51 @@ def _open_browser_when_ready(url: str, *, attempts: int = 20, delay_seconds: flo
     _open_browser(url)
 
 
+def _managed_browser_base_url(config: Any) -> str:
+    host = str(getattr(config, "managed_browser_host", "127.0.0.1") or "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        port = int(getattr(config, "managed_browser_port", 38991) or 38991)
+    except (TypeError, ValueError):
+        port = 38991
+    return f"http://{host}:{port}"
+
+
+def _managed_browser_status_signature(config: Any) -> str:
+    try:
+        port = int(getattr(config, "managed_browser_port", 38991) or 38991)
+    except (TypeError, ValueError):
+        port = 38991
+    return json.dumps(
+        {
+            "transport": str(getattr(config, "browser_runtime_transport", "local_http") or "local_http"),
+            "host": str(getattr(config, "managed_browser_host", "127.0.0.1") or "127.0.0.1"),
+            "port": port,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _default_managed_browser_status(config: Any, *, detail: str = "Aoryn Browser is not running.") -> dict[str, Any]:
+    return {
+        "available": False,
+        "detail": detail,
+        "base_url": _managed_browser_base_url(config),
+    }
+
+
+def _provider_environment_signature(*, provider: str, base_url: str, api_key: str) -> str:
+    return json.dumps(
+        {
+            "provider": str(provider or "").strip(),
+            "base_url": normalize_api_base_url(base_url),
+            "api_key": str(api_key or ""),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _try_webbrowser_open(url: str) -> bool:
     try:
         return bool(webbrowser.open(url, new=2))
@@ -2516,6 +2679,8 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
         "browser_control_mode": _optional_text,
         "browser_dom_backend": _optional_text,
         "browser_dom_timeout": _optional_float,
+        "cursor_motion_enabled": _optional_bool,
+        "cursor_motion_duration": _optional_float,
         "browser_headless": _optional_bool,
         "browser_channel": _optional_text,
         "browser_executable_path": _optional_text,

@@ -515,6 +515,8 @@ await runTest("hydrates provider settings from runtime preferences before meta d
       browser_dom_backend: "playwright",
       browser_channel: "msedge",
       browser_headless: false,
+      cursor_motion_enabled: true,
+      cursor_motion_duration: 0.2,
     },
     runtimePreferences: {
       config_overrides: {
@@ -526,6 +528,8 @@ await runTest("hydrates provider settings from runtime preferences before meta d
         browser_dom_backend: "playwright",
         browser_channel: "chrome",
         browser_headless: true,
+        cursor_motion_enabled: false,
+        cursor_motion_duration: 0.35,
       },
       ui_preferences: {},
       updated_at: 123,
@@ -569,11 +573,15 @@ renderAvailableModels = globalThis.__appTest.originals.renderAvailableModels;
   assert.equal(context.document.getElementById("structuredOutput").value, "json_object");
   assert.equal(context.document.getElementById("browserChannel").value, "chrome");
   assert.equal(context.document.getElementById("browserHeadless").checked, true);
+  assert.equal(context.document.getElementById("cursorMotionEnabled").checked, false);
+  assert.equal(context.document.getElementById("cursorMotionDuration").value, 0.35);
 
   const overrides = snapshot(context.__appTest.originals.buildConfigOverrides());
   assert.equal(overrides.model_provider, "openai_compatible");
   assert.equal(overrides.model_base_url, "https://api.runtime.example/v1");
   assert.equal(overrides.model_name, "gpt-runtime");
+  assert.equal(overrides.cursor_motion_enabled, false);
+  assert.equal(overrides.cursor_motion_duration, 0.35);
 });
 
 
@@ -804,6 +812,75 @@ await runTest("completed run renders as one unified result block", async () => {
 });
 
 
+await runTest("completed run collapses repeated steps and keeps one follow-up action", async () => {
+  const context = createHarness();
+  context.__appTest.state.locale = "en-US";
+
+  const messages = context.__appTest.renderCompletedConversation({
+    id: "run-dedupe",
+    task: "Search the web for openai",
+    started_at: 1711000000,
+    finished_at: 1711000125,
+    steps: 5,
+    completed: true,
+    cancelled: false,
+    requires_human: false,
+    error: null,
+    cancel_reason: null,
+    interruption_reason: null,
+    dry_run: false,
+    timeline: [
+      {
+        step: 1,
+        task: "Search the web for openai",
+        captured_at: 1711000005,
+        screenshot: "shot-1.png",
+        executed_actions: [{ type: "browser_search", text: "openai" }],
+        plan: { status_summary: "Search the web for openai." },
+      },
+      {
+        step: 2,
+        task: "Search the web for openai",
+        captured_at: 1711000020,
+        screenshot: "shot-2.png",
+        executed_actions: [{ type: "browser_search", text: "openai" }],
+        plan: { status_summary: "Search the web for openai." },
+      },
+      {
+        step: 3,
+        task: "Search the web for openai",
+        captured_at: 1711000040,
+        screenshot: "shot-3.png",
+        executed_actions: [{ type: "browser_search", text: "openai" }],
+        plan: { status_summary: "Search the web for openai." },
+      },
+      {
+        step: 4,
+        task: "Search the web for openai",
+        captured_at: 1711000060,
+        screenshot: "shot-4.png",
+        executed_actions: [{ type: "browser_search", text: "openai" }],
+        plan: { status_summary: "Search the web for openai." },
+      },
+      {
+        step: 5,
+        task: "Open the first result",
+        captured_at: 1711000105,
+        screenshot: "shot-5.png",
+        executed_actions: [{ type: "click", text: "OpenAI" }],
+        plan: { status_summary: "Open the first result." },
+      },
+    ],
+  });
+
+  assert.equal(messages.length, 1);
+  assert.equal((messages[0].match(/assistant-run__step-item/g) || []).length, 2);
+  assert.equal((messages[0].match(/assistant-run__followup-card/g) || []).length, 1);
+  assert.equal((messages[0].match(/data-prefill-task=/g) || []).length, 1);
+  assert.match(messages[0], /Continue task/);
+});
+
+
 await runTest("chat and agent renderers both use the refreshed card shell", async () => {
   const context = createHarness();
   context.__appTest.state.locale = "en-US";
@@ -830,6 +907,12 @@ await runTest("chat and agent renderers both use the refreshed card shell", asyn
         { type: "launch_app", app: "calculator" },
         { type: "type", text: "7+8" },
       ],
+      live_pointer: { norm_x: 0.45, norm_y: 0.4, phase: "moving" },
+      live_pointer_trail: [
+        { norm_x: 0.3, norm_y: 0.28, updated_at: 1711000001 },
+        { norm_x: 0.38, norm_y: 0.34, updated_at: 1711000002 },
+      ],
+      live_action: { type: "click", label: "click(640,360)", status: "running" },
       steps: 2,
       dry_run: false,
     },
@@ -841,6 +924,7 @@ await runTest("chat and agent renderers both use the refreshed card shell", asyn
   assert.match(agentHtml, /assistant-shell/);
   assert.match(agentHtml, /assistant-card--run/);
   assert.match(agentHtml, /assistant-run__hero/);
+  assert.match(agentHtml, /live-pointer-layer/);
   assert.match(agentHtml, /logo-mark\.png/);
 });
 
@@ -1131,4 +1215,37 @@ await runTest("custom select preserves menu scroll while the shell refreshes", a
 
   assert.equal(context.__appTest.state.customSelectMenuState.availableModels.scrollTop, 132);
   assert.equal(nextMenu.scrollTop, 132);
+});
+
+await runTest("background overview refresh skips rerender when the snapshot is unchanged", async () => {
+  const overview = buildOverviewPayload({
+    runs: [{ id: "run-1", task: "demo", steps: 1, completed: false }],
+    runtimePreferences: { updated_at: 12 },
+  });
+  const context = createHarness({ overviewPayload: snapshot(overview) });
+
+  context.__renderCount = 0;
+  context.__persistCount = 0;
+  vm.runInContext(
+    `
+renderAll = () => { globalThis.__renderCount += 1; };
+persistOverviewSnapshot = () => { globalThis.__persistCount += 1; };
+`,
+    context
+  );
+
+  context.__appTest.initializeState();
+  await context.__appTest.refreshOverview({ initial: true });
+
+  const renderCountAfterInitial = context.__renderCount;
+  const persistCountAfterInitial = context.__persistCount;
+  const detailCallsAfterInitial = context.__loadRunDetailsCalls.length;
+
+  await context.__appTest.refreshOverview({ background: true });
+
+  assert.equal(context.__renderCount, renderCountAfterInitial);
+  assert.equal(context.__persistCount, persistCountAfterInitial);
+  assert.equal(context.__loadRunDetailsCalls.length, detailCallsAfterInitial);
+  assert.equal(typeof context.__appTest.state.lastOverviewSignature, "string");
+  assert.notEqual(context.__appTest.state.lastOverviewSignature, "");
 });

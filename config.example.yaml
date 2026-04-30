@@ -2,6 +2,8 @@ planner_mode: auto
 dry_run: true
 max_steps: 6
 pause_after_action: 0.4
+cursor_motion_enabled: true
+cursor_motion_duration: 0.2
 max_text_length: 200
 max_browser_target_length: 512
 max_wait_seconds: 10
@@ -16,7 +18,15 @@ model_auto_discover: true
 model_structured_output: auto
 model_provider: lmstudio_local
 approval_policy: tiered
+complex_task_planning: hybrid
+plan_review_policy: low_risk_auto
+max_task_subgoals: 8
 max_subgoal_retries: 2
+orchestrator_mode: unified
+stage_review_policy: risk_change
+task_workspace_enabled: true
+max_replans_per_run: 2
+max_failures_per_subgoal: 3
 enabled_capabilities:
   - browser_dom
   - windows_uia

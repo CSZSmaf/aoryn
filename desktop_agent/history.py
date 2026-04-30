@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,35 +41,82 @@ class RunRecord:
         }
 
 
-def list_runs(run_root: Path, limit: int = 20) -> list[dict[str, Any]]:
-    records: list[RunRecord] = []
-    if not run_root.exists():
-        return []
+@dataclass(slots=True)
+class _CachedRunSummary:
+    record: RunRecord
+    summary_mtime_ns: int
+    summary_size: int
 
-    for summary_path in run_root.glob("*/summary.json"):
-        try:
-            payload = json.loads(summary_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        run_dir = summary_path.parent
-        stat = summary_path.stat()
-        started_at = payload.get("started_at")
-        records.append(
-            RunRecord(
-                run_id=run_dir.name,
-                task=str(payload.get("task", run_dir.name)),
-                completed=bool(payload.get("completed", False)),
-                steps=int(payload.get("steps", 0) or 0),
-                error=payload.get("error"),
-                created_at=float(started_at) if isinstance(started_at, (int, float)) else stat.st_mtime,
-                summary_payload=payload,
-                summary_path=summary_path,
-                run_dir=run_dir,
+
+class RunHistoryIndex:
+    """Incrementally caches run summaries for overview-style queries."""
+
+    def __init__(self, run_root: Path) -> None:
+        self.run_root = run_root.resolve()
+        self._entries: dict[str, _CachedRunSummary] = {}
+        self._lock = threading.Lock()
+
+    def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            records = self._refresh_records_locked()
+            selected = records[: max(0, int(limit))]
+            return [record.to_dict() for record in selected]
+
+    def _refresh_records_locked(self) -> list[RunRecord]:
+        if not self.run_root.exists():
+            self._entries.clear()
+            return []
+
+        seen_run_ids: set[str] = set()
+        for summary_path in self.run_root.glob("*/summary.json"):
+            run_dir = summary_path.parent
+            run_id = run_dir.name
+            seen_run_ids.add(run_id)
+            try:
+                stat = summary_path.stat()
+            except OSError:
+                self._entries.pop(run_id, None)
+                continue
+
+            cached = self._entries.get(run_id)
+            if (
+                cached is not None
+                and cached.summary_mtime_ns == stat.st_mtime_ns
+                and cached.summary_size == stat.st_size
+            ):
+                continue
+
+            payload = _load_summary_payload(summary_path)
+            if payload is None:
+                self._entries.pop(run_id, None)
+                continue
+
+            self._entries[run_id] = _CachedRunSummary(
+                record=_build_run_record(
+                    run_dir=run_dir,
+                    summary_path=summary_path,
+                    summary_payload=payload,
+                    summary_stat=stat,
+                ),
+                summary_mtime_ns=stat.st_mtime_ns,
+                summary_size=stat.st_size,
             )
-        )
 
-    records.sort(key=lambda item: item.created_at, reverse=True)
-    return [record.to_dict() for record in records[:limit]]
+        stale_run_ids = [run_id for run_id in self._entries if run_id not in seen_run_ids]
+        for run_id in stale_run_ids:
+            self._entries.pop(run_id, None)
+
+        records = [entry.record for entry in self._entries.values()]
+        records.sort(key=lambda item: item.created_at, reverse=True)
+        return records
+
+
+_RUN_HISTORY_INDEXES: dict[str, RunHistoryIndex] = {}
+_RUN_HISTORY_INDEXES_LOCK = threading.Lock()
+
+
+def list_runs(run_root: Path, limit: int = 20) -> list[dict[str, Any]]:
+    return _history_index_for(run_root).list_runs(limit=limit)
 
 
 def load_run_details(run_root: Path, run_id: str) -> dict[str, Any] | None:
@@ -174,6 +222,46 @@ def _find_latest_step_image(run_dir: Path) -> Path | None:
     if images:
         return images[-1]
     return None
+
+
+def _history_index_for(run_root: Path) -> RunHistoryIndex:
+    resolved_root = run_root.resolve()
+    key = str(resolved_root)
+    with _RUN_HISTORY_INDEXES_LOCK:
+        index = _RUN_HISTORY_INDEXES.get(key)
+        if index is None:
+            index = RunHistoryIndex(resolved_root)
+            _RUN_HISTORY_INDEXES[key] = index
+        return index
+
+
+def _load_summary_payload(summary_path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _build_run_record(
+    *,
+    run_dir: Path,
+    summary_path: Path,
+    summary_payload: dict[str, Any],
+    summary_stat,
+) -> RunRecord:
+    started_at = summary_payload.get("started_at")
+    return RunRecord(
+        run_id=run_dir.name,
+        task=str(summary_payload.get("task", run_dir.name)),
+        completed=bool(summary_payload.get("completed", False)),
+        steps=int(summary_payload.get("steps", 0) or 0),
+        error=summary_payload.get("error"),
+        created_at=float(started_at) if isinstance(started_at, (int, float)) else summary_stat.st_mtime,
+        summary_payload=summary_payload,
+        summary_path=summary_path,
+        run_dir=run_dir,
+    )
 
 
 def _load_optional_json(path: Path) -> dict[str, Any] | list[Any] | None:

@@ -4156,6 +4156,62 @@ body {
   object-fit: cover;
 }
 
+.assistant-run__callout--compact {
+  padding-block: 12px;
+}
+
+.live-pointer-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.live-pointer__trail-dot,
+.live-pointer {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.live-pointer__trail-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  background: rgba(20, 125, 103, 0.18);
+  box-shadow: 0 0 0 6px rgba(20, 125, 103, 0.08);
+}
+
+.live-pointer {
+  display: grid;
+  gap: 10px;
+  transform: translate(-40%, -42%);
+}
+
+.live-pointer__core {
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 35%, #fff, #dcfce7 38%, #0f8a6c 39%, #0f8a6c 100%);
+  box-shadow:
+    0 0 0 8px rgba(20, 125, 103, 0.16),
+    0 8px 22px rgba(15, 138, 108, 0.28);
+}
+
+.live-pointer__label {
+  width: max-content;
+  max-width: min(280px, calc(100vw - 88px));
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.84);
+  color: #f8fafc;
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.35;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.18);
+}
+
 .assistant-run__hero-copy {
   display: grid;
   gap: 8px;
@@ -4833,6 +4889,12 @@ body {
 }
 
 .timeline-shot {
+  border-radius: 22px;
+}
+
+.timeline-shot-wrap {
+  position: relative;
+  overflow: hidden;
   border-radius: 22px;
 }
 
