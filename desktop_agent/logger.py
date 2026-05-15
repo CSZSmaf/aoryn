@@ -38,6 +38,7 @@ class RunLogger:
         world_model: dict[str, Any] | None = None,
         step_proposal: dict[str, Any] | None = None,
         verification: dict[str, Any] | None = None,
+        timings: dict[str, float] | None = None,
     ) -> Path:
         payload = {
             "step": step_index,
@@ -53,6 +54,7 @@ class RunLogger:
             "world_model": world_model,
             "step_proposal": step_proposal,
             "verification": verification,
+            "timings": timings,
         }
         output = run_dir / f"step_{step_index:02d}.json"
         output.write_text(

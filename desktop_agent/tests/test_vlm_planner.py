@@ -52,6 +52,34 @@ def test_pick_model_name_rejects_missing_explicit_model():
         _pick_model_name("missing-model", [{"id": "qwen2.5-vl-7b-instruct"}])
 
 
+def test_vlm_planner_caches_auto_discovered_model_name():
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"id": "qwen2.5-vl-7b-instruct"}]}
+
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, *args, **kwargs):
+            self.calls += 1
+            return _Response()
+
+    requests = _Requests()
+    planner = VLMPlanner(AgentConfig(model_name="auto", model_auto_discover=True))
+    api_base = _normalize_api_base_url("http://127.0.0.1:1234")
+
+    assert planner._resolve_model_name(requests, api_base) == "qwen2.5-vl-7b-instruct"
+    assert planner._resolve_model_name(requests, api_base) == "qwen2.5-vl-7b-instruct"
+    assert requests.calls == 1
+
+
 def test_vlm_planner_short_circuits_explicit_browser_tasks():
     planner = VLMPlanner(AgentConfig())
     planner.web_agent.inspect_target = lambda target: None  # type: ignore[method-assign]

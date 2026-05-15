@@ -182,23 +182,30 @@ class DesktopAgent:
             verification: VerificationResult | None = None
             world_model: WorldModel | None = None
             recovery_mode: str | None = None
+            step_started_at = time.perf_counter()
+            step_timings: dict[str, float] = {}
 
             try:
+                phase_started = time.perf_counter()
                 screen_info = self.perception.capture(screenshot_path)
+                _record_step_timing(step_timings, "capture_initial", phase_started)
                 captured_at = time.time()
                 environment_payload = _build_environment_payload(screen_info)
                 if hasattr(self.executor, "update_environment"):
                     self.executor.update_environment(getattr(screen_info, "environment", None))
 
+                phase_started = time.perf_counter()
                 world_model = self._build_world_model(
                     screenshot_path=screenshot_path,
                     screen_info=screen_info,
                     step_index=step_index,
                     captured_at=captured_at,
                 )
+                _record_step_timing(step_timings, "world_model", phase_started)
                 challenge_signal = detect_human_verification(world_model.browser_snapshot)
                 if challenge_signal is not None:
                     plan = _build_human_handoff_plan(challenge_signal)
+                    timings_payload = _finalize_step_timings(step_timings, step_started_at)
                     self.logger.log_step(
                         run_dir=run_dir,
                         step_index=step_index,
@@ -211,6 +218,7 @@ class DesktopAgent:
                         captured_at=captured_at,
                         environment=environment_payload,
                         world_model=world_model.to_dict(),
+                        timings=timings_payload,
                     )
                     self._emit_progress(
                         self._build_progress_payload(
@@ -228,11 +236,13 @@ class DesktopAgent:
                             execution_state=None,
                             step_proposal=None,
                             verification=None,
+                            timings=timings_payload,
                         )
                     )
                     history.append(challenge_signal.summary)
                     break
 
+                phase_started = time.perf_counter()
                 if execution_state is None:
                     execution_state = self._initialize_execution_state(task=task, run_dir=run_dir, world_model=world_model)
                 else:
@@ -298,6 +308,7 @@ class DesktopAgent:
                 execution_state.facts = _merge_facts(execution_state.facts, observed_facts)
 
                 current_subgoal = self.orchestrator.prepare_stage(state=execution_state, world_model=world_model)
+                _record_step_timing(step_timings, "observe_prepare", phase_started)
                 if current_subgoal is None:
                     completed = True
                     execution_state.completed = True
@@ -401,6 +412,7 @@ class DesktopAgent:
                     break
                 execution_state.task_graph.mark_in_progress(current_subgoal.id)
 
+                phase_started = time.perf_counter()
                 step_proposal = self.orchestrator.propose_step(
                     state=execution_state,
                     world_model=world_model,
@@ -412,6 +424,7 @@ class DesktopAgent:
                     screen_width=screen_info.width,
                     screen_height=screen_info.height,
                 )
+                _record_step_timing(step_timings, "plan", phase_started)
                 plan_signature = _build_step_signature(current_subgoal.id, step_proposal, safe_actions)
                 visible_step_signature = _build_visible_step_signature(current_subgoal.id, step_proposal, safe_actions)
                 if plan_signature == last_step_signature:
@@ -591,16 +604,19 @@ class DesktopAgent:
                     screen_height=screen_info.height,
                 )
                 try:
+                    phase_started = time.perf_counter()
                     self.executor.execute_many(
                         safe_actions,
                         pause_after_action=self.config.pause_after_action,
                         stop_requested=self._stop_requested,
                     )
+                    _record_step_timing(step_timings, "execute", phase_started)
                 finally:
                     self._clear_live_progress_context()
                 execution_state.app_context["last_agent_action_at"] = time.time()
                 execution_state.current_surface_kind = step_proposal.surface_kind
                 recoverable_error_count = 0
+                phase_started = time.perf_counter()
                 captured_at = self._refresh_step_screenshot(screenshot_path) or captured_at
                 refreshed_screen_info = getattr(self.perception, "last_screen_info", None) or screen_info
                 post_world_model = self._build_world_model(
@@ -613,11 +629,13 @@ class DesktopAgent:
                 post_facts = self.capability_executor.observe(post_world_model)
                 post_world_model.facts = post_facts
                 execution_state.facts = _merge_facts(execution_state.facts, post_facts)
+                _record_step_timing(step_timings, "capture_after", phase_started)
                 challenge_signal = detect_human_verification(post_world_model.browser_snapshot)
                 if challenge_signal is not None:
                     execution_state.world_model = post_world_model
                     plan = _build_human_handoff_plan(challenge_signal)
                     self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
+                    timings_payload = _finalize_step_timings(step_timings, step_started_at)
                     self.logger.log_step(
                         run_dir=run_dir,
                         step_index=step_index,
@@ -632,6 +650,7 @@ class DesktopAgent:
                         state=build_execution_plan_summary(execution_state),
                         world_model=post_world_model.to_dict(),
                         step_proposal=step_proposal.to_dict(),
+                        timings=timings_payload,
                     )
                     self._emit_progress(
                         self._build_progress_payload(
@@ -649,11 +668,13 @@ class DesktopAgent:
                                 execution_state=execution_state,
                                 step_proposal=step_proposal,
                                 verification=None,
+                                timings=timings_payload,
                         )
                     )
                     history.append(challenge_signal.summary)
                     break
 
+                phase_started = time.perf_counter()
                 verification = self.capability_executor.verify_step(
                     execution_state=execution_state,
                     step=step_proposal,
@@ -669,6 +690,7 @@ class DesktopAgent:
                     verification=verification,
                     world_model=post_world_model,
                 )
+                _record_step_timing(step_timings, "verify", phase_started)
                 current_subgoal.attempts += 1
                 subgoal_completed_now = step_proposal.completes_subgoal or _verification_completed_subgoal(verification)
 
@@ -758,7 +780,10 @@ class DesktopAgent:
                 history_entry = _build_step_history_entry(step_proposal, verification, safe_actions)
                 history.append(history_entry)
                 execution_state.memory = history[-8:]
+                phase_started = time.perf_counter()
                 self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
+                _record_step_timing(step_timings, "persist", phase_started)
+                timings_payload = _finalize_step_timings(step_timings, step_started_at)
                 self.logger.log_step(
                     run_dir=run_dir,
                     step_index=step_index,
@@ -774,6 +799,7 @@ class DesktopAgent:
                     world_model=post_world_model.to_dict(),
                     step_proposal=step_proposal.to_dict(),
                     verification=verification.to_dict(),
+                    timings=timings_payload,
                 )
                 self._emit_progress(
                     self._build_progress_payload(
@@ -791,6 +817,7 @@ class DesktopAgent:
                         execution_state=execution_state,
                         step_proposal=step_proposal,
                         verification=verification,
+                        timings=timings_payload,
                     )
                 )
 
@@ -1332,6 +1359,7 @@ class DesktopAgent:
         live_pointer: dict[str, Any] | None = None,
         live_pointer_trail: list[dict[str, Any]] | None = None,
         live_action: dict[str, Any] | None = None,
+        timings: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         state_summary = build_execution_plan_summary(execution_state) if execution_state is not None else None
         return {
@@ -1363,6 +1391,7 @@ class DesktopAgent:
             "live_pointer": dict(live_pointer) if isinstance(live_pointer, dict) else None,
             "live_pointer_trail": [dict(item) for item in (live_pointer_trail or []) if isinstance(item, dict)],
             "live_action": dict(live_action) if isinstance(live_action, dict) else None,
+            "latest_timings": dict(timings) if isinstance(timings, dict) else None,
         }
 
     def _emit_progress(self, payload: dict[str, Any]) -> None:
@@ -1970,6 +1999,16 @@ def _build_environment_payload(screen_info) -> dict[str, Any] | None:
         "effective": effective.to_dict() if effective is not None else None,
         "detected": detected.to_dict() if detected is not None else None,
     }
+
+
+def _record_step_timing(timings: dict[str, float], key: str, started_at: float) -> None:
+    timings[key] = round(max(0.0, time.perf_counter() - started_at), 4)
+
+
+def _finalize_step_timings(timings: dict[str, float], step_started_at: float) -> dict[str, float]:
+    payload = dict(timings)
+    payload["total"] = round(max(0.0, time.perf_counter() - step_started_at), 4)
+    return payload
 
 
 def build_agent(

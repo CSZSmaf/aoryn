@@ -224,11 +224,14 @@ def test_desktop_agent_logs_environment_payload():
 
         result = agent.run("wait once")
         step_payload = next(result.run_dir.glob("step_01.json")).read_text(encoding="utf-8")
+        step_json = json.loads(step_payload)
 
         assert '"environment"' in step_payload
         assert '"effective"' in step_payload
         assert '"detected"' in step_payload
         assert '"dpi_scale"' in step_payload
+        assert step_json["timings"]["total"] >= 0
+        assert "capture_initial" in step_json["timings"]
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
 

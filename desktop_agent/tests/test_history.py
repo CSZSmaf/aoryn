@@ -133,3 +133,31 @@ def test_history_index_refreshes_when_runs_change():
         assert [item["id"] for item in after_delete_runs] == ["20260409_000001_first"]
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
+
+
+def test_history_preview_image_supports_common_screenshot_formats():
+    scratch_root = Path("test_history_artifacts")
+    run_root = scratch_root / uuid.uuid4().hex
+    run_dir = run_root / "20260409_000003_webp"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "task": "webp screenshot",
+                    "completed": True,
+                    "steps": 1,
+                    "started_at": 300.0,
+                    "finished_at": 301.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "step_01.webp").write_bytes(b"fake-webp")
+
+        runs = list_runs(run_root, limit=10)
+
+        assert runs[0]["preview_image"] == "step_01.webp"
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)

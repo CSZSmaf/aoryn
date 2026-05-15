@@ -449,7 +449,6 @@ async function refreshOverview(options = {}) {
     hydrateDefaults();
     restoreInitialHistorySelection(options);
     ensureSelectedRun(options);
-    renderAll();
 
     if (state.selectedRunId && shouldRefreshSelectedRunDetails(options)) {
       await loadRunDetails(state.selectedRunId, { background: Boolean(options.background) });
@@ -2502,6 +2501,20 @@ function renderActionPill(action) {
               : "";
 
   return `<span class="action-pill">${escapeHtml(type)}${detail ? `<code>${escapeHtml(detail)}</code>` : ""}</span>`;
+}
+
+function renderTimingSummary(timings) {
+  if (!timings || typeof timings !== "object") return "";
+  const total = Number(timings.total);
+  if (!Number.isFinite(total)) return "";
+  const slowStages = ["capture_initial", "plan", "execute", "capture_after", "verify", "persist"]
+    .map((key) => [key, Number(timings[key])])
+    .filter(([, value]) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 2)
+    .map(([key, value]) => `${key.replace(/_/g, " ")} ${value.toFixed(2)}s`);
+  const detail = slowStages.length ? ` | ${slowStages.join(" | ")}` : "";
+  return `<span class="action-pill">${escapeHtml(`total ${total.toFixed(2)}s${detail}`)}</span>`;
 }
 
 function renderExecutionModeChip(dryRun) {
@@ -5340,6 +5353,7 @@ function renderRunningMessage(active) {
       ? buildArtifactUrl(progress.run_id, progress.latest_screenshot)
       : null;
   const latestSummary = normalizeText(progress.latest_summary) || tr("Waiting for the next step.", "Waiting for the next step.");
+  const timingPill = renderTimingSummary(progress.latest_timings);
   const currentGoal =
     normalizeText(progress.current_goal || executionState.current_goal || currentSubgoal?.title || "") || latestSummary;
   const chosenCapability = normalizeText(
@@ -5454,7 +5468,8 @@ function renderRunningMessage(active) {
     chips: [
       renderExecutionModeChip(progress.dry_run ?? active.dry_run),
       renderHumanVerificationChip(progress),
-    ],
+      timingPill,
+    ].filter(Boolean),
     hero: renderAgentRunHero({
       src: previewUrl,
       alt: tr("Latest screenshot", "Latest screenshot"),
@@ -5636,6 +5651,7 @@ function renderDeveloperTimelineItem(step) {
       ? buildArtifactUrl(state.selectedRunDetails.id, step.screenshot)
       : null;
   const actions = (step.executed_actions || []).slice(0, 4);
+  const timingPill = renderTimingSummary(step.timings);
 
   return `
     <article class="timeline-item timeline-item--developer">
@@ -5646,7 +5662,7 @@ function renderDeveloperTimelineItem(step) {
         </div>
         <span class="status-pill ${step.error ? "bad" : "ok"}">${escapeHtml(step.error ? tr("错误", "Error") : tr("完成", "OK"))}</span>
       </div>
-      ${actions.length ? `<div class="action-row">${actions.map(renderActionPill).join("")}</div>` : ""}
+      ${actions.length || timingPill ? `<div class="action-row">${actions.map(renderActionPill).join("")}${timingPill}</div>` : ""}
       ${screenshotUrl ? `<img class="timeline-shot" src="${escapeHtml(screenshotUrl)}" alt="${escapeHtml(tr("步骤截图", "Step screenshot"))}" />` : ""}
       <div class="timeline-item__meta">${escapeHtml(formatShortTime(step.captured_at))}</div>
     </article>
@@ -5664,6 +5680,7 @@ function renderLiveDeveloperTimeline() {
       : null;
   const actions = (progress.latest_actions || []).slice(0, 4);
   const liveActionPill = renderLiveActionPill(liveAction);
+  const timingPill = renderTimingSummary(progress.latest_timings);
 
   return `
     <article class="timeline-item timeline-item--developer timeline-item--live">
@@ -5674,7 +5691,7 @@ function renderLiveDeveloperTimeline() {
         </div>
         <span class="status-pill ok">${escapeHtml(tr("Running", "Running"))}</span>
       </div>
-      ${actions.length || liveActionPill ? `<div class="action-row">${liveActionPill}${actions.map(renderActionPill).join("")}</div>` : ""}
+      ${actions.length || liveActionPill || timingPill ? `<div class="action-row">${liveActionPill}${actions.map(renderActionPill).join("")}${timingPill}</div>` : ""}
       ${previewUrl ? renderTimelineShot({ src: previewUrl, alt: tr("Latest screenshot", "Latest screenshot"), livePointer, livePointerTrail, liveAction }) : ""}
       <div class="timeline-item__meta">${escapeHtml(tr("Live run in progress", "Live run in progress"))}</div>
     </article>

@@ -477,6 +477,7 @@ _CHAT_PROVIDER_ERROR_LIMIT = 320
 _VISION_CHAT_COMPAT_MAX_HISTORY = 2
 _VISION_CHAT_COMPAT_MAX_MESSAGE_CHARS = 900
 _MANAGED_BROWSER_STATUS_CACHE_SECONDS = 10.0
+_OVERVIEW_RUNS_CACHE_SECONDS = 1.0
 _PROVIDER_ENVIRONMENT_CACHE_SECONDS = 20.0
 _PROVIDER_ENVIRONMENT_REFRESH_TIMEOUT_SECONDS = 0.9
 _VISION_MODEL_PATTERN = re.compile(r"(^|[\/._:-])vl([\/._:-]|$)")
@@ -859,6 +860,9 @@ class DashboardApp:
         self._managed_browser_status_lock = threading.Lock()
         self._managed_browser_status_cache: dict[str, Any] | None = None
         self._managed_browser_status_refreshing = False
+        self._overview_runs_lock = threading.Lock()
+        self._overview_runs_cache: dict[str, Any] | None = None
+        self._overview_runs_refreshing = False
         self._provider_environment_lock = threading.Lock()
         self._provider_environment_cache: dict[str, dict[str, Any]] = {}
         self._provider_environment_refreshing: set[str] = set()
@@ -1395,8 +1399,40 @@ class DashboardApp:
             "runtime_preferences": self.runtime_preferences.snapshot(),
             "active_job": self.queue.active_job(),
             "jobs": self.queue.list_jobs(limit=8),
-            "runs": list_runs(self.run_root, limit=12),
+            "runs": self._overview_runs(limit=12),
         }
+
+    def _overview_runs(self, *, limit: int) -> list[dict[str, Any]]:
+        now = time.time()
+        with self._overview_runs_lock:
+            cached = self._overview_runs_cache
+            if not self._overview_runs_refreshing and (
+                cached is None or int(cached.get("limit") or 0) != int(limit)
+                or now - float(cached.get("updated_at") or 0.0) >= _OVERVIEW_RUNS_CACHE_SECONDS
+            ):
+                self._overview_runs_refreshing = True
+                threading.Thread(
+                    target=self._refresh_overview_runs,
+                    kwargs={"limit": int(limit)},
+                    name="dashboard-overview-runs",
+                    daemon=True,
+                ).start()
+            if cached is not None and int(cached.get("limit") or 0) == int(limit):
+                return [dict(item) for item in cached.get("items", []) if isinstance(item, dict)]
+        return []
+
+    def _refresh_overview_runs(self, *, limit: int) -> None:
+        try:
+            items = list_runs(self.run_root, limit=limit)
+        except Exception:
+            items = []
+        with self._overview_runs_lock:
+            self._overview_runs_cache = {
+                "limit": int(limit),
+                "updated_at": time.time(),
+                "items": [dict(item) for item in items if isinstance(item, dict)],
+            }
+            self._overview_runs_refreshing = False
 
     def _managed_browser_status(self, config: Any) -> dict[str, Any]:
         now = time.time()

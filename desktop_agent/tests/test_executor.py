@@ -32,6 +32,21 @@ def test_launch_browser_falls_back_to_default_browser(monkeypatch):
     assert opened == ["about:blank"]
 
 
+def test_launch_browser_dom_mode_uses_dom_session(monkeypatch):
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False, browser_control_mode="dom"))
+    events: list[str] = []
+
+    monkeypatch.setattr(executor, "_attempt_dom_navigation", lambda operation: events.append("dom") or True)
+    monkeypatch.setattr(
+        "desktop_agent.executor.webbrowser.open",
+        lambda url: (_ for _ in ()).throw(AssertionError("fallback browser should not open")),
+    )
+
+    executor.execute(Action.from_dict({"type": "launch_app", "app": "browser"}))
+
+    assert events == ["dom"]
+
+
 def test_browser_open_falls_back_to_default_browser(monkeypatch):
     executor = RealDesktopExecutor(AgentConfig(dry_run=False))
     opened: list[str] = []

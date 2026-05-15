@@ -6,7 +6,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from desktop_agent import browser_runtime
-from desktop_agent.browser_runtime import BrowserAction, BrowserObservation
+from desktop_agent.browser_runtime import BrowserAction, BrowserObservation, BrowserRuntimeBridge
+from desktop_agent.config import AgentConfig
 
 
 def test_resolve_installed_browser_prefers_adjacent_executable(monkeypatch):
@@ -107,3 +108,15 @@ def test_browser_action_to_dict_includes_upload_fields():
         "path": "C:/temp/demo.txt",
         "files": ["C:/temp/demo.txt"],
     }
+
+
+def test_browser_runtime_ready_cache_skips_repeated_status_checks():
+    bridge = BrowserRuntimeBridge(AgentConfig())
+    calls: list[str] = []
+
+    bridge.status = lambda: calls.append("status") or BrowserObservation(status="ready")  # type: ignore[method-assign]
+
+    bridge.ensure_running()
+    bridge.ensure_running()
+
+    assert calls == ["status"]

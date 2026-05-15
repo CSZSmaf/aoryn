@@ -19,6 +19,9 @@ class BrowserRuntimeError(RuntimeError):
     """Raised when the managed browser runtime cannot satisfy a request."""
 
 
+_READY_CACHE_SECONDS = 2.0
+
+
 @dataclass(slots=True)
 class BrowserObservation:
     runtime: str = "aoryn_browser"
@@ -113,6 +116,7 @@ class BrowserRuntimeBridge:
         self.config = config
         self.base_url = self._resolve_base_url()
         self._process: subprocess.Popen | None = None
+        self._ready_until = 0.0
 
     def status(self) -> BrowserObservation | None:
         payload = self._request_json("GET", "/status", ensure_running=False)
@@ -248,15 +252,26 @@ class BrowserRuntimeBridge:
         return self._request_json("POST", "/get_session_state", payload={})
 
     def ensure_running(self) -> None:
+        now = time.time()
+        if now < self._ready_until:
+            return
         if self.status() is not None:
+            self._mark_ready()
             return
         self._launch_process()
         deadline = time.time() + 12.0
         while time.time() < deadline:
             if self.status() is not None:
+                self._mark_ready()
                 return
             time.sleep(0.15)
         raise BrowserRuntimeError("Aoryn Browser did not become ready in time.")
+
+    def _mark_ready(self) -> None:
+        self._ready_until = time.time() + _READY_CACHE_SECONDS
+
+    def _clear_ready(self) -> None:
+        self._ready_until = 0.0
 
     def _launch_process(self) -> None:
         command = self._resolve_launch_command()
@@ -324,13 +339,17 @@ class BrowserRuntimeBridge:
                 timeout=max(2.0, float(self.config.browser_dom_timeout or 0.0) + 2.0),
             )
         except requests.RequestException:
+            self._clear_ready()
             if ensure_running:
                 raise BrowserRuntimeError(f"Managed browser request failed: {method.upper()} {path}")
             return None
         if response.status_code >= 400:
+            self._clear_ready()
             raise BrowserRuntimeError(
                 f"Managed browser request failed with HTTP {response.status_code}: {response.text.strip() or '<empty>'}"
             )
+        if ensure_running:
+            self._mark_ready()
         if not response.content:
             return {}
         try:

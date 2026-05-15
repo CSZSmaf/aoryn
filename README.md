@@ -21,17 +21,47 @@ Aoryn 是一个本地优先的桌面 Agent 工作台。
 - 已安装浏览器，默认优先使用 `msedge`
 - 可选：LM Studio 或任意 OpenAI-compatible 模型服务
 
-### 2.2 启动命令
+### 2.2 日常源码测试
+
+```bash
+.\start_dev.bat
+```
+
+这会在源码模式下启动 Aoryn 工作台，并尽量同时拉起托管浏览器运行时。默认地址：
+
+```text
+Dashboard: http://127.0.0.1:8765
+Browser Runtime: http://127.0.0.1:38991
+```
+
+等价 Python 命令：
+
+```bash
+python scripts/dev_start.py
+```
+
+常用开发参数：
+
+```bash
+python scripts/dev_start.py --ui web --no-browser-tab
+python scripts/dev_start.py --no-managed-browser
+python scripts/dev_start.py --port 8766
+python scripts/dev_start.py --print-commands
+```
+
+如果 `8765` 已经是 Aoryn dashboard，开发启动器会直接复用；如果被其他服务占用，它会提示换端口。托管浏览器源码运行使用 `.tmp/browser-runtime/browser-profile`，不会写入安装版的 AppData 运行目录。
+
+### 2.3 单独入口与发布验证
+
+底层入口仍然保留，方便排查：
 
 ```bash
 python run_agent.py
+python run_agent.py ui --browser --no-browser --port 8765
+python run_browser.py --port 38991 --profile-root .tmp/browser-runtime/browser-profile
 ```
 
-默认会启动本地 dashboard，并尝试打开：
-
-```text
-http://127.0.0.1:8765
-```
+生成 EXE 或安装包只用于发布前验证，不需要作为日常测试步骤。
 
 ## 3. 目录结构
 

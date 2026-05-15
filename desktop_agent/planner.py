@@ -241,6 +241,8 @@ class VLMPlanner(BasePlanner):
     def __init__(self, config: AgentConfig):
         self.config = config
         self.web_agent = WebAgent(request_timeout=min(float(config.model_request_timeout), 3.0))
+        self._model_name_cache: dict[tuple[str, str, bool, str], str] = {}
+        self._structured_output_unsupported_modes: set[str] = set()
 
     def plan(
         self,
@@ -268,6 +270,8 @@ class VLMPlanner(BasePlanner):
         environment_context = _build_environment_context(environment)
 
         response_format_mode = _normalize_structured_output_mode(self.config.model_structured_output)
+        if response_format_mode in self._structured_output_unsupported_modes:
+            response_format_mode = "off"
         payload = _build_vlm_payload(
             model_name=model_name,
             task=task,
@@ -287,6 +291,7 @@ class VLMPlanner(BasePlanner):
                 response_format_mode=response_format_mode,
             )
         except StructuredOutputUnsupportedError:
+            self._structured_output_unsupported_modes.add(response_format_mode)
             fallback_payload = _build_vlm_payload(
                 model_name=model_name,
                 task=task,
@@ -317,9 +322,19 @@ class VLMPlanner(BasePlanner):
         configured_model = (self.config.model_name or "").strip()
         if not _needs_model_discovery(configured_model) and not self.config.model_auto_discover:
             return configured_model
+        cache_key = (
+            api_base.rstrip("/"),
+            configured_model.lower(),
+            bool(self.config.model_auto_discover),
+            str(self.config.model_api_key or ""),
+        )
+        if cache_key in self._model_name_cache:
+            return self._model_name_cache[cache_key]
 
         available_models = self._fetch_models(requests_module, api_base)
-        return _pick_model_name(configured_model, available_models)
+        model_name = _pick_model_name(configured_model, available_models)
+        self._model_name_cache[cache_key] = model_name
+        return model_name
 
     def _fetch_models(self, requests_module, api_base: str) -> list[dict]:
         models_url = f"{api_base}/models"
@@ -422,6 +437,8 @@ class TaskGraphPlanner:
     def __init__(self, config: AgentConfig | None = None) -> None:
         self.config = config or AgentConfig()
         self.web_agent = WebAgent()
+        self._text_model_name_cache: dict[tuple[str, str, str], str] = {}
+        self._structured_output_unsupported_modes: set[str] = set()
 
     def plan(self, task: str, *, history: list[str] | None = None, world_model: WorldModel | None = None) -> TaskGraph:
         browser_command = self.web_agent.parse(task)
@@ -645,8 +662,10 @@ class TaskGraphPlanner:
         try:
             requests = _import_requests()
             api_base = _normalize_api_base_url(self.config.model_base_url)
-            model_name = _resolve_text_model_name(self.config, requests, api_base)
+            model_name = self._resolve_text_model_name(requests, api_base)
             response_format_mode = _normalize_structured_output_mode(self.config.model_structured_output)
+            if response_format_mode in self._structured_output_unsupported_modes:
+                response_format_mode = "off"
             payload = _build_task_graph_payload(
                 model_name=model_name,
                 task=task,
@@ -656,13 +675,32 @@ class TaskGraphPlanner:
                 max_subgoals=self.config.max_task_subgoals,
                 response_format_mode=response_format_mode,
             )
-            content = _request_task_graph_text(
-                config=self.config,
-                requests=requests,
-                api_base=api_base,
-                payload=payload,
-                response_format_mode=response_format_mode,
-            )
+            try:
+                content = _request_task_graph_text(
+                    config=self.config,
+                    requests=requests,
+                    api_base=api_base,
+                    payload=payload,
+                    response_format_mode=response_format_mode,
+                )
+            except StructuredOutputUnsupportedError:
+                self._structured_output_unsupported_modes.add(response_format_mode)
+                fallback_payload = _build_task_graph_payload(
+                    model_name=model_name,
+                    task=task,
+                    intent=intent,
+                    history=history,
+                    world_model=world_model,
+                    max_subgoals=self.config.max_task_subgoals,
+                    response_format_mode="off",
+                )
+                content = _request_task_graph_text(
+                    config=self.config,
+                    requests=requests,
+                    api_base=api_base,
+                    payload=fallback_payload,
+                    response_format_mode="off",
+                )
             graph_payload = _extract_json(content)
             return self._task_graph_from_model_payload(
                 task=task,
@@ -672,6 +710,21 @@ class TaskGraphPlanner:
             )
         except Exception:
             return None
+
+    def _resolve_text_model_name(self, requests_module, api_base: str) -> str:
+        configured_model = (self.config.model_name or "").strip()
+        if not _needs_model_discovery(configured_model):
+            return configured_model
+        cache_key = (
+            api_base.rstrip("/"),
+            configured_model.lower(),
+            str(self.config.model_api_key or ""),
+        )
+        if cache_key in self._text_model_name_cache:
+            return self._text_model_name_cache[cache_key]
+        model_name = _resolve_text_model_name(self.config, requests_module, api_base)
+        self._text_model_name_cache[cache_key] = model_name
+        return model_name
 
     def _task_graph_from_model_payload(
         self,

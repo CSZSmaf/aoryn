@@ -165,6 +165,46 @@ def test_dashboard_overview_does_not_block_on_managed_browser_status(monkeypatch
         temp_root.rmdir()
 
 
+def test_dashboard_overview_refreshes_runs_in_background():
+    temp_root = Path("test_artifacts") / f"dashboard_runs_cache_{uuid4().hex}"
+    run_root = temp_root / "runs"
+    run_dir = run_root / "20260409_000001_cached"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        config_path = temp_root / "config.yaml"
+        config_path.write_text(
+            f"model_provider: lmstudio_local\nrun_root: {json.dumps(run_root.as_posix())}\n",
+            encoding="utf-8",
+        )
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "task": "cached overview",
+                    "completed": True,
+                    "steps": 1,
+                    "started_at": 100.0,
+                    "finished_at": 101.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        app = DashboardApp(host="127.0.0.1", port=8765, config_path=config_path)
+
+        first_payload = app.overview()
+        assert first_payload["runs"] == []
+
+        refreshed: list[dict] = []
+        for _ in range(30):
+            refreshed = app.overview()["runs"]
+            if refreshed:
+                break
+            time.sleep(0.02)
+
+        assert refreshed[0]["id"] == "20260409_000001_cached"
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_open_browser_uses_windows_fallback_when_webbrowser_fails(monkeypatch):
     calls: list[tuple[str, str]] = []
 

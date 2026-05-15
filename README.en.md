@@ -21,35 +21,51 @@ The current goal is not multi-agent orchestration. The product is focused on a r
 - An installed browser, with `msedge` as the default channel
 - Optional: LM Studio or any OpenAI-compatible model endpoint
 
-### 2.2 Run
+### 2.2 Daily Source-Mode Testing
+
+Use the development launcher when you want to test the project without building or installing a release package:
+
+```bash
+.\start_dev.bat
+```
+
+The equivalent Python entrypoint is:
+
+```bash
+python scripts/dev_start.py
+```
+
+By default this starts the source-mode workbench and tries to start the managed browser runtime:
+
+```text
+Dashboard: http://127.0.0.1:8765
+Browser Runtime: http://127.0.0.1:38991
+```
+
+Useful development flags:
+
+```bash
+python scripts/dev_start.py --ui web --no-browser-tab
+python scripts/dev_start.py --no-managed-browser
+python scripts/dev_start.py --port 8766
+python scripts/dev_start.py --print-commands
+```
+
+If port `8765` is already an Aoryn dashboard, the launcher reuses it. If another service owns the port, it fails early with a replacement port hint. Source-mode browser data stays under `.tmp/browser-runtime/browser-profile`; packaged AppData paths are unchanged.
+
+### 2.3 Lower-Level Entrypoints
+
+The direct commands are still available for debugging:
 
 ```bash
 python run_agent.py
-```
-
-On Windows this starts the local workbench with the embedded desktop shell by default.
-
-To launch the UI explicitly with dashboard-only flags, use:
-
-```bash
-python run_agent.py ui --no-browser --port 8765
-```
-
-To force the browser-based dashboard instead of the desktop shell, use:
-
-```bash
 python run_agent.py ui --browser --no-browser --port 8765
+python run_browser.py --port 38991 --profile-root .tmp/browser-runtime/browser-profile
 ```
 
-The UI serves:
+### 2.4 Build a Windows EXE
 
-```text
-http://127.0.0.1:8765
-```
-
-### 2.3 Build a Windows EXE
-
-The desktop shell can also be packaged as a Windows app with PyInstaller:
+Build artifacts are for release validation, not daily source-mode testing. The desktop shell can be packaged as a Windows app with PyInstaller:
 
 ```bash
 python -m pip install --user -r requirements-build.txt

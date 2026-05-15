@@ -156,6 +156,7 @@ def load_run_details(run_root: Path, run_id: str) -> dict[str, Any] | None:
                 "world_model": step_payload.get("world_model"),
                 "step_proposal": step_payload.get("step_proposal"),
                 "verification": step_payload.get("verification"),
+                "timings": step_payload.get("timings"),
             }
         )
 
@@ -217,8 +218,15 @@ def _resolve_run_dir(run_root: Path, run_id: str) -> Path | None:
     return run_dir
 
 
+_STEP_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+
+
 def _find_latest_step_image(run_dir: Path) -> Path | None:
-    images = sorted(run_dir.glob("step_*.png"))
+    images = sorted(
+        item
+        for item in run_dir.glob("step_*.*")
+        if item.is_file() and item.suffix.lower() in _STEP_IMAGE_SUFFIXES
+    )
     if images:
         return images[-1]
     return None

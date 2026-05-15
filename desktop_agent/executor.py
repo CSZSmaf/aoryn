@@ -264,7 +264,7 @@ class RealDesktopExecutor(ActionExecutor):
         alias = resolved_app.lower()
         target = self.config.app_launch_map.get(alias) or self.config.app_launch_map.get(resolved_app)
         if alias == "browser":
-            if self._attempt_dom_navigation(lambda session: session.open_url("about:blank")):
+            if self._requires_dom_navigation() and self._attempt_dom_navigation(lambda session: session.open_url("about:blank")):
                 return
             self._open_browser_with_fallback(target)
             return
