@@ -21,7 +21,7 @@ from desktop_agent.version import APP_ASSET_VERSION, APP_ID, APP_NAME, APP_VERSI
 
 try:  # pragma: no cover - import availability depends on runtime environment
     from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, QTimer, Qt, QUrl, Signal
-    from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPainterPath, QRegion
+    from PySide6.QtGui import QAction, QCloseEvent, QCursor, QIcon, QPainterPath, QRegion
     from PySide6.QtWidgets import (
         QApplication,
         QFrame,
@@ -57,6 +57,7 @@ except Exception as exc:  # pragma: no cover - import availability depends on ru
     QVBoxLayout = object  # type: ignore[assignment]
     QWidget = object  # type: ignore[assignment]
     QAction = object  # type: ignore[assignment]
+    QCursor = object  # type: ignore[assignment]
     QIcon = object  # type: ignore[assignment]
     QObject = object  # type: ignore[assignment]
     QPoint = object  # type: ignore[assignment]
@@ -528,6 +529,7 @@ if QApplication is not None:
             on_continue_follow_up,
             on_resume_run,
             on_decide_job,
+            on_open_main=None,
         ) -> None:
             flags = (
                 Qt.WindowType.Window
@@ -559,11 +561,13 @@ if QApplication is not None:
             self._drag_origin: QPoint | None = None
             self._dragging = False
             self._on_toggle_main = on_toggle_main
+            self._on_open_main = on_open_main or on_toggle_main
             self._on_stop_task = on_stop_task
             self._on_submit_text = on_submit_text
             self._on_continue_follow_up = on_continue_follow_up
             self._on_resume_run = on_resume_run
             self._on_decide_job = on_decide_job
+            self._suppress_taskbar_activation_until = 0.0
 
             self._timer = QTimer(self)
             self._timer.setInterval(1000)
@@ -593,7 +597,7 @@ if QApplication is not None:
             self.logo_button.setIcon(QIcon(str(icon_path)))
             self.logo_button.setIconSize(QSize(15, 15))
             self.logo_button.setObjectName("floatingLogoButton")
-            self.logo_button.clicked.connect(self._on_toggle_main)
+            self.logo_button.clicked.connect(self._on_open_main)
             card_layout.addWidget(self.logo_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
             self.task_label = QLabel(f"{APP_NAME} 就绪", self.card)
@@ -635,7 +639,7 @@ if QApplication is not None:
             self.open_button = QPushButton("打开", self.card)
             self.open_button.setObjectName("floatingGhostButton")
             self.open_button.setMinimumWidth(44)
-            self.open_button.clicked.connect(self._on_toggle_main)
+            self.open_button.clicked.connect(self._on_open_main)
             card_layout.addWidget(self.open_button)
 
             self.add_button = QPushButton("+", self.card)
@@ -748,7 +752,15 @@ if QApplication is not None:
                 super().closeEvent(event)
                 return
             event.ignore()
-            self._on_toggle_main()
+            self._on_open_main()
+
+        def event(self, event) -> bool:  # pragma: no cover - GUI runtime behavior
+            event_type = event.type()
+            if event_type == QEvent.Type.WindowActivate:
+                QTimer.singleShot(0, self._handle_possible_taskbar_activation)
+            elif event_type == QEvent.Type.WindowStateChange:
+                QTimer.singleShot(0, self._handle_possible_taskbar_restore)
+            return super().event(event)
 
         def eventFilter(self, watched, event) -> bool:  # pragma: no cover - GUI runtime behavior
             if watched not in self._drag_surfaces:
@@ -786,8 +798,7 @@ if QApplication is not None:
             self.timer_label.setText("--")
             self.input_line.clear()
             self._apply_layout_state()
-            self.show()
-            self.raise_()
+            self._show_floating_window()
 
         def hide_floating(self) -> None:  # pragma: no cover - GUI runtime behavior
             self._input_expanded = False
@@ -813,8 +824,7 @@ if QApplication is not None:
             self.timer_label.setText("--")
             self.input_line.setText(draft)
             self._apply_layout_state()
-            self.show()
-            self.raise_()
+            self._show_floating_window()
 
         def show_resume_prompt(
             self,
@@ -837,8 +847,7 @@ if QApplication is not None:
             self.timer_label.setText("--")
             self.input_line.clear()
             self._apply_layout_state()
-            self.show()
-            self.raise_()
+            self._show_floating_window()
 
         def update_active_job(self, active_job: dict[str, Any] | None, follow_up_draft: str) -> None:  # pragma: no cover
             next_active_job_id = str(active_job.get("id") or "").strip() if isinstance(active_job, dict) else None
@@ -863,8 +872,7 @@ if QApplication is not None:
                 self.timer_label.setText("--")
             self._refresh_timer_label()
             self._apply_layout_state()
-            self.show()
-            self.raise_()
+            self._show_floating_window()
 
         def _handle_submit(self) -> None:  # pragma: no cover - GUI runtime behavior
             text = self.input_line.text().strip()
@@ -953,6 +961,41 @@ if QApplication is not None:
             self._drag_global = None
             self._drag_origin = None
             self._dragging = False
+
+        def _show_floating_window(self) -> None:  # pragma: no cover - GUI runtime behavior
+            self._remember_programmatic_activation()
+            self.show()
+            self.raise_()
+
+        def _remember_programmatic_activation(self, duration: float = 0.5) -> None:
+            self._suppress_taskbar_activation_until = time.time() + max(0.0, float(duration or 0.0))
+
+        def _handle_possible_taskbar_restore(self) -> None:  # pragma: no cover - GUI runtime behavior
+            try:
+                minimized = self.isMinimized()
+            except Exception:
+                minimized = False
+            if minimized:
+                self._open_main_from_taskbar(force=True)
+
+        def _handle_possible_taskbar_activation(self) -> None:  # pragma: no cover - GUI runtime behavior
+            self._open_main_from_taskbar(force=False)
+
+        def _open_main_from_taskbar(self, *, force: bool) -> None:  # pragma: no cover - GUI runtime behavior
+            if time.time() < self._suppress_taskbar_activation_until:
+                return
+            if not force and self._cursor_is_over_window():
+                return
+            self._remember_programmatic_activation()
+            self._on_open_main()
+
+        def _cursor_is_over_window(self) -> bool:  # pragma: no cover - GUI runtime behavior
+            if QCursor is object:
+                return False
+            try:
+                return self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+            except Exception:
+                return False
 
         def _apply_window_shape(self) -> None:
             if QPainterPath is object or QRectF is object or QRegion is object:
@@ -1044,6 +1087,7 @@ if QApplication is not None:
                 on_continue_follow_up=self._continue_follow_up,
                 on_resume_run=self._resume_interrupted_run,
                 on_decide_job=self._decide_active_job,
+                on_open_main=self.show_main_window,
             )
             self.floating.move(24, 120)
             self.current_active_job_id: str | None = None

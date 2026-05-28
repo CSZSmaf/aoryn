@@ -371,6 +371,24 @@ class BrowserDOMCapability(CapabilityAdapter):
 
     def can_handle(self, subgoal: Subgoal, world_model: WorldModel) -> float:
         text = _normalize_text(subgoal.title)
+        desktop_app_target = any(
+            token in text
+            for token in (
+                "calculator",
+                "calc",
+                "notepad",
+                "explorer",
+                "paint",
+                "settings",
+                "excel",
+                "powerpoint",
+                "word",
+                "vscode",
+            )
+        )
+        web_intent = any(token in text for token in ("browser", "website", "web", "search", "visit"))
+        if desktop_app_target and not web_intent:
+            return 0.0
         browser_like = any(
             token in text
             for token in ("browser", "website", "web", "search", "visit", "open ", "click link", "网页", "网站", "搜索", "访问")
@@ -1393,6 +1411,7 @@ def _infer_world_progress(before: WorldModel, after: WorldModel) -> bool:
 def _evaluate_evidence(requirement: EvidenceRequirement, world_model: WorldModel) -> bool:
     kind = requirement.kind
     expected = _normalize_text(requirement.value)
+    expected_app = _normalize_open_app_request(expected)
     active_title = _normalize_text(world_model.active_window_title)
     active_app = _normalize_text(world_model.active_app)
     browser_snapshot = world_model.browser_snapshot or {}
@@ -1403,9 +1422,33 @@ def _evaluate_evidence(requirement: EvidenceRequirement, world_model: WorldModel
     if kind == "action_executed":
         return True
     if kind == "active_app_is":
-        return bool(expected) and expected == active_app
+        aliases = _app_aliases(expected_app or expected)
+        if not aliases:
+            return False
+        if active_app in aliases:
+            return True
+        if any(alias in active_title for alias in aliases):
+            return True
+        for item in world_model.visible_windows:
+            title = _normalize_text(item.get("title"))
+            process_name = _normalize_text(item.get("process_name"))
+            if any(alias in title or alias in process_name for alias in aliases):
+                return True
+        return False
     if kind == "window_contains":
-        return bool(expected) and expected in active_title
+        if bool(expected) and expected in active_title:
+            return True
+        aliases = _app_aliases(expected_app)
+        if not aliases:
+            return False
+        if active_app in aliases or any(alias in active_title for alias in aliases):
+            return True
+        for item in world_model.visible_windows:
+            title = _normalize_text(item.get("title"))
+            process_name = _normalize_text(item.get("process_name"))
+            if any(alias in title or alias in process_name for alias in aliases):
+                return True
+        return False
     if kind == "browser_url_contains":
         return bool(expected) and expected in browser_url
     if kind == "browser_title_contains":
@@ -1427,6 +1470,38 @@ def _evaluate_evidence(requirement: EvidenceRequirement, world_model: WorldModel
                 return True
         return False
     return False
+
+
+def _app_aliases(expected: str) -> set[str]:
+    mapping = {
+        "calculator": {"calculator", "calc", "计算器", "calc.exe"},
+        "notepad": {"notepad", "记事本", "notepad.exe"},
+        "explorer": {"explorer", "file explorer", "资源管理器", "explorer.exe"},
+        "browser": {"browser", "edge", "chrome", "firefox", "浏览器", "msedge.exe", "chrome.exe", "firefox.exe"},
+        "微信": {"微信", "wechat", "weixin", "wechat.exe", "weixin.exe"},
+        "pycharm": {"pycharm", "pycharm64.exe", "jetbrains pycharm"},
+        "todesk": {"todesk", "todesk.exe"},
+        "excel": {"excel", "excel.exe"},
+        "word": {"word", "winword", "winword.exe"},
+        "powerpoint": {"powerpoint", "ppt", "powerpnt", "powerpnt.exe"},
+        "vscode": {"vscode", "visual studio code", "cursor", "code.exe", "cursor.exe"},
+        "paint": {"paint", "mspaint", "mspaint.exe", "画图"},
+        "settings": {"settings", "systemsettings", "systemsettings.exe", "设置"},
+        "wechat": {"wechat", "weixin", "wechat.exe", "weixin.exe", "微信"},
+        "dingtalk": {"dingtalk", "dingtalk.exe", "钉钉"},
+        "wps": {"wps", "wps office", "wps.exe"},
+    }
+    if expected in mapping:
+        return set(mapping[expected])
+    return {expected} if expected else set()
+
+
+def _normalize_open_app_request(expected: str) -> str:
+    cleaned = _normalize_text(expected)
+    for prefix in ("打开", "open "):
+        if cleaned.startswith(prefix):
+            return cleaned[len(prefix):].strip()
+    return cleaned
 
 
 def _dedupe_facts(facts: list[ObservedFact]) -> list[ObservedFact]:

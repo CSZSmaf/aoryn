@@ -7,6 +7,8 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = "desktop-agent-workspace.sidebar-collapsed
 const OVERVIEW_CACHE_KEY = "desktop-agent-workspace.overview-cache";
 const SEND_SHORTCUT_STORAGE_KEY = "desktop-agent-workspace.send-shortcut";
 const CHAT_SESSIONS_STORAGE_KEY = "desktop-agent-workspace.chat-sessions";
+const AGENT_SESSIONS_STORAGE_KEY = "desktop-agent-workspace.agent-sessions";
+const AGENT_RUN_SESSION_MAP_STORAGE_KEY = "desktop-agent-workspace.agent-run-session-map";
 const HISTORY_SELECTION_STORAGE_KEY = "desktop-agent-workspace.history-selection";
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "desktop-agent-workspace.active-chat-session";
 const ACTIVE_CHAT_SESSION_SESSION_KEY = "desktop-agent-workspace.session-active-chat-session";
@@ -43,9 +45,12 @@ const state = {
   runs: [],
   jobs: [],
   chatSessions: [],
+  agentSessions: [],
+  agentRunSessionMap: {},
   selectedRunId: null,
   selectedRunDetails: null,
   selectedChatSessionId: null,
+  selectedAgentSessionId: null,
   locale: DEFAULT_LOCALE,
   uiMode: "agent",
   detailView: "overview",
@@ -112,6 +117,7 @@ const elements = {
   sidebarBackdrop: document.getElementById("sidebarBackdrop"),
   newTaskButton: document.getElementById("newTaskButton"),
   sidebarRunList: document.getElementById("sidebarRunList"),
+  clearHistoryButton: document.getElementById("clearHistoryButton"),
   refreshRunsButton: document.getElementById("refreshRunsButton"),
   connectionBadge: document.getElementById("connectionBadge"),
   uiModeTabs: document.getElementById("uiModeTabs"),
@@ -148,6 +154,7 @@ const elements = {
   languageSelect: document.getElementById("languageSelect"),
   sendShortcutSelect: document.getElementById("sendShortcutSelect"),
   maxStepsInput: document.getElementById("maxStepsInput"),
+  maxRunSecondsInput: document.getElementById("maxRunSecondsInput"),
   pauseInput: document.getElementById("pauseInput"),
   cursorMotionEnabled: document.getElementById("cursorMotionEnabled"),
   cursorMotionDuration: document.getElementById("cursorMotionDuration"),
@@ -246,6 +253,8 @@ function initializeState() {
   clearLegacyActiveChatSessionStorage();
   state.chatLaunchId = readSessionStorage(CHAT_LAUNCH_SESSION_KEY) || null;
   state.chatSessions = loadChatSessions();
+  state.agentSessions = loadAgentSessions();
+  state.agentRunSessionMap = loadAgentRunSessionMap();
   state.historySelection = loadPersistedHistorySelection();
   state.selectedChatSessionId = detectInitialChatSessionId(state.chatSessions);
   ensureRuntimePreferencesState();
@@ -320,6 +329,7 @@ function bindEvents() {
   elements.mobileMenuButton?.addEventListener("click", openSidebar);
   elements.sidebarBackdrop?.addEventListener("click", closeSidebar);
   elements.newTaskButton?.addEventListener("click", startNewTask);
+  elements.clearHistoryButton?.addEventListener("click", clearHistoryRecords);
   elements.refreshRunsButton?.addEventListener("click", () => refreshOverview({ forceDetailRefresh: true }));
   elements.uiModeTabs?.addEventListener("click", handleModeClick);
   elements.settingsButton?.addEventListener("click", openSettings);
@@ -445,6 +455,7 @@ async function refreshOverview(options = {}) {
     state.runs = payload.runs || [];
     persistOverviewSnapshot(payload);
     clearPendingTaskIfObserved();
+    syncAgentSessionsWithRuns();
 
     hydrateDefaults();
     restoreInitialHistorySelection(options);
@@ -528,6 +539,7 @@ function hydrateDefaults() {
 
   if (firstHydration) {
     elements.maxStepsInput.value = defaults.max_steps ?? "";
+    elements.maxRunSecondsInput.value = defaults.max_run_seconds ?? "";
     elements.pauseInput.value = defaults.pause_after_action ?? "";
     elements.cursorMotionEnabled.checked = defaults.cursor_motion_enabled !== false;
     elements.cursorMotionDuration.value = defaults.cursor_motion_duration ?? "";
@@ -550,15 +562,16 @@ function hydrateDefaults() {
 }
 
 function ensureSelectedRun(options = {}) {
-  const latestRunId = state.runs[0]?.id || null;
   const activeRunId = state.activeJob?.result?.run_id || null;
+  const selectedSession = getSelectedAgentSession();
+  const latestRunId = getAgentSessionLatestRunId(selectedSession) || state.runs[0]?.id || null;
   const selectedExists = state.runs.some((run) => run.id === state.selectedRunId);
 
   if (activeRunId && (state.autoFollowLatest || options.forceLatest)) {
     state.selectedRunId = activeRunId;
     state.showWelcome = false;
     if (state.uiMode !== "chat") {
-      persistHistorySelection({ kind: "run", id: activeRunId });
+      persistHistorySelection(selectedSession ? { kind: "agent", id: selectedSession.id } : { kind: "run", id: activeRunId });
     }
     return;
   }
@@ -578,7 +591,11 @@ function ensureSelectedRun(options = {}) {
     if (latestRunId) {
       state.showWelcome = false;
       if (state.uiMode !== "chat") {
-        persistHistorySelection({ kind: "run", id: latestRunId });
+        const latestRunSession = state.agentSessions.find((session) => (session.run_ids || []).includes(latestRunId)) || selectedSession;
+        persistHistorySelection(latestRunSession ? { kind: "agent", id: latestRunSession.id } : { kind: "run", id: latestRunId });
+        if (latestRunSession) {
+          state.selectedAgentSessionId = latestRunSession.id;
+        }
       }
     }
   }
@@ -626,7 +643,39 @@ async function loadRunDetails(runId, options = {}) {
   renderAll();
 }
 
+let renderScheduled = false;
+let renderImmediatePending = false;
+
 function renderAll() {
+  if (renderScheduled) {
+    return;
+  }
+  renderScheduled = true;
+  const flush = () => {
+    renderScheduled = false;
+    renderImmediatePending = false;
+    renderNow();
+  };
+  if (renderImmediatePending) {
+    flush();
+    return;
+  }
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(flush);
+  } else {
+    window.setTimeout(flush, 0);
+  }
+}
+
+function flushPendingRender() {
+  if (renderScheduled) {
+    renderScheduled = false;
+    renderImmediatePending = false;
+    renderNow();
+  }
+}
+
+function renderNow() {
   applyShellState();
   applyStaticCopy();
   applySupplementalStaticCopy();
@@ -2593,17 +2642,30 @@ function getConversationContext() {
 function clearPendingTaskIfObserved() {
   if (!state.pendingTask) return;
   if (state.activeJob) {
-    state.pendingTask = null;
     return;
   }
 
   const pending = normalizeText(state.pendingTask);
-  const matchedRun = state.runs.find((run) => normalizeText(run.task) === pending);
+  const matchedRun = state.runs.find((run) => normalizeText(run.task) === pending && !state.agentRunSessionMap?.[run.id]);
   if (matchedRun) {
     state.pendingTask = null;
     state.selectedRunId = matchedRun.id;
     state.showWelcome = false;
-    persistHistorySelection({ kind: "run", id: matchedRun.id });
+    const session =
+      getSelectedAgentSession() ||
+      state.agentSessions.find((item) => normalizeText(item.pending_task || "") === pending) ||
+      ensureAgentSession(matchedRun.task || pending);
+    if (!session.run_ids.includes(matchedRun.id)) {
+      session.run_ids.push(matchedRun.id);
+    }
+    state.agentRunSessionMap[matchedRun.id] = session.id;
+    session.pending_task = "";
+    session.pending_job_id = "";
+    session.updated_at = Number(matchedRun.finished_at || matchedRun.started_at || matchedRun.created_at || Math.floor(Date.now() / 1000));
+    state.selectedAgentSessionId = session.id;
+    persistHistorySelection({ kind: "agent", id: session.id });
+    persistAgentSessions();
+    persistAgentRunSessionMap();
   }
 }
 
@@ -3468,6 +3530,45 @@ function loadChatSessions() {
   }
 }
 
+function loadAgentSessions() {
+  try {
+    const raw = window.localStorage.getItem(AGENT_SESSIONS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => ({
+        id: String(item?.id || "").trim(),
+        title: normalizeText(item?.title || ""),
+        created_at: Number(item?.created_at || 0) || Math.floor(Date.now() / 1000),
+        updated_at: Number(item?.updated_at || 0) || Math.floor(Date.now() / 1000),
+        run_ids: Array.isArray(item?.run_ids) ? item.run_ids.map((runId) => normalizeText(runId)).filter(Boolean) : [],
+        pending_task: normalizeText(item?.pending_task || ""),
+        pending_job_id: normalizeText(item?.pending_job_id || ""),
+      }))
+      .filter((item) => item.id)
+      .sort((left, right) => Number(right.updated_at || 0) - Number(left.updated_at || 0));
+  } catch {
+    return [];
+  }
+}
+
+function loadAgentRunSessionMap() {
+  try {
+    const raw = window.localStorage.getItem(AGENT_RUN_SESSION_MAP_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([runId, sessionId]) => [normalizeText(runId), normalizeText(sessionId)])
+        .filter(([runId, sessionId]) => runId && sessionId)
+    );
+  } catch {
+    return {};
+  }
+}
+
 function persistChatSessions() {
   safeStorageSet(CHAT_SESSIONS_STORAGE_KEY, JSON.stringify(state.chatSessions.slice(0, 24)));
   writeSessionStorage(ACTIVE_CHAT_SESSION_SESSION_KEY, state.selectedChatSessionId || null);
@@ -3475,9 +3576,17 @@ function persistChatSessions() {
   clearLegacyActiveChatSessionStorage();
 }
 
+function persistAgentSessions() {
+  safeStorageSet(AGENT_SESSIONS_STORAGE_KEY, JSON.stringify(state.agentSessions.slice(0, 24)));
+}
+
+function persistAgentRunSessionMap() {
+  safeStorageSet(AGENT_RUN_SESSION_MAP_STORAGE_KEY, JSON.stringify(state.agentRunSessionMap || {}));
+}
+
 function normalizeHistorySelection(raw) {
   if (!raw || typeof raw !== "object") return null;
-  const kind = raw.kind === "chat" || raw.kind === "run" ? raw.kind : null;
+  const kind = raw.kind === "chat" || raw.kind === "run" || raw.kind === "agent" ? raw.kind : null;
   const id = normalizeText(raw.id || "");
   if (!kind || !id) return null;
   return { kind, id };
@@ -3519,6 +3628,12 @@ function findLatestNonEmptyChatSessionId() {
   );
 }
 
+function findLatestNonEmptyAgentSessionId() {
+  return (
+    state.agentSessions.find((session) => Array.isArray(session.run_ids) && session.run_ids.length)?.id || null
+  );
+}
+
 function restoreInitialHistorySelection(options = {}) {
   if (state.historySelectionRestored) return;
 
@@ -3557,11 +3672,40 @@ function restoreInitialHistorySelection(options = {}) {
     return;
   }
 
+  if (savedSelection.kind === "agent") {
+    const hasSavedSession = state.agentSessions.some(
+      (session) => session.id === savedSelection.id && ((session.run_ids || []).length || session.pending_task)
+    );
+    state.uiMode = "agent";
+    safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
+    if (hasSavedSession) {
+      state.selectedAgentSessionId = savedSelection.id;
+      state.showWelcome = false;
+      return;
+    }
+    persistHistorySelection(null);
+    state.selectedAgentSessionId = null;
+    state.selectedRunId = null;
+    state.selectedRunDetails = null;
+    state.loadingRunDetails = false;
+    state.showWelcome = true;
+    return;
+  }
+
   const hasSavedRun = state.runs.some((run) => run.id === savedSelection.id);
   state.uiMode = "agent";
   safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
 
   if (hasSavedRun) {
+    const containingSession = state.agentSessions.find((session) => (session.run_ids || []).includes(savedSelection.id)) || null;
+    if (containingSession) {
+      state.selectedAgentSessionId = containingSession.id;
+      state.selectedRunId = getAgentSessionLatestRunId(containingSession) || savedSelection.id;
+      state.showWelcome = false;
+      state.loadingRunDetails = true;
+      persistHistorySelection({ kind: "agent", id: containingSession.id });
+      return;
+    }
     state.selectedRunId = savedSelection.id;
     state.showWelcome = false;
     state.loadingRunDetails = true;
@@ -3629,8 +3773,198 @@ function generateChatMessageId() {
   return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function generateAgentSessionId() {
+  if (window.crypto?.randomUUID) {
+    return `agent-${window.crypto.randomUUID().slice(0, 12)}`;
+  }
+  return `agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function getSelectedChatSession() {
   return state.chatSessions.find((item) => item.id === state.selectedChatSessionId) || null;
+}
+
+function getSelectedAgentSession() {
+  return state.agentSessions.find((item) => item.id === state.selectedAgentSessionId) || null;
+}
+
+function getAgentSessionRuns(session) {
+  if (!session) return [];
+  const runMap = new Map((state.runs || []).map((run) => [run.id, run]));
+  return (session.run_ids || [])
+    .map((runId) => runMap.get(runId))
+    .filter(Boolean)
+    .sort((left, right) => Number(left.started_at || left.created_at || 0) - Number(right.started_at || right.created_at || 0));
+}
+
+function getAgentSessionLatestRunId(session) {
+  return getAgentSessionRuns(session).slice(-1)[0]?.id || null;
+}
+
+function ensureAgentSession(seedText = "") {
+  let session = getSelectedAgentSession();
+  if (session) {
+    persistHistorySelection({ kind: "agent", id: session.id });
+    return session;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  session = {
+    id: generateAgentSessionId(),
+    title: normalizeText(seedText || ""),
+    created_at: now,
+    updated_at: now,
+    run_ids: [],
+    pending_task: "",
+    pending_job_id: "",
+  };
+  state.agentSessions = [session, ...state.agentSessions];
+  state.selectedAgentSessionId = session.id;
+  persistHistorySelection({ kind: "agent", id: session.id });
+  persistAgentSessions();
+  return session;
+}
+
+function pruneEmptyAgentSessions() {
+  state.agentSessions = state.agentSessions.filter(
+    (session) => (session.run_ids || []).length || session.pending_task || session.pending_job_id
+  );
+  if (state.selectedAgentSessionId && !getSelectedAgentSession()) {
+    state.selectedAgentSessionId = null;
+  }
+}
+
+function syncAgentSessionsWithRuns() {
+  const runMap = new Map((state.runs || []).map((run) => [run.id, run]));
+  if (runMap.size === 0 && (state.agentSessions || []).length && !state.activeJob && !state.pendingTask) {
+    return;
+  }
+
+  const beforeSessions = JSON.stringify(state.agentSessions || []);
+  const beforeMap = JSON.stringify(state.agentRunSessionMap || {});
+  const validSessionIds = new Set((state.agentSessions || []).map((session) => session.id));
+  const nextMap = {};
+
+  for (const [runId, sessionId] of Object.entries(state.agentRunSessionMap || {})) {
+    if (runMap.has(runId) && validSessionIds.has(sessionId)) {
+      nextMap[runId] = sessionId;
+    }
+  }
+
+  state.agentSessions = (state.agentSessions || []).map((session) => ({
+    ...session,
+    run_ids: Array.from(new Set((session.run_ids || []).filter((runId) => runMap.has(runId)))),
+    pending_job_id: normalizeText(session.pending_job_id || ""),
+    pending_task: normalizeText(session.pending_task || ""),
+  }));
+
+  for (const session of state.agentSessions) {
+    for (const runId of session.run_ids || []) {
+      nextMap[runId] = session.id;
+    }
+  }
+
+  const activeRunId = normalizeText(state.activeJob?.result?.run_id || "");
+  const activeJobId = normalizeText(state.activeJob?.id || "");
+  if (activeRunId && activeJobId && runMap.has(activeRunId)) {
+    const pendingSession = state.agentSessions.find((session) => normalizeText(session.pending_job_id || "") === activeJobId);
+    if (pendingSession) {
+      nextMap[activeRunId] = pendingSession.id;
+    }
+  }
+
+  const unassignedRuns = (state.runs || [])
+    .filter((run) => !nextMap[run.id])
+    .slice()
+    .sort((left, right) => Number(left.started_at || left.created_at || 0) - Number(right.started_at || right.created_at || 0));
+
+  const pendingSessions = state.agentSessions
+    .filter((session) => normalizeText(session.pending_job_id || ""))
+    .slice()
+    .sort((left, right) => Number(left.updated_at || left.created_at || 0) - Number(right.updated_at || right.created_at || 0));
+
+  for (const session of pendingSessions) {
+    const pendingTask = normalizeText(session.pending_task || "");
+    const sessionUpdatedAt = Number(session.updated_at || session.created_at || 0);
+    const candidateRun =
+      unassignedRuns.find((run) => {
+        if (nextMap[run.id]) return false;
+        const runStartedAt = Number(run.started_at || run.created_at || 0);
+        if (runStartedAt + 2 < sessionUpdatedAt) return false;
+        if (pendingTask && normalizeText(run.task || "") !== pendingTask) return false;
+        return true;
+      }) ||
+      unassignedRuns.find((run) => {
+        if (nextMap[run.id]) return false;
+        const runStartedAt = Number(run.started_at || run.created_at || 0);
+        return runStartedAt + 2 >= sessionUpdatedAt;
+      });
+    if (candidateRun) {
+      nextMap[candidateRun.id] = session.id;
+    }
+  }
+
+  for (const run of unassignedRuns) {
+    if (nextMap[run.id]) continue;
+    const timestamp = Number(run.started_at || run.created_at || Math.floor(Date.now() / 1000));
+    const session = {
+      id: generateAgentSessionId(),
+      title: normalizeText(run.task || ""),
+      created_at: timestamp,
+      updated_at: Number(run.finished_at || run.started_at || run.created_at || timestamp),
+      run_ids: [run.id],
+      pending_task: "",
+      pending_job_id: "",
+    };
+    state.agentSessions.push(session);
+    nextMap[run.id] = session.id;
+  }
+
+  state.agentSessions = state.agentSessions
+    .map((session) => {
+      const runIds = Object.entries(nextMap)
+        .filter(([, sessionId]) => sessionId === session.id)
+        .map(([runId]) => runId)
+        .sort((left, right) => {
+          const leftRun = runMap.get(left);
+          const rightRun = runMap.get(right);
+          return Number(leftRun?.started_at || leftRun?.created_at || 0) - Number(rightRun?.started_at || rightRun?.created_at || 0);
+        });
+      const latestRun = runIds.length ? runMap.get(runIds[runIds.length - 1]) : null;
+      const pendingTask = normalizeText(session.pending_task || "");
+      const pendingJobId = normalizeText(session.pending_job_id || "");
+      const pendingRunAssigned = runIds.some((runId) => {
+        const run = runMap.get(runId);
+        if (!run) return false;
+        const runStartedAt = Number(run.started_at || run.created_at || 0);
+        const sessionUpdatedAt = Number(session.updated_at || session.created_at || 0);
+        if (runStartedAt + 2 < sessionUpdatedAt) return false;
+        if (pendingTask && normalizeText(run.task || "") !== pendingTask) return false;
+        return true;
+      });
+      const shouldKeepPending = Boolean(pendingJobId) && !pendingRunAssigned;
+      return {
+        ...session,
+        run_ids: runIds,
+        pending_task: shouldKeepPending ? pendingTask : "",
+        pending_job_id: shouldKeepPending ? pendingJobId : "",
+        title: session.title || normalizeText(latestRun?.task || pendingTask || ""),
+        updated_at: Math.max(
+          Number(session.updated_at || session.created_at || 0),
+          Number(latestRun?.finished_at || latestRun?.started_at || latestRun?.created_at || 0)
+        ),
+      };
+    })
+    .filter((session) => session.run_ids.length || session.pending_task || session.pending_job_id)
+    .sort((left, right) => Number(right.updated_at || 0) - Number(left.updated_at || 0));
+
+  state.agentRunSessionMap = nextMap;
+  if (!state.selectedAgentSessionId && !state.showWelcome) {
+    state.selectedAgentSessionId = findLatestNonEmptyAgentSessionId();
+  }
+  if (beforeSessions !== JSON.stringify(state.agentSessions || []) || beforeMap !== JSON.stringify(state.agentRunSessionMap || {})) {
+    persistAgentSessions();
+    persistAgentRunSessionMap();
+  }
 }
 
 function ensureChatSession(seedText = "") {
@@ -3714,15 +4048,22 @@ function looksLikeAgentTaskForUi(text) {
 }
 
 function buildSidebarHistoryItems() {
-  const runItems = state.runs.map((run) => ({
-    kind: "run",
-    id: run.id,
-    updatedAt: Number(run.finished_at || run.started_at || run.created_at || 0),
-    title: normalizeText(run.task || ""),
-    label: buildSidebarHistoryTitle(run.task),
-    active: state.uiMode !== "chat" && !state.showWelcome && state.selectedRunId === run.id,
-    task: run.task,
-  }));
+  const agentItems = state.agentSessions
+    .filter((session) => (session.run_ids || []).length || session.pending_task)
+    .map((session) => {
+      const runs = getAgentSessionRuns(session);
+      const latestRun = runs[runs.length - 1] || null;
+      const task = latestRun?.task || session.pending_task || session.title || "";
+      return {
+        kind: "agent",
+        id: session.id,
+        updatedAt: Number(session.updated_at || latestRun?.finished_at || latestRun?.started_at || latestRun?.created_at || 0),
+        title: normalizeText(task),
+        label: buildSidebarHistoryTitle(task),
+        active: state.uiMode !== "chat" && !state.showWelcome && state.selectedAgentSessionId === session.id,
+        task,
+      };
+    });
   const chatItems = state.chatSessions
     .filter((session) => (session.messages || []).length)
     .map((session) => ({
@@ -3735,7 +4076,7 @@ function buildSidebarHistoryItems() {
       task: session.title,
     }));
 
-  return [...chatItems, ...runItems].sort((left, right) => right.updatedAt - left.updatedAt);
+  return [...chatItems, ...agentItems].sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
 function renderTopbar() {
@@ -3804,7 +4145,9 @@ function renderSidebarRuns() {
       const targetAttr =
         item.kind === "chat"
           ? `data-chat-session-id="${escapeHtml(item.id)}"`
-          : `data-run-id="${escapeHtml(item.id)}"`;
+          : item.kind === "agent"
+            ? `data-agent-session-id="${escapeHtml(item.id)}"`
+            : `data-run-id="${escapeHtml(item.id)}"`;
       return `
         <button
           class="history-item history-item--${item.kind}${item.active ? " active" : ""}"
@@ -3823,6 +4166,13 @@ function renderSidebarRuns() {
 }
 
 function renderMixedHistoryBadge(item) {
+  if (item.kind === "agent") {
+    return `
+      <span class="history-item__badge history-item__badge--agent" aria-hidden="true">
+        <i></i>
+      </span>
+    `;
+  }
   if (item.kind !== "chat") {
     return renderHistoryBadge(item.task);
   }
@@ -3879,15 +4229,17 @@ function setConversationLayoutContext(value) {
 function buildWelcomeRecentItems() {
   const recentItems = [];
 
-  for (const run of state.runs || []) {
-    const title = cleanRunTitle(run.task || run.id || "");
+  for (const session of state.agentSessions || []) {
+    const runs = getAgentSessionRuns(session);
+    const latestRun = runs[runs.length - 1] || null;
+    const title = cleanRunTitle(latestRun?.task || session.pending_task || session.title || "");
     if (!title) continue;
     recentItems.push({
-      key: `run-${run.id || title}`,
+      key: `agent-${session.id || title}`,
       kind: tr("Agent", "Agent"),
       title,
-      meta: formatShortTime(run.created_at || run.started_at || run.finished_at),
-      timestamp: Number(run.created_at || run.started_at || run.finished_at || 0),
+      meta: formatShortTime(session.updated_at || latestRun?.created_at || latestRun?.started_at || latestRun?.finished_at),
+      timestamp: Number(session.updated_at || latestRun?.created_at || latestRun?.started_at || latestRun?.finished_at || 0),
     });
   }
 
@@ -4009,23 +4361,46 @@ function renderWelcomeMessage() {
   `;
 }
 
+function renderAgentSessionConversation(session, context) {
+  const messages = [];
+  const sessionRuns = getAgentSessionRuns(session);
+  const selectedDetailsId = state.selectedRunDetails?.id || null;
+  const activeRunId = normalizeText(context?.active?.result?.run_id || "");
+
+  for (const run of sessionRuns) {
+    if (activeRunId && run.id === activeRunId) {
+      continue;
+    }
+    const record = selectedDetailsId === run.id ? state.selectedRunDetails : run;
+    messages.push(renderUserMessage(record.task || session?.title || ""));
+    messages.push(...renderCompletedConversation(record));
+  }
+
+  if (context.type === "pending") {
+    messages.push(renderUserMessage(context.task || session?.pending_task || ""));
+    messages.push(renderPendingMessage(context.task || session?.pending_task || ""));
+  } else if (context.type === "active") {
+    messages.push(renderUserMessage(context.active.task || session?.pending_task || ""));
+    messages.push(renderRunningMessage(context.active));
+  } else if (context.type === "loading") {
+    messages.push(renderLoadingMessage());
+  } else if (context.type === "run" && (!sessionRuns.length || selectedDetailsId !== sessionRuns[sessionRuns.length - 1]?.id)) {
+    messages.push(renderUserMessage(context.details.task || session?.title || ""));
+    messages.push(...renderCompletedConversation(context.details));
+  }
+
+  return messages;
+}
+
 function renderAgentChat() {
   const context = getAgentConversationContext();
+  const session = getSelectedAgentSession();
   const messages = [];
 
   if (context.type === "welcome") {
     messages.push(renderWelcomeMessage());
-  } else if (context.type === "pending") {
-    messages.push(renderUserMessage(context.task));
-    messages.push(renderPendingMessage(context.task));
-  } else if (context.type === "loading") {
-    messages.push(renderLoadingMessage());
-  } else if (context.type === "active") {
-    messages.push(renderUserMessage(context.active.task || ""));
-    messages.push(renderRunningMessage(context.active));
-  } else if (context.type === "run") {
-    messages.push(renderUserMessage(context.details.task || ""));
-    messages.push(...renderCompletedConversation(context.details));
+  } else {
+    messages.push(...renderAgentSessionConversation(session, context));
   }
 
   elements.chatStream.innerHTML = messages.join("");
@@ -4137,6 +4512,12 @@ function handleHistoryClick(event) {
   const chatButton = event.target.closest("[data-chat-session-id]");
   if (chatButton) {
     selectChatSession(chatButton.dataset.chatSessionId);
+    return;
+  }
+
+  const agentButton = event.target.closest("[data-agent-session-id]");
+  if (agentButton) {
+    selectAgentSession(agentButton.dataset.agentSessionId);
     return;
   }
 
@@ -4255,13 +4636,17 @@ async function submitChatMessage(text) {
 }
 
 async function submitAgentTask(taskText) {
+  const configOverrides = buildConfigOverrides();
+  if (elements.maxRunSecondsInput.value) {
+    configOverrides.max_run_seconds = Number(elements.maxRunSecondsInput.value);
+  }
   const payload = {
     task: taskText.trim(),
     planner_mode: "auto",
     dry_run: false,
     max_steps: elements.maxStepsInput.value ? Number(elements.maxStepsInput.value) : null,
     pause_after_action: elements.pauseInput.value ? Number(elements.pauseInput.value) : null,
-    config_overrides: buildConfigOverrides(),
+    config_overrides: configOverrides,
   };
 
   if (!payload.task) {
@@ -4269,12 +4654,18 @@ async function submitAgentTask(taskText) {
     return;
   }
 
+  const agentSession = ensureAgentSession(payload.task);
+  agentSession.pending_task = payload.task;
+  agentSession.updated_at = Math.floor(Date.now() / 1000);
+  state.selectedAgentSessionId = agentSession.id;
   state.pendingTask = payload.task;
   state.showWelcome = false;
   state.autoFollowLatest = true;
   state.selectedRunId = null;
   state.selectedRunDetails = null;
   clearHistorySelection("run");
+  persistHistorySelection({ kind: "agent", id: agentSession.id });
+  persistAgentSessions();
   if (state.uiMode !== "agent") {
     setUiMode("agent");
   }
@@ -4282,15 +4673,65 @@ async function submitAgentTask(taskText) {
 
   const response = await postJson("/api/tasks", payload);
   if (!response.ok) {
+    agentSession.pending_task = "";
+    agentSession.pending_job_id = "";
+    pruneEmptyAgentSessions();
+    persistAgentSessions();
     state.pendingTask = null;
     elements.submitHint.textContent = response.payload?.error || tr("任务提交失败", "Task submission failed");
     renderAll();
     return;
   }
 
+  agentSession.pending_job_id = normalizeText(response.payload?.id || "");
+  persistAgentSessions();
   elements.taskInput.value = "";
   elements.submitHint.textContent = tr("任务已发送", "Queued");
   await refreshOverview({ forceLatest: true });
+}
+
+async function clearHistoryRecords() {
+  if (state.activeJob) {
+    window.alert(tr("有任务正在运行，暂时不能清空历史记录。", "A task is still running, so history cannot be cleared yet."));
+    return;
+  }
+  const confirmed = window.confirm(
+    tr(
+      "确定要清空所有历史记录吗？这会删除本地运行记录和聊天记录，且无法撤销。",
+      "Clear all history? This removes local runs and chat history and cannot be undone."
+    )
+  );
+  if (!confirmed) return;
+
+  const response = await postJson("/api/history/clear", {});
+  if (!response.ok) {
+    window.alert(response.payload?.error || tr("清空历史记录失败。", "Failed to clear history."));
+    return;
+  }
+
+  state.chatSessions = [];
+  state.agentSessions = [];
+  state.agentRunSessionMap = {};
+  state.selectedChatSessionId = null;
+  state.selectedAgentSessionId = null;
+  state.runs = [];
+  state.jobs = [];
+  state.selectedRunId = null;
+  state.selectedRunDetails = null;
+  state.loadingRunDetails = false;
+  state.pendingTask = null;
+  state.autoFollowLatest = false;
+  state.showWelcome = true;
+  clearHistorySelection();
+  persistChatSessions();
+  persistAgentSessions();
+  persistAgentRunSessionMap();
+  clearLegacyActiveChatSessionStorage();
+  writeSessionStorage(ACTIVE_CHAT_SESSION_SESSION_KEY, null);
+  safeStorageSet(OVERVIEW_CACHE_KEY, null);
+  closeSidebar();
+  renderAll();
+  await refreshOverview({ forceDetailRefresh: true });
 }
 
 function handleGlobalKeydown(event) {
@@ -4362,13 +4803,15 @@ function startNewTask() {
     return;
   }
 
+  pruneEmptyAgentSessions();
+  state.selectedAgentSessionId = null;
   state.showWelcome = true;
   state.selectedRunId = null;
   state.selectedRunDetails = null;
   state.loadingRunDetails = false;
   state.pendingTask = null;
   state.autoFollowLatest = false;
-  clearHistorySelection("run");
+  clearHistorySelection("agent");
   if (state.uiMode !== "agent") {
     state.uiMode = "agent";
     safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
@@ -4420,6 +4863,8 @@ function prefillTask(task) {
 }
 
 function selectRun(runId, options = {}) {
+  const containingSession = state.agentSessions.find((session) => (session.run_ids || []).includes(runId)) || null;
+  state.selectedAgentSessionId = containingSession?.id || state.selectedAgentSessionId;
   state.showWelcome = false;
   state.selectedRunId = runId;
   state.selectedRunDetails = null;
@@ -4428,13 +4873,33 @@ function selectRun(runId, options = {}) {
   state.pendingTask = null;
   state.uiMode = options.keepMode === "developer" ? "developer" : "agent";
   safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
-  persistHistorySelection({ kind: "run", id: runId });
+  persistHistorySelection(containingSession ? { kind: "agent", id: containingSession.id } : { kind: "run", id: runId });
   if (options.openDrawer) {
     state.drawerOpen = true;
   }
   closeSidebar();
   renderAll();
   loadRunDetails(runId, { background: false });
+}
+
+function selectAgentSession(sessionId) {
+  const session = state.agentSessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  state.selectedAgentSessionId = session.id;
+  state.showWelcome = false;
+  state.pendingTask = normalizeText(session.pending_task || "") || null;
+  state.selectedRunId = getAgentSessionLatestRunId(session);
+  state.selectedRunDetails = null;
+  state.loadingRunDetails = Boolean(state.selectedRunId);
+  state.autoFollowLatest = true;
+  state.uiMode = "agent";
+  safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
+  persistHistorySelection({ kind: "agent", id: session.id });
+  closeSidebar();
+  renderAll();
+  if (state.selectedRunId) {
+    loadRunDetails(state.selectedRunId, { background: false });
+  }
 }
 
 function selectChatSession(sessionId) {
@@ -4590,6 +5055,8 @@ function applyStaticCopy() {
   elements.settingsButton?.setAttribute("title", t("topbar.settings"));
   elements.refreshRunsButton?.setAttribute("aria-label", t("common.refresh"));
   elements.refreshRunsButton?.setAttribute("title", t("common.refresh"));
+  elements.clearHistoryButton?.setAttribute("aria-label", tr("清空历史记录", "Clear history"));
+  elements.clearHistoryButton?.setAttribute("title", tr("清空历史记录", "Clear history"));
   elements.submitButton?.setAttribute("aria-label", t("chat.send"));
   elements.submitButton?.setAttribute("title", t("chat.send"));
   elements.stopButton?.setAttribute("aria-label", t("chat.stop"));
@@ -5652,9 +6119,12 @@ function renderDeveloperTimelineItem(step) {
       : null;
   const actions = (step.executed_actions || []).slice(0, 4);
   const timingPill = renderTimingSummary(step.timings);
+  const verificationStatus = step.verification?.status || (step.error ? "failed" : "success");
+  const statusToken =
+    verificationStatus === "partial_progress" ? "partial_progress" : verificationStatus === "failed" || step.error ? "failed" : "success";
 
   return `
-    <article class="timeline-item timeline-item--developer">
+    <article class="timeline-item timeline-item--developer" data-status="${escapeHtml(statusToken)}">
       <div class="timeline-item__head">
         <div>
           <p>${escapeHtml(tr("步骤", "Step"))} ${escapeHtml(String(step.step))}</p>
@@ -5683,7 +6153,7 @@ function renderLiveDeveloperTimeline() {
   const timingPill = renderTimingSummary(progress.latest_timings);
 
   return `
-    <article class="timeline-item timeline-item--developer timeline-item--live">
+    <article class="timeline-item timeline-item--developer timeline-item--live" data-status="running">
       <div class="timeline-item__head">
         <div>
           <p>${escapeHtml(tr("Live", "Live"))}</p>
@@ -6660,6 +7130,7 @@ async function refreshEnvironmentCheck() {
   } else if (!state.environmentCheck) {
     state.environmentCheck = { items: [] };
   }
+  persistAgentSessions();
   renderAll();
   if (environmentCheckHasBackgroundProvider(payload)) {
     scheduleEnvironmentCheck({ delayMs: 1400 });

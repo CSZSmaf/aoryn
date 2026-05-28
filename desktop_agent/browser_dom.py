@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
+from typing import Callable
 
 from desktop_agent.config import AgentConfig
 
 
 class BrowserDOMError(RuntimeError):
     """Raised when DOM-based browser automation cannot continue."""
+
+
+class BrowserDOMCancelled(BrowserDOMError):
+    """Raised when a DOM operation is interrupted by the active run stop flag."""
 
 
 @dataclass(slots=True)
@@ -43,32 +49,45 @@ def dom_backend_status(backend: str) -> BrowserDOMStatus:
 class PlaywrightBrowserSession:
     """Lazy Playwright browser session for DOM-first interactions."""
 
-    def __init__(self, config: AgentConfig):
+    _POLL_TIMEOUT_MS = 200
+    _TEXT_PROBE_TIMEOUT_MS = 500
+    _MAX_BLOCKING_ACTION_MS = 1200
+    _MAX_NAVIGATION_MS = 3000
+    _MAX_POST_CLICK_WAIT_MS = 1500
+
+    def __init__(self, config: AgentConfig, stop_requested: Callable[[], bool] | None = None):
         self.config = config
+        self._stop_requested = stop_requested
         self._playwright = None
         self._browser = None
         self._page = None
 
+    def set_stop_requested(self, stop_requested: Callable[[], bool] | None) -> None:
+        self._stop_requested = stop_requested
+
     def open_url(self, target: str) -> None:
+        self._ensure_not_stopped()
         page = self._ensure_page()
         normalized = target if target.strip().lower() == "about:blank" else self.config.normalize_browser_url(target)
         page.goto(
             normalized,
             wait_until="domcontentloaded",
-            timeout=int(self.config.browser_dom_timeout * 1000),
+            timeout=min(self._timeout_ms(), self._MAX_NAVIGATION_MS),
         )
+        self._ensure_not_stopped()
 
     def search(self, query: str) -> None:
         self.open_url(self.config.build_browser_search_url(query))
 
     def click(self, *, text: str | None = None, selector: str | None = None) -> None:
         page = self._ensure_page()
-        timeout_ms = int(self.config.browser_dom_timeout * 1000)
+        timeout_ms = self._timeout_ms()
 
         if selector:
             locator = page.locator(selector).first
-            locator.wait_for(state="visible", timeout=timeout_ms)
-            locator.click(timeout=timeout_ms)
+            self._wait_for_visible(locator, timeout_ms)
+            self._ensure_not_stopped()
+            locator.click(timeout=self._action_timeout_ms(timeout_ms))
             self._wait_after_click(page, timeout_ms)
             return
 
@@ -85,10 +104,13 @@ class PlaywrightBrowserSession:
 
         for locator in locators:
             try:
-                locator.wait_for(state="visible", timeout=1200)
-                locator.click(timeout=timeout_ms)
+                self._wait_for_visible(locator, min(timeout_ms, self._TEXT_PROBE_TIMEOUT_MS))
+                self._ensure_not_stopped()
+                locator.click(timeout=self._action_timeout_ms(timeout_ms))
                 self._wait_after_click(page, timeout_ms)
                 return
+            except BrowserDOMCancelled:
+                raise
             except Exception:
                 continue
 
@@ -96,34 +118,41 @@ class PlaywrightBrowserSession:
 
     def fill(self, *, value: str, text: str | None = None, selector: str | None = None) -> None:
         locator = self._resolve_locator(text=text, selector=selector)
-        timeout_ms = int(self.config.browser_dom_timeout * 1000)
-        locator.wait_for(state="visible", timeout=timeout_ms)
-        locator.fill(value, timeout=timeout_ms)
+        timeout_ms = self._timeout_ms()
+        self._wait_for_visible(locator, timeout_ms)
+        self._ensure_not_stopped()
+        locator.fill(value, timeout=self._action_timeout_ms(timeout_ms))
+        self._ensure_not_stopped()
 
     def select(self, *, value: str, text: str | None = None, selector: str | None = None) -> None:
         locator = self._resolve_locator(text=text, selector=selector)
-        timeout_ms = int(self.config.browser_dom_timeout * 1000)
-        locator.wait_for(state="visible", timeout=timeout_ms)
+        timeout_ms = self._timeout_ms()
+        self._wait_for_visible(locator, timeout_ms)
+        self._ensure_not_stopped()
         try:
-            locator.select_option(value=value, timeout=timeout_ms)
+            locator.select_option(value=value, timeout=self._action_timeout_ms(timeout_ms))
         except Exception:
-            locator.select_option(label=value, timeout=timeout_ms)
+            self._ensure_not_stopped()
+            locator.select_option(label=value, timeout=self._action_timeout_ms(timeout_ms))
+        self._ensure_not_stopped()
 
     def wait_for(self, *, text: str | None = None, selector: str | None = None, timeout_seconds: float | None = None) -> None:
         locator = self._resolve_locator(text=text, selector=selector)
-        timeout_ms = int((timeout_seconds or self.config.browser_dom_timeout) * 1000)
-        locator.wait_for(state="visible", timeout=timeout_ms)
+        timeout_ms = self._timeout_ms(timeout_seconds or self.config.browser_dom_timeout)
+        self._wait_for_visible(locator, timeout_ms)
 
     def extract(self, *, text: str | None = None, selector: str | None = None) -> str:
         locator = self._resolve_locator(text=text, selector=selector)
-        timeout_ms = int(self.config.browser_dom_timeout * 1000)
-        locator.wait_for(state="visible", timeout=timeout_ms)
+        timeout_ms = self._timeout_ms()
+        self._wait_for_visible(locator, timeout_ms)
         try:
-            return str(locator.inner_text(timeout=timeout_ms) or "").strip()
+            return str(locator.inner_text(timeout=self._action_timeout_ms(timeout_ms)) or "").strip()
         except Exception:
-            return str(locator.text_content(timeout=timeout_ms) or "").strip()
+            self._ensure_not_stopped()
+            return str(locator.text_content(timeout=self._action_timeout_ms(timeout_ms)) or "").strip()
 
     def snapshot(self) -> dict[str, str | None] | None:
+        self._ensure_not_stopped()
         if self._page is None:
             return None
 
@@ -132,17 +161,20 @@ class PlaywrightBrowserSession:
             snapshot["url"] = str(self._page.url or "").strip() or None
         except Exception:
             snapshot["url"] = None
+        self._ensure_not_stopped()
         try:
             snapshot["title"] = str(self._page.title() or "").strip() or None
         except Exception:
             snapshot["title"] = None
+        self._ensure_not_stopped()
         try:
-            timeout_ms = min(int(self.config.browser_dom_timeout * 1000), 1200)
+            timeout_ms = min(self._timeout_ms(), 800)
             body_text = str(self._page.locator("body").inner_text(timeout=timeout_ms) or "").strip()
             if body_text:
                 snapshot["text"] = body_text[:4000]
         except Exception:
             snapshot["text"] = None
+        self._ensure_not_stopped()
         return snapshot
 
     def close(self) -> None:
@@ -166,6 +198,7 @@ class PlaywrightBrowserSession:
             self._playwright = None
 
     def _ensure_page(self):
+        self._ensure_not_stopped()
         if self._page is not None:
             return self._page
 
@@ -196,6 +229,7 @@ class PlaywrightBrowserSession:
             ) from exc
 
         self._page = self._browser.new_page()
+        self._ensure_not_stopped()
         return self._page
 
     def _select_browser_type(self):
@@ -207,19 +241,26 @@ class PlaywrightBrowserSession:
             return self._playwright.firefox
         return self._playwright.chromium
 
-    @staticmethod
-    def _wait_after_click(page, timeout_ms: int) -> None:
-        try:
-            page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
-        except Exception:
-            return
+    def _wait_after_click(self, page, timeout_ms: int) -> None:
+        deadline = time.monotonic() + min(timeout_ms, self._MAX_POST_CLICK_WAIT_MS) / 1000
+        while True:
+            self._ensure_not_stopped()
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            if remaining_ms <= 0:
+                return
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=min(remaining_ms, self._POLL_TIMEOUT_MS))
+                self._ensure_not_stopped()
+                return
+            except Exception:
+                continue
 
     def _resolve_locator(self, *, text: str | None = None, selector: str | None = None):
         page = self._ensure_page()
-        timeout_ms = int(self.config.browser_dom_timeout * 1000)
+        timeout_ms = self._timeout_ms()
         if selector:
             locator = page.locator(selector).first
-            locator.wait_for(state="visible", timeout=timeout_ms)
+            self._wait_for_visible(locator, timeout_ms)
             return locator
 
         label = (text or "").strip()
@@ -236,11 +277,53 @@ class PlaywrightBrowserSession:
         ]
         for locator in locators:
             try:
-                locator.wait_for(state="visible", timeout=1200)
+                self._wait_for_visible(locator, min(timeout_ms, self._TEXT_PROBE_TIMEOUT_MS))
                 return locator
+            except BrowserDOMCancelled:
+                raise
             except Exception:
                 continue
         raise BrowserDOMError(f"Could not resolve a DOM locator matching `{label}`.")
+
+    def _timeout_ms(self, seconds: float | None = None) -> int:
+        value = self.config.browser_dom_timeout if seconds is None else seconds
+        try:
+            timeout_seconds = float(value)
+        except (TypeError, ValueError):
+            timeout_seconds = float(self.config.browser_dom_timeout)
+        return max(100, int(timeout_seconds * 1000))
+
+    def _action_timeout_ms(self, timeout_ms: int) -> int:
+        return max(100, min(int(timeout_ms), self._MAX_BLOCKING_ACTION_MS))
+
+    def _wait_for_visible(self, locator, timeout_ms: int) -> None:
+        deadline = time.monotonic() + max(0, int(timeout_ms)) / 1000
+        last_error: Exception | None = None
+        while True:
+            self._ensure_not_stopped()
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            if remaining_ms <= 0:
+                if last_error is not None:
+                    raise last_error
+                raise BrowserDOMError("Timed out waiting for a visible DOM target.")
+            try:
+                locator.wait_for(state="visible", timeout=min(remaining_ms, self._POLL_TIMEOUT_MS))
+                self._ensure_not_stopped()
+                return
+            except BrowserDOMCancelled:
+                raise
+            except Exception as exc:
+                last_error = exc
+
+    def _ensure_not_stopped(self) -> None:
+        if self._stop_requested is None:
+            return
+        try:
+            requested = bool(self._stop_requested())
+        except Exception:
+            requested = False
+        if requested:
+            raise BrowserDOMCancelled("Stopped by user.")
 
 
 def _optional_existing_path(path: str | None) -> str | None:

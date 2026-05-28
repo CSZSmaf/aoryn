@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -203,6 +204,33 @@ def resolve_artifact_path(run_root: Path, run_id: str, artifact_name: str) -> Pa
     if not artifact_path.exists() or not artifact_path.is_file():
         return None
     return artifact_path
+
+
+def clear_runs(run_root: Path) -> int:
+    resolved_root = run_root.resolve()
+    if not resolved_root.exists() or not resolved_root.is_dir():
+        return 0
+    run_dirs = []
+    for summary_path in resolved_root.glob("*/summary.json"):
+        if not summary_path.is_file():
+            continue
+        run_dir = summary_path.parent.resolve()
+        try:
+            run_dir.relative_to(resolved_root)
+        except ValueError:
+            continue
+        if run_dir == resolved_root:
+            continue
+        run_dirs.append(run_dir)
+
+    cleared = 0
+    for run_dir in sorted(set(run_dirs)):
+        try:
+            shutil.rmtree(run_dir)
+        except OSError:
+            continue
+        cleared += 1
+    return cleared
 
 
 def _resolve_run_dir(run_root: Path, run_id: str) -> Path | None:

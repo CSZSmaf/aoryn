@@ -13,9 +13,10 @@ class AgentConfig:
     planner_mode: str = "auto"
     dry_run: bool = True
     max_steps: int = 12
-    pause_after_action: float = 0.4
-    cursor_motion_enabled: bool = True
-    cursor_motion_duration: float = 0.20
+    max_run_seconds: float | None = None
+    pause_after_action: float = 0.12
+    cursor_motion_enabled: bool = False
+    cursor_motion_duration: float = 0.12
     max_text_length: int = 200
     max_browser_target_length: int = 512
     max_wait_seconds: float = 10.0
@@ -40,7 +41,7 @@ class AgentConfig:
     managed_browser_port: int = 38991
     browser_control_mode: str = "hybrid"
     browser_dom_backend: str = "playwright"
-    browser_dom_timeout: float = 8.0
+    browser_dom_timeout: float = 4.0
     browser_headless: bool = False
     browser_channel: str | None = "msedge"
     browser_executable_path: str | None = None
@@ -48,7 +49,7 @@ class AgentConfig:
     window_display_mode: str = "workarea_maximized"
     desktop_autonomy_mode: str = "conservative"
     window_conflict_policy: str = "minimize_first"
-    window_match_timeout: float = 2.5
+    window_match_timeout: float = 1.5
     screen_target_policy: str = "foreground_window_monitor"
     approval_policy: str = "tiered"
     complex_task_planning: str = "hybrid"
@@ -97,10 +98,27 @@ class AgentConfig:
             "calculator": "calc.exe",
             "explorer": "explorer.exe",
             "browser": "msedge.exe",
+            "paint": "mspaint.exe",
+            "settings": "ms-settings:",
+            "word": "winword.exe",
+            "excel": "excel.exe",
+            "powerpoint": "powerpnt.exe",
+            "vscode": "code.exe",
         }
     )
     allowed_apps: list[str] = field(
-        default_factory=lambda: ["notepad", "calculator", "explorer", "browser"]
+        default_factory=lambda: [
+            "notepad",
+            "calculator",
+            "explorer",
+            "browser",
+            "paint",
+            "settings",
+            "word",
+            "excel",
+            "powerpoint",
+            "vscode",
+        ]
     )
     blocked_app_launch_terms: list[str] = field(
         default_factory=lambda: [
@@ -120,6 +138,11 @@ class AgentConfig:
             "disk management",
             "compmgmt",
             "mmc",
+            "终端",
+            "命令提示符",
+            "命令行",
+            "注册表",
+            "磁盘管理",
         ]
     )
     allowed_hotkeys: list[list[str]] = field(
@@ -127,10 +150,13 @@ class AgentConfig:
             ["win", "r"],
             ["ctrl", "l"],
             ["ctrl", "t"],
+            ["ctrl", "f"],
             ["ctrl", "a"],
             ["ctrl", "c"],
             ["ctrl", "v"],
+            ["ctrl", "s"],
             ["alt", "tab"],
+            ["alt", "f4"],
         ]
     )
     allowed_browser_schemes: list[str] = field(default_factory=lambda: ["http", "https"])
@@ -159,8 +185,24 @@ class AgentConfig:
         try:
             duration = float(self.cursor_motion_duration)
         except (TypeError, ValueError):
-            duration = 0.20
-        self.cursor_motion_duration = max(0.1, min(1.0, duration))
+            duration = 0.12
+        self.cursor_motion_duration = max(0.05, min(1.0, duration))
+        self.pause_after_action = _clamped_float(self.pause_after_action, default=0.12, minimum=0.0, maximum=2.0)
+        self.browser_dom_timeout = _clamped_float(self.browser_dom_timeout, default=4.0, minimum=0.5, maximum=30.0)
+        self.max_wait_seconds = _clamped_float(self.max_wait_seconds, default=10.0, minimum=0.2, maximum=60.0)
+        self.window_match_timeout = _clamped_float(self.window_match_timeout, default=1.5, minimum=0.2, maximum=15.0)
+        self.model_request_timeout = _clamped_float(
+            self.model_request_timeout,
+            default=90.0,
+            minimum=5.0,
+            maximum=300.0,
+        )
+        if self.max_run_seconds is not None:
+            try:
+                run_seconds = float(self.max_run_seconds)
+            except (TypeError, ValueError):
+                run_seconds = 0.0
+            self.max_run_seconds = max(0.0, run_seconds) or None
         planning_mode = str(self.complex_task_planning or "hybrid").strip().lower()
         self.complex_task_planning = planning_mode if planning_mode in {"off", "heuristic", "hybrid", "model"} else "hybrid"
         review_policy = str(self.plan_review_policy or "low_risk_auto").strip().lower()
@@ -202,3 +244,11 @@ class AgentConfig:
         if parsed.scheme:
             return cleaned
         return f"https://{cleaned}"
+
+
+def _clamped_float(value: Any, *, default: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))

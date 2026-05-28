@@ -28,6 +28,7 @@ def test_clean_config_overrides_accepts_model_browser_and_display_fields():
         "browser_control_mode": "dom",
         "browser_dom_backend": "playwright",
         "browser_dom_timeout": "12.5",
+        "max_run_seconds": "3600",
         "cursor_motion_enabled": "false",
         "cursor_motion_duration": "1.8",
         "browser_headless": "true",
@@ -55,6 +56,7 @@ def test_clean_config_overrides_accepts_model_browser_and_display_fields():
         "browser_control_mode": "dom",
         "browser_dom_backend": "playwright",
         "browser_dom_timeout": 12.5,
+        "max_run_seconds": 3600.0,
         "cursor_motion_enabled": False,
         "cursor_motion_duration": 1.8,
         "browser_headless": True,
@@ -111,8 +113,10 @@ def test_dashboard_meta_exposes_dom_and_model_defaults(monkeypatch):
         assert meta["defaults"]["dry_run"] is False
         assert meta["defaults"]["model_provider"] == "lmstudio_local"
         assert meta["defaults"]["browser_control_mode"] == "hybrid"
-        assert meta["defaults"]["cursor_motion_enabled"] is True
-        assert meta["defaults"]["cursor_motion_duration"] == 0.2
+        assert meta["defaults"]["cursor_motion_enabled"] is False
+        assert meta["defaults"]["cursor_motion_duration"] == 0.12
+        assert meta["defaults"]["pause_after_action"] == 0.12
+        assert meta["defaults"]["browser_dom_timeout"] == 8.0
         assert meta["dom_status"]["detail"] == "Playwright missing"
         assert any(item["value"] == "openai_api" for item in meta["model_providers"])
         assert any(item["value"] == "openai_compatible" for item in meta["model_providers"])
@@ -130,9 +134,7 @@ def test_dashboard_meta_exposes_dom_and_model_defaults(monkeypatch):
         assert any(item["id"] == "provider_check" for item in meta["workflow_recipes"])
         assert any(item["id"] == "openai_overview" for item in meta["documentation_links"])
     finally:
-        if config_path.exists():
-            config_path.unlink()
-        temp_root.rmdir()
+        shutil.rmtree(temp_root, ignore_errors=True)
 
 
 def test_dashboard_overview_does_not_block_on_managed_browser_status(monkeypatch):
@@ -149,7 +151,12 @@ def test_dashboard_overview_does_not_block_on_managed_browser_status(monkeypatch
     temp_root.mkdir(parents=True, exist_ok=True)
     try:
         config_path = temp_root / "config.yaml"
-        config_path.write_text("model_provider: lmstudio_local\n", encoding="utf-8")
+        run_root = temp_root / "runs"
+        run_root.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            f"model_provider: lmstudio_local\nrun_root: {json.dumps(run_root.as_posix())}\n",
+            encoding="utf-8",
+        )
         app = DashboardApp(host="127.0.0.1", port=8765, config_path=config_path)
 
         started = time.perf_counter()
@@ -160,12 +167,10 @@ def test_dashboard_overview_does_not_block_on_managed_browser_status(monkeypatch
         assert payload["meta"]["managed_browser_status"]["available"] is False
         assert payload["meta"]["managed_browser_status"]["detail"] == "Aoryn Browser is not running."
     finally:
-        if config_path.exists():
-            config_path.unlink()
-        temp_root.rmdir()
+        shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def test_dashboard_overview_refreshes_runs_in_background():
+def test_dashboard_overview_returns_runs_on_first_load():
     temp_root = Path("test_artifacts") / f"dashboard_runs_cache_{uuid4().hex}"
     run_root = temp_root / "runs"
     run_dir = run_root / "20260409_000001_cached"
@@ -191,17 +196,106 @@ def test_dashboard_overview_refreshes_runs_in_background():
         app = DashboardApp(host="127.0.0.1", port=8765, config_path=config_path)
 
         first_payload = app.overview()
-        assert first_payload["runs"] == []
+        assert first_payload["runs"][0]["id"] == "20260409_000001_cached"
 
-        refreshed: list[dict] = []
-        for _ in range(30):
-            refreshed = app.overview()["runs"]
-            if refreshed:
-                break
-            time.sleep(0.02)
-
+        refreshed = app.overview()["runs"]
         assert refreshed[0]["id"] == "20260409_000001_cached"
     finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_dashboard_clear_history_removes_runs_and_finished_jobs():
+    temp_root = Path("test_artifacts") / f"dashboard_clear_history_{uuid4().hex}"
+    run_root = temp_root / "runs"
+    run_dir = run_root / "20260409_000001_clear"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        config_path = temp_root / "config.yaml"
+        config_path.write_text(
+            f"model_provider: lmstudio_local\nrun_root: {json.dumps(run_root.as_posix())}\n",
+            encoding="utf-8",
+        )
+        (run_dir / "summary.json").write_text(
+            json.dumps({"task": "clear history", "completed": True, "steps": 1, "started_at": 100.0}),
+            encoding="utf-8",
+        )
+        app = DashboardApp(host="127.0.0.1", port=8765, config_path=config_path)
+        finished_job = DashboardJob(
+            job_id="job-finished",
+            task="finished task",
+            planner_mode="auto",
+            dry_run=False,
+            max_steps=1,
+            pause_after_action=None,
+            status="completed",
+        )
+        app.queue.jobs[finished_job.job_id] = finished_job
+
+        payload = app.clear_history()
+
+        assert payload["ok"] is True
+        assert payload["runs_cleared"] == 1
+        assert payload["jobs_cleared"] == 1
+        assert not run_dir.exists()
+        assert app.queue.list_jobs() == []
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_dashboard_clear_history_rejects_when_task_is_active():
+    app = DashboardApp(host="127.0.0.1", port=8765, config_path=None)
+    running_job = DashboardJob(
+        job_id="job-running",
+        task="running task",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=1,
+        pause_after_action=None,
+        status="running",
+    )
+    app.queue.jobs[running_job.job_id] = running_job
+    app.queue.active_job_id = running_job.job_id
+
+    with pytest.raises(RuntimeError, match="Another task is running"):
+        app.clear_history()
+
+
+def test_dashboard_history_clear_endpoint_returns_counts():
+    temp_root = Path("test_artifacts") / f"dashboard_clear_history_api_{uuid4().hex}"
+    run_root = temp_root / "runs"
+    run_dir = run_root / "20260409_000001_clear_api"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    config_path = temp_root / "config.yaml"
+    config_path.write_text(
+        f"model_provider: lmstudio_local\nrun_root: {json.dumps(run_root.as_posix())}\n",
+        encoding="utf-8",
+    )
+    (run_dir / "summary.json").write_text(
+        json.dumps({"task": "clear via api", "completed": True, "steps": 1, "started_at": 100.0}),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/history/clear",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 202
+            assert payload["ok"] is True
+            assert payload["runs_cleared"] == 1
+            assert payload["jobs_cleared"] == 0
+    finally:
+        server.shutdown()
+        server.server_close()
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
@@ -285,7 +379,7 @@ def test_load_agent_config_clamps_cursor_motion_duration():
         )
 
         assert config.cursor_motion_enabled is False
-        assert config.cursor_motion_duration == 0.1
+        assert config.cursor_motion_duration == 0.05
     finally:
         if config_path.exists():
             config_path.unlink()

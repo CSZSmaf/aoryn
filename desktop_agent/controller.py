@@ -123,6 +123,8 @@ class DesktopAgent:
         )
         self._live_progress_context: dict[str, Any] | None = None
         self._live_pointer_trail: list[dict[str, Any]] = []
+        self._active_run_deadline: float | None = None
+        self._active_stop_reason: str | None = None
         if hasattr(self.executor, "set_action_progress_callback"):
             self.executor.set_action_progress_callback(self._handle_action_progress)
 
@@ -160,6 +162,13 @@ class DesktopAgent:
         cancel_reason: str | None = None
         step_count = max(0, int(step_offset))
         challenge_signal: HumanVerificationSignal | None = None
+        previous_deadline = self._active_run_deadline
+        previous_stop_reason = self._active_stop_reason
+        previous_executor_stop_requested = getattr(self.executor, "_run_stop_requested", None)
+        self._active_run_deadline = _resolve_run_deadline(started_at, self.config.max_run_seconds)
+        self._active_stop_reason = None
+        if hasattr(self.executor, "set_run_stop_requested"):
+            self.executor.set_run_stop_requested(self._stop_requested)
         last_step_signature: str | None = None
         repeated_plan_count = 0
         last_visible_step_signature: str | None = None
@@ -170,7 +179,8 @@ class DesktopAgent:
         for relative_step_index in range(1, self.config.max_steps + 1):
             if self._stop_requested():
                 cancelled = True
-                cancel_reason = "Stopped by user."
+                cancel_reason = self._stop_cancel_reason()
+                challenge_signal = self._build_stop_signal()
                 break
 
             step_index = step_offset + relative_step_index
@@ -193,6 +203,7 @@ class DesktopAgent:
                 environment_payload = _build_environment_payload(screen_info)
                 if hasattr(self.executor, "update_environment"):
                     self.executor.update_environment(getattr(screen_info, "environment", None))
+                self._raise_if_stop_requested()
 
                 phase_started = time.perf_counter()
                 world_model = self._build_world_model(
@@ -202,6 +213,7 @@ class DesktopAgent:
                     captured_at=captured_at,
                 )
                 _record_step_timing(step_timings, "world_model", phase_started)
+                self._raise_if_stop_requested()
                 challenge_signal = detect_human_verification(world_model.browser_snapshot)
                 if challenge_signal is not None:
                     plan = _build_human_handoff_plan(challenge_signal)
@@ -309,6 +321,7 @@ class DesktopAgent:
 
                 current_subgoal = self.orchestrator.prepare_stage(state=execution_state, world_model=world_model)
                 _record_step_timing(step_timings, "observe_prepare", phase_started)
+                self._raise_if_stop_requested()
                 if current_subgoal is None:
                     completed = True
                     execution_state.completed = True
@@ -425,6 +438,7 @@ class DesktopAgent:
                     screen_height=screen_info.height,
                 )
                 _record_step_timing(step_timings, "plan", phase_started)
+                self._raise_if_stop_requested()
                 plan_signature = _build_step_signature(current_subgoal.id, step_proposal, safe_actions)
                 visible_step_signature = _build_visible_step_signature(current_subgoal.id, step_proposal, safe_actions)
                 if plan_signature == last_step_signature:
@@ -584,7 +598,8 @@ class DesktopAgent:
 
                 if self._stop_requested():
                     cancelled = True
-                    cancel_reason = "Stopped by user."
+                    cancel_reason = self._stop_cancel_reason()
+                    challenge_signal = self._build_stop_signal()
                     break
 
                 for action in safe_actions:
@@ -613,11 +628,13 @@ class DesktopAgent:
                     _record_step_timing(step_timings, "execute", phase_started)
                 finally:
                     self._clear_live_progress_context()
+                self._raise_if_stop_requested(executed_actions=safe_actions)
                 execution_state.app_context["last_agent_action_at"] = time.time()
                 execution_state.current_surface_kind = step_proposal.surface_kind
                 recoverable_error_count = 0
                 phase_started = time.perf_counter()
                 captured_at = self._refresh_step_screenshot(screenshot_path) or captured_at
+                self._raise_if_stop_requested(executed_actions=safe_actions)
                 refreshed_screen_info = getattr(self.perception, "last_screen_info", None) or screen_info
                 post_world_model = self._build_world_model(
                     screenshot_path=screenshot_path,
@@ -630,6 +647,7 @@ class DesktopAgent:
                 post_world_model.facts = post_facts
                 execution_state.facts = _merge_facts(execution_state.facts, post_facts)
                 _record_step_timing(step_timings, "capture_after", phase_started)
+                self._raise_if_stop_requested(executed_actions=safe_actions)
                 challenge_signal = detect_human_verification(post_world_model.browser_snapshot)
                 if challenge_signal is not None:
                     execution_state.world_model = post_world_model
@@ -681,6 +699,7 @@ class DesktopAgent:
                     before=world_model,
                     after=post_world_model,
                 )
+                self._raise_if_stop_requested(executed_actions=safe_actions)
                 execution_state.world_model = post_world_model
                 execution_state.last_verification = verification
                 execution_state.updated_at = time.time()
@@ -756,6 +775,7 @@ class DesktopAgent:
                         step_proposal=step_proposal,
                         verification=verification,
                         step_index=step_index,
+                        repeated_step_signature=(repeated_visible_step_count >= 2 or repeated_plan_count >= 2),
                     )
                     if recovery_mode == "repair":
                         current_subgoal.status = "pending"
@@ -823,7 +843,8 @@ class DesktopAgent:
 
                 if self._stop_requested():
                     cancelled = True
-                    cancel_reason = "Stopped by user."
+                    cancel_reason = self._stop_cancel_reason()
+                    challenge_signal = self._build_stop_signal()
                     break
 
                 if completed:
@@ -859,7 +880,8 @@ class DesktopAgent:
                 current_subgoal.status = "pending" if not subgoal_completed_now else current_subgoal.status
             except ExecutionCancelled as exc:
                 cancelled = True
-                cancel_reason = str(exc) or "Stopped by user."
+                cancel_reason = self._stop_cancel_reason(str(exc) or "Stopped by user.")
+                challenge_signal = self._build_stop_signal()
                 cancelled_at = time.time()
                 cancel_plan = _build_cancelled_plan(plan)
                 if execution_state is not None:
@@ -933,6 +955,7 @@ class DesktopAgent:
                         verification=verification,
                         step_index=step_index,
                         recoverable=recoverable,
+                        repeated_step_signature=(repeated_visible_step_count >= 2 or repeated_plan_count >= 2),
                     )
                 fallback_plan = PlanResult(
                     status_summary="Execution failed for this step.",
@@ -1042,7 +1065,7 @@ class DesktopAgent:
             started_at=started_at,
             finished_at=finished_at,
         )
-        return AgentRunResult(
+        result = AgentRunResult(
             task=task,
             completed=completed,
             steps=step_count,
@@ -1056,6 +1079,11 @@ class DesktopAgent:
             interruption_kind=challenge_signal.kind if challenge_signal else None,
             interruption_reason=challenge_signal.detail if challenge_signal else None,
         )
+        self._active_run_deadline = previous_deadline
+        self._active_stop_reason = previous_stop_reason
+        if hasattr(self.executor, "set_run_stop_requested"):
+            self.executor.set_run_stop_requested(previous_executor_stop_requested)
+        return result
 
     def _refresh_step_screenshot(self, screenshot_path: Path) -> float | None:
         try:
@@ -1509,12 +1537,40 @@ class DesktopAgent:
         )
 
     def _stop_requested(self) -> bool:
+        if self._active_run_deadline is not None and time.time() >= self._active_run_deadline:
+            self._active_stop_reason = "time_limit"
+            return True
         if self.stop_requested is None:
             return False
         try:
-            return bool(self.stop_requested())
+            requested = bool(self.stop_requested())
         except Exception:
             return False
+        if requested:
+            self._active_stop_reason = "user"
+        return requested
+
+    def _raise_if_stop_requested(self, *, executed_actions: list[Action] | None = None) -> None:
+        if self._stop_requested():
+            raise ExecutionCancelled(executed_actions=list(executed_actions or []))
+
+    def _stop_cancel_reason(self, fallback: str = "Stopped by user.") -> str:
+        if self._active_stop_reason == "time_limit":
+            return "Run time limit reached."
+        return fallback
+
+    def _build_stop_signal(self) -> HumanVerificationSignal | None:
+        if self._active_stop_reason != "time_limit":
+            return None
+        return HumanVerificationSignal(
+            kind="time_limit",
+            summary="Run time limit reached. Pause automation and resume when ready.",
+            detail=(
+                "The configured maximum run duration elapsed, so Aoryn stopped before starting more desktop "
+                "automation. Reopen this run from history to resume from the saved state."
+            ),
+            title=None,
+        )
 
     @staticmethod
     def _is_recoverable_error(exc: Exception) -> bool:
@@ -1774,6 +1830,7 @@ def _schedule_recovery(
     verification: VerificationResult,
     step_index: int,
     recoverable: bool = False,
+    repeated_step_signature: bool = False,
 ) -> str | None:
     standard_kind = standardize_failure_kind(verification.failure_kind)
     if verification.failure_kind in {"requires_auth", "requires_human", "approval_rejected"}:
@@ -1785,6 +1842,14 @@ def _schedule_recovery(
     repair_attempts = _count_subgoal_recovery(execution_state, subgoal.id, "repair")
     replan_attempts = _count_subgoal_recovery(execution_state, subgoal.id, "replan")
     capability_name = step_proposal.capability if step_proposal is not None else None
+
+    # When the planner keeps proposing the same action and it keeps failing
+    # despite repair attempts, give the next repair round a chance to try a
+    # different capability — repairing with an unchanged blocked-capability
+    # list will just produce the same plan again.
+    if repeated_step_signature and repair_attempts >= 1 and subgoal.failed_capabilities:
+        subgoal.failed_capabilities.clear()
+        execution_state.app_context["recovery_escalation"] = "repeated_step_capability_reset"
 
     if repair_attempts < 2:
         execution_state.app_context["pending_repair"] = {
@@ -1967,11 +2032,11 @@ def _infer_active_app(*, active_window_title: str | None, browser_snapshot: dict
         return "powerpoint"
     if "word" in title:
         return "word"
-    if "notepad" in title:
+    if "notepad" in title or "记事本" in title:
         return "notepad"
-    if "calculator" in title:
+    if "calculator" in title or "计算器" in title:
         return "calculator"
-    if "explorer" in title or "file explorer" in title:
+    if "explorer" in title or "file explorer" in title or "资源管理器" in title:
         return "explorer"
     return title.split(" - ")[-1] if title else None
 
@@ -2003,6 +2068,18 @@ def _build_environment_payload(screen_info) -> dict[str, Any] | None:
 
 def _record_step_timing(timings: dict[str, float], key: str, started_at: float) -> None:
     timings[key] = round(max(0.0, time.perf_counter() - started_at), 4)
+
+
+def _resolve_run_deadline(started_at: float, max_run_seconds: float | None) -> float | None:
+    if max_run_seconds is None:
+        return None
+    try:
+        seconds = float(max_run_seconds)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    return float(started_at) + seconds
 
 
 def _finalize_step_timings(timings: dict[str, float], step_started_at: float) -> dict[str, float]:

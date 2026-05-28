@@ -206,6 +206,35 @@ def test_desktop_agent_respects_stop_requested_between_steps():
         shutil.rmtree(scratch_root, ignore_errors=True)
 
 
+def test_desktop_agent_stops_when_run_time_limit_is_reached():
+    scratch_root = Path("test_artifacts") / f"controller_time_limit_{uuid4().hex}"
+    run_root = scratch_root / "runs"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        config = AgentConfig(dry_run=False, max_steps=6, max_run_seconds=0.5, run_root=run_root)
+        executor = _ExecutorStub()
+        agent = DesktopAgent(
+            config=config,
+            planner=_TwoStepPlanner(),
+            executor=executor,
+            perception=_PerceptionStub(),
+            logger=RunLogger(run_root),
+            guard=ActionGuard(config),
+        )
+
+        result = agent.run("wait until timeout", started_at=time.time() - 1.0)
+
+        assert result.completed is False
+        assert result.cancelled is True
+        assert result.cancel_reason == "Run time limit reached."
+        assert result.interruption_kind == "time_limit"
+        assert executor.executed_batches == 0
+        assert result.steps == 0
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
 def test_desktop_agent_logs_environment_payload():
     scratch_root = Path("test_artifacts") / f"controller_env_{uuid4().hex}"
     run_root = scratch_root / "runs"
@@ -419,6 +448,63 @@ def test_desktop_agent_marks_user_stop_with_cancel_reason():
         assert summary_payload["cancel_reason"] == "Stopped by user."
         step_payload = json.loads((result.run_dir / "step_01.json").read_text(encoding="utf-8"))
         assert step_payload["error"] == "Stopped by user."
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
+def test_desktop_agent_stops_after_execution_before_post_capture():
+    scratch_root = Path("test_artifacts") / f"controller_stop_after_execute_{uuid4().hex}"
+    run_root = scratch_root / "runs"
+    run_root.mkdir(parents=True, exist_ok=True)
+    stop_state = {"requested": False}
+
+    class _CountingPerception(_PerceptionStub):
+        def __init__(self) -> None:
+            self.captures = 0
+
+        def capture(self, output_path: Path) -> ScreenInfo:
+            self.captures += 1
+            return super().capture(output_path)
+
+    class _StopAfterExecuteExecutor(_ExecutorStub):
+        def execute_many(self, actions, pause_after_action, stop_requested=None):
+            super().execute_many(actions, pause_after_action, stop_requested=stop_requested)
+            stop_state["requested"] = True
+
+    class _LowRiskCapabilityExecutor:
+        def observe(self, world_model):
+            return []
+
+        def propose_step(self, execution_state, world_model):
+            return StepProposal(
+                intent="Open Calculator.",
+                actions=[Action.from_dict({"type": "open_app_if_needed", "app": "calculator"})],
+                capability="desktop_gui",
+                completes_subgoal=True,
+            )
+
+        def verify_step(self, execution_state, step, before, after):
+            raise AssertionError("verify_step should not run after stop was requested")
+
+    try:
+        config = AgentConfig(dry_run=False, max_steps=1, run_root=run_root)
+        perception = _CountingPerception()
+        agent = DesktopAgent(
+            config=config,
+            planner=_TwoStepPlanner(),
+            executor=_StopAfterExecuteExecutor(),
+            perception=perception,
+            logger=RunLogger(run_root),
+            guard=ActionGuard(config),
+            capability_executor=_LowRiskCapabilityExecutor(),
+            stop_requested=lambda: stop_state["requested"],
+        )
+
+        result = agent.run("open calculator")
+
+        assert result.completed is False
+        assert result.cancelled is True
+        assert perception.captures == 1
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
 
@@ -993,6 +1079,63 @@ def test_desktop_shell_controller_allows_normal_tray_trigger():
     )
 
     assert calls == ["toggle"]
+
+
+def test_floating_taskbar_activation_opens_main_when_cursor_is_outside():
+    from desktop_agent.desktop_shell import FloatingExecutionWindow
+
+    opened: list[str] = []
+    controller_stub = SimpleNamespace(
+        _suppress_taskbar_activation_until=0.0,
+        _cursor_is_over_window=lambda: False,
+        _on_open_main=lambda: opened.append("open"),
+    )
+    controller_stub._remember_programmatic_activation = lambda duration=0.5: setattr(
+        controller_stub,
+        "_suppress_taskbar_activation_until",
+        time.time() + duration,
+    )
+
+    FloatingExecutionWindow._open_main_from_taskbar(controller_stub, force=False)
+
+    assert opened == ["open"]
+    assert controller_stub._suppress_taskbar_activation_until > time.time()
+
+
+def test_floating_direct_mouse_activation_does_not_open_main():
+    from desktop_agent.desktop_shell import FloatingExecutionWindow
+
+    opened: list[str] = []
+    controller_stub = SimpleNamespace(
+        _suppress_taskbar_activation_until=0.0,
+        _cursor_is_over_window=lambda: True,
+        _remember_programmatic_activation=lambda duration=0.5: None,
+        _on_open_main=lambda: opened.append("open"),
+    )
+
+    FloatingExecutionWindow._open_main_from_taskbar(controller_stub, force=False)
+
+    assert opened == []
+
+
+def test_floating_taskbar_restore_ignores_cursor_position():
+    from desktop_agent.desktop_shell import FloatingExecutionWindow
+
+    opened: list[str] = []
+    controller_stub = SimpleNamespace(
+        _suppress_taskbar_activation_until=0.0,
+        _cursor_is_over_window=lambda: True,
+        _on_open_main=lambda: opened.append("open"),
+    )
+    controller_stub._remember_programmatic_activation = lambda duration=0.5: setattr(
+        controller_stub,
+        "_suppress_taskbar_activation_until",
+        time.time() + duration,
+    )
+
+    FloatingExecutionWindow._open_main_from_taskbar(controller_stub, force=True)
+
+    assert opened == ["open"]
 
 
 def test_desktop_shell_controller_quit_path_blocks_tray_reopen():

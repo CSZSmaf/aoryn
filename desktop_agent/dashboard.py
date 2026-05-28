@@ -32,7 +32,7 @@ from desktop_agent.chat_support import (
     sanitize_chat_messages,
 )
 from desktop_agent.controller import discover_config_path, load_agent_config, resume_task, run_task
-from desktop_agent.history import list_runs, load_run_details, resolve_artifact_path
+from desktop_agent.history import clear_runs, list_runs, load_run_details, resolve_artifact_path
 from desktop_agent.provider_tools import (
     ProviderModelEntry,
     ProviderSnapshot,
@@ -241,6 +241,18 @@ class TaskQueue:
                 return None
             job = self.jobs.get(self.active_job_id)
             return job.to_dict() if job else None
+
+    def clear_history(self) -> int:
+        with self.lock:
+            if self.active_job_id is not None:
+                raise RuntimeError("Another task is running. Please wait for it to finish.")
+            cleared = len(self.jobs)
+            self.jobs.clear()
+            self.cancel_events.clear()
+            self.decision_events.clear()
+            self.pending_decisions.clear()
+            self.decision_responses.clear()
+            return cleared
 
     def cancel_active(self) -> dict[str, Any]:
         with self.lock:
@@ -971,6 +983,13 @@ class DashboardApp:
                         return self._send_error(HTTPStatus.CONFLICT, str(exc))
                     return self._send_json(job, status=HTTPStatus.ACCEPTED)
 
+                if path == "/api/history/clear":
+                    try:
+                        payload = app.clear_history()
+                    except RuntimeError as exc:
+                        return self._send_error(HTTPStatus.CONFLICT, str(exc))
+                    return self._send_json(payload, status=HTTPStatus.ACCEPTED)
+
                 if path.startswith("/api/jobs/") and path.endswith("/decision"):
                     job_id = path.removeprefix("/api/jobs/").removesuffix("/decision").strip("/")
                     try:
@@ -1172,6 +1191,7 @@ class DashboardApp:
                 "planner_mode": "auto",
                 "dry_run": False,
                 "max_steps": config.max_steps,
+                "max_run_seconds": config.max_run_seconds,
                 "pause_after_action": config.pause_after_action,
                 "cursor_motion_enabled": config.cursor_motion_enabled,
                 "cursor_motion_duration": config.cursor_motion_duration,
@@ -1402,14 +1422,36 @@ class DashboardApp:
             "runs": self._overview_runs(limit=12),
         }
 
+    def clear_history(self) -> dict[str, Any]:
+        jobs_cleared = self.queue.clear_history()
+        runs_cleared = clear_runs(self.run_root)
+        with self._overview_runs_lock:
+            self._overview_runs_cache = None
+            self._overview_runs_refreshing = False
+        return {
+            "ok": True,
+            "jobs_cleared": jobs_cleared,
+            "runs_cleared": runs_cleared,
+        }
+
     def _overview_runs(self, *, limit: int) -> list[dict[str, Any]]:
         now = time.time()
         with self._overview_runs_lock:
             cached = self._overview_runs_cache
-            if not self._overview_runs_refreshing and (
-                cached is None or int(cached.get("limit") or 0) != int(limit)
-                or now - float(cached.get("updated_at") or 0.0) >= _OVERVIEW_RUNS_CACHE_SECONDS
-            ):
+            cache_miss = cached is None or int(cached.get("limit") or 0) != int(limit)
+            cache_stale = cached is not None and now - float(cached.get("updated_at") or 0.0) >= _OVERVIEW_RUNS_CACHE_SECONDS
+            if cache_miss:
+                try:
+                    items = list_runs(self.run_root, limit=limit)
+                except Exception:
+                    items = []
+                self._overview_runs_cache = {
+                    "limit": int(limit),
+                    "updated_at": now,
+                    "items": [dict(item) for item in items if isinstance(item, dict)],
+                }
+                return [dict(item) for item in self._overview_runs_cache["items"]]
+            if not self._overview_runs_refreshing and cache_stale:
                 self._overview_runs_refreshing = True
                 threading.Thread(
                     target=self._refresh_overview_runs,
@@ -2173,7 +2215,10 @@ def launch_dashboard(
     server = app.create_server()
     url = f"http://{host}:{port}"
     print(f"{APP_NAME} {APP_VERSION} is running at {url}")
-    print("Attempting to open the dashboard in your browser...")
+    if open_browser:
+        print("Attempting to open the dashboard in your browser...")
+    else:
+        print("Browser auto-open is disabled for this session.")
     print("Keep this terminal open while you use the dashboard. Press Ctrl+C to stop the server.")
     print(f"If the page does not appear automatically, open {url} in your browser.")
     if open_browser:
@@ -2711,6 +2756,7 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
         "browser_runtime_transport": _optional_text,
         "browser_profile_strategy": _optional_text,
         "approval_policy": _optional_text,
+        "max_run_seconds": _optional_float,
         "max_subgoal_retries": _optional_int,
         "browser_control_mode": _optional_text,
         "browser_dom_backend": _optional_text,

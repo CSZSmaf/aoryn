@@ -229,10 +229,10 @@ def _is_allowed_app_intent(app: str | None, config: AgentConfig) -> bool:
 
 def _looks_like_safe_app_intent(app: str, config: AgentConfig) -> bool:
     blocked_terms = {item.lower() for item in config.blocked_app_launch_terms}
-    normalized = re.sub(r"[^a-z0-9._ -]+", " ", app.lower())
+    normalized = re.sub(r"[^a-z0-9\u4e00-\u9fff._ &()+-]+", " ", app.lower())
     tokens = [token for token in re.split(r"[\s._-]+", normalized) if token]
     if any(token in blocked_terms for token in tokens):
         return False
     if any(term in normalized for term in blocked_terms):
         return False
-    return bool(re.fullmatch(r"[a-z0-9][a-z0-9._ -]{0,79}", app))
+    return bool(re.fullmatch(r"[a-z0-9\u4e00-\u9fff][a-z0-9\u4e00-\u9fff._ &()+-]{0,79}", app, re.I))

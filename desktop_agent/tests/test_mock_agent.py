@@ -102,3 +102,23 @@ def test_mock_agent_calculator_expression_task():
     assert isinstance(executor, MockExecutor)
     assert executor.state.active_app == "calculator"
     assert executor.state.text_buffers["calculator"] == "1+1"
+
+
+def test_mock_agent_notepad_save_as_task():
+    config = AgentConfig(
+        dry_run=True,
+        planner_mode="rule",
+        complex_task_planning="heuristic",
+        plan_review_policy="never",
+        max_steps=8,
+    )
+    agent = build_agent(config)
+
+    result = agent.run("open notepad, type hello, then save as notes.txt")
+
+    assert result.completed is True
+    assert result.error is None
+    executor = agent.executor
+    assert isinstance(executor, MockExecutor)
+    assert executor.state.text_buffers["notepad"] == "hello"
+    assert executor.state.saved_paths[-1] == "notes.txt"

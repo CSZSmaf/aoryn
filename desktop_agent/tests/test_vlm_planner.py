@@ -218,5 +218,5 @@ def test_build_task_decomposition_splits_multi_step_task():
     lowered = decomposition.lower()
     assert "candidate sub-goals" in lowered
     assert "1. open notepad" in lowered
-    assert "2. type hello world" in lowered
-    assert "3. press enter" in lowered
+    assert "2. open notepad and type hello world" in lowered
+    assert "3. open notepad and press enter" in lowered

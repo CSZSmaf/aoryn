@@ -331,12 +331,13 @@ class BrowserRuntimeBridge:
             self.ensure_running()
         requests = _import_requests()
         url = self.base_url.rstrip("/") + path
+        request_timeout = min(max(1.0, float(self.config.browser_dom_timeout or 0.0) + 1.0), 4.0)
         try:
             response = requests.request(
                 method.upper(),
                 url,
                 json=payload,
-                timeout=max(2.0, float(self.config.browser_dom_timeout or 0.0) + 2.0),
+                timeout=request_timeout,
             )
         except requests.RequestException:
             self._clear_ready()

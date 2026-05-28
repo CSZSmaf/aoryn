@@ -27,11 +27,11 @@ Aoryn 是一个本地优先的桌面 Agent 工作台。
 .\start_dev.bat
 ```
 
-这会在源码模式下启动 Aoryn 工作台，并尽量同时拉起托管浏览器运行时。默认地址：
+这会在源码模式下启动 Aoryn 工作台，并尽量同时拉起托管浏览器运行时。源码测试默认使用独立端口，避免误连已经安装并运行中的 Aoryn。默认地址：
 
 ```text
-Dashboard: http://127.0.0.1:8765
-Browser Runtime: http://127.0.0.1:38991
+Dashboard: http://127.0.0.1:8766
+Browser Runtime: http://127.0.0.1:38992
 ```
 
 等价 Python 命令：
@@ -45,20 +45,28 @@ python scripts/dev_start.py
 ```bash
 python scripts/dev_start.py --ui web --no-browser-tab
 python scripts/dev_start.py --no-managed-browser
-python scripts/dev_start.py --port 8766
+python scripts/dev_start.py --port 8770 --managed-browser-port 39000
 python scripts/dev_start.py --print-commands
 ```
 
-如果 `8765` 已经是 Aoryn dashboard，开发启动器会直接复用；如果被其他服务占用，它会提示换端口。托管浏览器源码运行使用 `.tmp/browser-runtime/browser-profile`，不会写入安装版的 AppData 运行目录。
+开发启动器会生成 `.tmp/source-test/config.yaml`，并把托管浏览器运行时端口写入该源码测试配置。托管浏览器源码运行使用 `.tmp/source-test/browser-profile`，不会写入安装版的 AppData 运行目录。确认源码测试结果后，再生成 EXE 或安装包做发布验证。
 
-### 2.3 单独入口与发布验证
+### 2.3 逻辑基准测试
+
+打包前可以先跑本地确定性任务逻辑基准，用来检查常见规划路径，例如桌面应用启动、浏览器后续点击、计算器表达式、快捷键和另存为流程：
+
+```bash
+python scripts/run_logic_benchmark.py
+```
+
+### 2.4 单独入口与发布验证
 
 底层入口仍然保留，方便排查：
 
 ```bash
 python run_agent.py
-python run_agent.py ui --browser --no-browser --port 8765
-python run_browser.py --port 38991 --profile-root .tmp/browser-runtime/browser-profile
+python run_agent.py ui --browser --no-browser --port 8766 --config .tmp/source-test/config.yaml
+python run_browser.py --port 38992 --profile-root .tmp/source-test/browser-profile --config-path .tmp/source-test/config.yaml
 ```
 
 生成 EXE 或安装包只用于发布前验证，不需要作为日常测试步骤。

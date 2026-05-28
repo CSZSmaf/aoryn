@@ -70,17 +70,38 @@ class TaskRecipeMemory:
     def __init__(self, path: Path | None = None, *, max_recipes: int = 60) -> None:
         self.path = path or default_recipe_memory_path()
         self.max_recipes = max(1, int(max_recipes))
+        self._cache: list[TaskRecipe] | None = None
+        self._cache_mtime: float | None = None
 
     def load(self) -> list[TaskRecipe]:
         try:
+            stat = self.path.stat()
+        except FileNotFoundError:
+            self._cache = []
+            self._cache_mtime = None
+            return []
+        except OSError:
+            return list(self._cache or [])
+
+        if self._cache is not None and self._cache_mtime == stat.st_mtime_ns:
+            return list(self._cache)
+
+        try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except Exception:
+            self._cache = []
+            self._cache_mtime = stat.st_mtime_ns
             return []
         items = payload.get("recipes") if isinstance(payload, dict) else None
         if not isinstance(items, list):
+            self._cache = []
+            self._cache_mtime = stat.st_mtime_ns
             return []
         recipes = [TaskRecipe.from_dict(item) for item in items if isinstance(item, dict)]
-        return [item for item in recipes if item.key]
+        recipes = [item for item in recipes if item.key]
+        self._cache = recipes
+        self._cache_mtime = stat.st_mtime_ns
+        return list(recipes)
 
     def match(self, task_graph: TaskGraph, *, limit: int = 3) -> list[TaskRecipe]:
         target_key = _recipe_key_for_graph(task_graph)
@@ -143,6 +164,12 @@ class TaskRecipeMemory:
         payload = {"recipes": [item.to_dict() for item in recipes]}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            self._cache = list(recipes)
+            self._cache_mtime = self.path.stat().st_mtime_ns
+        except OSError:
+            self._cache = None
+            self._cache_mtime = None
 
 
 def default_recipe_memory_path() -> Path:

@@ -119,19 +119,23 @@ class BasePlanner(ABC):
 class RulePlanner(BasePlanner):
     """Deterministic planner for common demo tasks."""
 
+    _NOTEPAD_OPEN_PATTERN = re.compile(
+        r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?(?:\u8bb0\u4e8b\u672c|notepad)\s*$",
+        re.I,
+    )
     _NOTEPAD_PATTERN = re.compile(
-        r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|an?\s*)?(?:\u8bb0\u4e8b\u672c|notepad)\s*"
-        r"(?:(?:\u5e76|\u7136\u540e)|and)?\s*(?:\u8f93\u5165|type)\s*(?P<text>.+)$",
+        r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?(?:\u8bb0\u4e8b\u672c|notepad)\s*"
+        r"(?:(?:\u5e76|\u7136\u540e)|and(?:\s+then)?)?\s*(?:\u8f93\u5165|type)\s*(?P<text>.+)$",
         re.I,
     )
     _CALCULATOR_PATTERN = re.compile(
-        r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|an?\s*)?(?:\u8ba1\u7b97\u5668|calculator|calc)\s*$",
+        r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?(?:\u8ba1\u7b97\u5668|calculator|calc)\s*$",
         re.I,
     )
     _CALCULATOR_EXPRESSION_PATTERNS = (
         re.compile(
-            r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|an?\s*)?(?:\u8ba1\u7b97\u5668|calculator|calc)\s*"
-            r"(?:(?:\u5e76|\u7136\u540e)|and)?\s*(?:\u8ba1\u7b97|calculate|compute|evaluate)\s*(?P<expr>.+)$",
+            r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?(?:\u8ba1\u7b97\u5668|calculator|calc)\s*"
+            r"(?:(?:\u5e76|\u7136\u540e)|and(?:\s+then)?)?\s*(?:\u8ba1\u7b97|calculate|compute|evaluate)\s*(?P<expr>.+)$",
             re.I,
         ),
         re.compile(
@@ -144,16 +148,90 @@ class RulePlanner(BasePlanner):
             re.I,
         ),
     )
+    _STANDALONE_CALCULATOR_EXPRESSION_PATTERN = re.compile(
+        r"^(?:calculate|compute|evaluate)\s+(?P<expr>.+)$",
+        re.I,
+    )
     _EXPLORER_PATTERN = re.compile(
-        r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|an?\s*)?"
+        r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?"
         r"(?:\u8d44\u6e90\u7ba1\u7406\u5668|\u6587\u4ef6\u8d44\u6e90\u7ba1\u7406\u5668|explorer)\s*$",
         re.I,
     )
+    _BROWSER_APP_PATTERN = re.compile(
+        r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?(?:\u6d4f\u89c8\u5668|browser|edge|chrome|firefox)\s*$",
+        re.I,
+    )
+    _GENERIC_OPEN_APP_PATTERN = re.compile(
+        r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?(?P<app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78})\s*$",
+        re.I,
+    )
+    _CLOSE_APP_PATTERN = re.compile(
+        r"^(?:\u5173\u95ed|close)\s*(?:(?:\u5f53\u524d|current)\s*)?(?P<target>(?:\u8ba1\u7b97\u5668|\u8bb0\u4e8b\u672c|\u8d44\u6e90\u7ba1\u7406\u5668|\u6d4f\u89c8\u5668|calculator|calc|notepad|explorer|browser))?(?:\s*(?:\u7a97\u53e3|window))?\s*$",
+        re.I,
+    )
+    _GENERIC_CLOSE_APP_PATTERN = re.compile(
+        r"^(?:\u5173\u95ed|close)\s*(?P<target>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78})(?:\s*(?:\u7a97\u53e3|window))?\s*$",
+        re.I,
+    )
     _WAIT_PATTERN = re.compile(
-        r"^(?:\u7b49\u5f85|wait)\s*(?P<seconds>[0-9]+(?:\.[0-9]+)?)\s*(?:\u79d2|seconds?|s)?\s*$",
+        r"^(?:\u7b49\u5f85|\u7b49|wait)\s*(?P<seconds>[0-9]+(?:\.[0-9]+)?)\s*(?:\u79d2|seconds?|s)?\s*$",
         re.I,
     )
     _TYPE_PATTERN = re.compile(r"^(?:\u8f93\u5165|\u952e\u5165|type)\s*(?P<text>.+)$", re.I)
+    _PRESS_PATTERN = re.compile(r"^(?:press|hit|tap)\s+(?P<key>[\w +-]{1,40})\s*$", re.I)
+    _SAVE_AS_PATTERN = re.compile(
+        r"^(?:save(?:\s+(?:as|to))?|\u4fdd\u5b58(?:\u4e3a|\u5230)?)\s+(?P<path>.+)$",
+        re.I,
+    )
+    _OPEN_URL_PATTERN = re.compile(r"^(?:open|launch)\s+(?P<target>https?://\S+|www\.\S+|\S+\.\S+)\s*$", re.I)
+    _BROWSER_CLICK_PATTERN = re.compile(r"^(?:click|select|choose|tap)\s+(?P<target>.+)$", re.I)
+    _GENERIC_APP_SAVE_AS_PATTERN = re.compile(
+        r"^(?:\u6253\u5f00|open|launch)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?"
+        r"(?P<app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78})\s*"
+        r"(?:(?:\u5e76|\u7136\u540e|\u518d)|and(?:\s+then)?|then)\s*"
+        r"(?:save(?:\s+(?:as|to))?|\u4fdd\u5b58(?:\u4e3a|\u5230)?)\s*(?P<path>.+)$",
+        re.I,
+    )
+    _GENERIC_APP_TYPE_PATTERN = re.compile(
+        r"^(?:\u6253\u5f00|open|launch)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?"
+        r"(?P<app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78})\s*"
+        r"(?:(?:\u5e76|\u7136\u540e|\u518d)|and(?:\s+then)?|then)\s*"
+        r"(?:\u8f93\u5165|\u952e\u5165|\u5199\u5165|type|enter|write)\s*(?P<text>.+)$",
+        re.I,
+    )
+    _GENERIC_APP_SEARCH_PATTERN = re.compile(
+        r"^(?:"
+        r"(?:\u6253\u5f00|open|launch)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?"
+        r"(?P<open_app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78})\s*"
+        r"(?:(?:\u5e76|\u7136\u540e|\u518d)|and(?:\s+then)?|then)\s*"
+        r"(?:\u641c\u7d22|\u67e5\u627e|search(?:\s+for)?|find)"
+        r"|(?:\u5728|with|use)\s*(?P<with_app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78})\s*(?:\u91cc|\u4e2d|in)?\s*"
+        r"(?:\u641c\u7d22|\u67e5\u627e|search(?:\s+for)?|find)"
+        r")\s*(?P<query>.+)$",
+        re.I,
+    )
+    _GENERIC_APP_CLICK_PATTERN = re.compile(
+        r"^(?:\u6253\u5f00|open|launch)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?"
+        r"(?P<app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78})\s*"
+        r"(?:(?:\u5e76|\u7136\u540e|\u518d)|and(?:\s+then)?|then)\s*"
+        r"(?:\u70b9\u51fb|\u6253\u5f00|\u9009\u62e9|click|open|select|choose|tap)\s*(?P<target>.+)$",
+        re.I,
+    )
+    _GENERIC_APP_FILL_PATTERN = re.compile(
+        r"^(?:\u6253\u5f00|open|launch)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?"
+        r"(?P<app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78})\s*"
+        r"(?:(?:\u5e76|\u7136\u540e|\u518d)|and(?:\s+then)?|then)\s*"
+        r"(?:\u5728|fill|set|enter)\s*(?P<field>[\w\u4e00-\u9fff ._-]{1,80})\s*"
+        r"(?:\u586b\u5199|\u8f93\u5165|\u8bbe\u4e3a|with|to|as|=|:)\s*(?P<value>.+)$",
+        re.I,
+    )
+    _GENERIC_APP_PRESS_PATTERN = re.compile(
+        r"^(?:\u6253\u5f00|open|launch)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?"
+        r"(?P<app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78})\s*"
+        r"(?:(?:\u5e76|\u7136\u540e|\u518d)|and(?:\s+then)?|then)\s*"
+        r"(?:\u6309|press)\s*(?P<key>[\w\u4e00-\u9fff +-]{1,40})\s*$",
+        re.I,
+    )
 
     def __init__(self) -> None:
         self.web_agent = WebAgent()
@@ -166,6 +244,15 @@ class RulePlanner(BasePlanner):
         environment: DesktopEnvironment | None = None,
     ) -> PlanResult:
         stripped = task.strip()
+
+        if self._NOTEPAD_OPEN_PATTERN.match(stripped):
+            return _build_result(
+                "Rule task: open Notepad.",
+                [
+                    {"type": "open_app_if_needed", "app": "notepad"},
+                    {"type": "wait", "seconds": 0.8},
+                ],
+            )
 
         if match := self._NOTEPAD_PATTERN.match(stripped):
             return _build_result(
@@ -189,6 +276,12 @@ class RulePlanner(BasePlanner):
         if calculator_plan := self._build_calculator_expression_result(stripped):
             return calculator_plan
 
+        if generic_app_task_plan := self._build_generic_app_task_result(stripped):
+            return generic_app_task_plan
+
+        if save_plan := self._build_save_as_result(stripped):
+            return save_plan
+
         if self._EXPLORER_PATTERN.match(stripped):
             return _build_result(
                 "Rule task: open Explorer.",
@@ -198,14 +291,41 @@ class RulePlanner(BasePlanner):
                 ],
             )
 
+        if self._BROWSER_APP_PATTERN.match(stripped):
+            return _build_result(
+                "Rule task: open a local browser window.",
+                [
+                    {"type": "open_app_if_needed", "app": "browser"},
+                    {"type": "wait", "seconds": 0.8},
+                ],
+            )
+
+        if open_url_plan := self._build_open_url_result(stripped):
+            return open_url_plan
+
+        if generic_open_plan := self._build_generic_open_app_result(stripped):
+            return generic_open_plan
+
+        if close_plan := self._build_close_result(stripped):
+            return close_plan
+
+        if generic_close_plan := self._build_generic_close_result(stripped):
+            return generic_close_plan
+
         if web_plan := self.web_agent.try_plan(stripped):
             return web_plan
+
+        if browser_click_plan := self._build_browser_click_result(stripped):
+            return browser_click_plan
 
         if match := self._WAIT_PATTERN.match(stripped):
             return _build_result(
                 "Rule task: wait.",
                 [{"type": "wait", "seconds": float(match.group("seconds"))}],
             )
+
+        if press_plan := self._build_press_result(stripped):
+            return press_plan
 
         if match := self._TYPE_PATTERN.match(stripped):
             return _build_result(
@@ -232,7 +352,213 @@ class RulePlanner(BasePlanner):
                     {"type": "press", "key": "enter"},
                 ],
             )
+        match = self._STANDALONE_CALCULATOR_EXPRESSION_PATTERN.match(task)
+        if not match:
+            return None
+        expression = _normalize_calculator_expression(match.group("expr"))
+        if not expression:
+            return None
+        return _build_result(
+            f"Rule task: calculate {expression} in Calculator.",
+            [
+                {"type": "open_app_if_needed", "app": "calculator"},
+                {"type": "wait", "seconds": 0.8},
+                {"type": "type", "text": expression},
+                {"type": "press", "key": "enter"},
+            ],
+        )
+
+    def _build_generic_app_task_result(self, task: str) -> PlanResult | None:
+        if match := self._GENERIC_APP_SAVE_AS_PATTERN.match(task):
+            app_name = _clean_app_name(match.group("app"))
+            path = _clean_save_path(match.group("path"))
+            if not _is_generic_desktop_app_name(app_name) or not path:
+                return None
+            return _build_result(
+                f"Rule task: open {app_name} and save as {path}.",
+                _open_app_actions(app_name) + _save_as_actions(path),
+                current_focus=f"save {app_name} content as {path}",
+                reasoning="Use the app's standard save shortcut, then enter the requested path or file name.",
+            )
+
+        if match := self._GENERIC_APP_FILL_PATTERN.match(task):
+            app_name = _clean_app_name(match.group("app"))
+            field = _clean_tail_text(match.group("field"))
+            value = _clean_tail_text(match.group("value"))
+            if not _is_generic_desktop_app_name(app_name) or not field or not value:
+                return None
+            return _build_result(
+                f"Rule task: open {app_name} and fill {field}.",
+                _open_app_actions(app_name)
+                + [{"type": "uia_set_value", "selector": _build_uia_name_selector(field), "text": value}],
+                current_focus=f"fill {field} in {app_name}",
+                reasoning="Use UI Automation against the active app window after opening it.",
+            )
+
+        if match := self._GENERIC_APP_SEARCH_PATTERN.match(task):
+            app_name = _clean_app_name(match.group("open_app") or match.group("with_app") or "")
+            query = _clean_tail_text(match.group("query"))
+            if not _is_generic_desktop_app_name(app_name) or not query:
+                return None
+            return _build_result(
+                f"Rule task: open {app_name} and search for {query}.",
+                _open_app_actions(app_name)
+                + [
+                    {"type": "hotkey", "keys": ["ctrl", "f"]},
+                    {"type": "type", "text": query},
+                    {"type": "press", "key": "enter"},
+                ],
+                current_focus=f"search inside {app_name}",
+                reasoning="Use the standard in-app Find shortcut, then enter the query.",
+            )
+
+        if match := self._GENERIC_APP_CLICK_PATTERN.match(task):
+            app_name = _clean_app_name(match.group("app"))
+            target = _clean_tail_text(match.group("target"))
+            if not _is_generic_desktop_app_name(app_name) or not target:
+                return None
+            return _build_result(
+                f"Rule task: open {app_name} and invoke {target}.",
+                _open_app_actions(app_name) + [{"type": "uia_invoke", "text": target}],
+                current_focus=f"invoke {target} in {app_name}",
+                reasoning="Use UI Automation to invoke a named control in the active app window.",
+            )
+
+        if match := self._GENERIC_APP_PRESS_PATTERN.match(task):
+            app_name = _clean_app_name(match.group("app"))
+            raw_key = match.group("key")
+            hotkey_keys = _normalize_hotkey_keys(raw_key)
+            key = _normalize_press_key(raw_key)
+            if not _is_generic_desktop_app_name(app_name) or not (hotkey_keys or key):
+                return None
+            key_action = {"type": "hotkey", "keys": hotkey_keys} if hotkey_keys else {"type": "press", "key": key}
+            return _build_result(
+                f"Rule task: open {app_name} and press {_clean_tail_text(raw_key)}.",
+                _open_app_actions(app_name) + [key_action],
+                current_focus=f"press {_clean_tail_text(raw_key)} in {app_name}",
+            )
+
+        if match := self._GENERIC_APP_TYPE_PATTERN.match(task):
+            app_name = _clean_app_name(match.group("app"))
+            text = _clean_tail_text(match.group("text"))
+            if not _is_generic_desktop_app_name(app_name) or not text:
+                return None
+            return _build_result(
+                f"Rule task: open {app_name} and type text.",
+                _open_app_actions(app_name) + [{"type": "type", "text": text}],
+                current_focus=f"type into {app_name}",
+            )
+
         return None
+
+    def _build_save_as_result(self, task: str) -> PlanResult | None:
+        match = self._SAVE_AS_PATTERN.match(task)
+        if not match:
+            return None
+        path = _clean_save_path(match.group("path"))
+        if not path:
+            return None
+        return _build_result(
+            f"Rule task: save the current document as {path}.",
+            _save_as_actions(path),
+            current_focus=f"save as {path}",
+            reasoning="Use the standard save shortcut and type the requested path or file name.",
+        )
+
+    def _build_open_url_result(self, task: str) -> PlanResult | None:
+        match = self._OPEN_URL_PATTERN.match(task)
+        if not match:
+            return None
+        target = _clean_tail_text(match.group("target"))
+        if not _looks_like_open_target_url(target):
+            return None
+        return _build_result(
+            f"Rule task: open {target} in the browser.",
+            [{"type": "browser_open", "text": _ensure_browser_target_url(target)}],
+            current_focus=f"open {target}",
+        )
+
+    def _build_browser_click_result(self, task: str) -> PlanResult | None:
+        match = self._BROWSER_CLICK_PATTERN.match(task)
+        if not match:
+            return None
+        target = _clean_tail_text(match.group("target"))
+        if not target or _looks_like_open_target_url(target):
+            return None
+        return _build_result(
+            f"Rule task: click {target} in the browser.",
+            [{"type": "browser_dom_click", "text": target}],
+            current_focus=f"click {target}",
+            reasoning="Treat a standalone named click as a browser DOM follow-up after navigation.",
+        )
+
+    def _build_press_result(self, task: str) -> PlanResult | None:
+        match = self._PRESS_PATTERN.match(task)
+        if not match:
+            return None
+        raw_key = match.group("key")
+        hotkey_keys = _normalize_hotkey_keys(raw_key)
+        if hotkey_keys:
+            return _build_result(
+                f"Rule task: press {_clean_tail_text(raw_key)}.",
+                [{"type": "hotkey", "keys": hotkey_keys}],
+            )
+        key = _normalize_press_key(raw_key)
+        if not key:
+            return None
+        return _build_result(
+            f"Rule task: press {key}.",
+            [{"type": "press", "key": key}],
+        )
+
+    def _build_close_result(self, task: str) -> PlanResult | None:
+        match = self._CLOSE_APP_PATTERN.match(task)
+        if not match:
+            return None
+        target = _clean_tail_text(match.group("target") or "")
+        if not target:
+            return _build_result(
+                "Rule task: close the current window.",
+                [{"type": "hotkey", "keys": ["alt", "f4"]}],
+            )
+        return _build_result(
+            f"Rule task: close {target}.",
+            [{"type": "close_window", "title": target}],
+        )
+
+    def _build_generic_close_result(self, task: str) -> PlanResult | None:
+        match = self._GENERIC_CLOSE_APP_PATTERN.match(task)
+        if not match:
+            return None
+        target = _clean_app_name(match.group("target"))
+        if not _is_generic_desktop_app_name(target):
+            return None
+        return _build_result(
+            f"Rule task: close {target}.",
+            [{"type": "close_window", "title": target}],
+        )
+
+    def _build_generic_open_app_result(self, task: str) -> PlanResult | None:
+        match = self._GENERIC_OPEN_APP_PATTERN.match(task)
+        if not match:
+            return None
+        app_name = _clean_tail_text(match.group("app"))
+        if not app_name:
+            return None
+        lowered = app_name.lower()
+        if re.search(r"\b(?:and\s+then|then|after\s+that|next|finally)\b", lowered, re.I):
+            return None
+        if lowered in {"notepad", "calculator", "calc", "explorer", "browser", "edge", "chrome", "firefox"}:
+            return None
+        if _looks_like_open_target_url(app_name) or any(token in lowered for token in ("http://", "https://", "www.", "/", "\\", "search ", "搜索")):
+            return None
+        return _build_result(
+            f"Rule task: open local app {app_name}.",
+            [
+                {"type": "open_app_if_needed", "app": app_name},
+                {"type": "wait", "seconds": 0.8},
+            ],
+        )
 
 
 class VLMPlanner(BasePlanner):
@@ -830,6 +1156,111 @@ def _clean_tail_text(text: str) -> str:
     return text.strip().strip("\"' ")
 
 
+def _clean_app_name(text: str) -> str:
+    cleaned = _clean_tail_text(text)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _is_generic_desktop_app_name(app_name: str) -> bool:
+    cleaned = _clean_app_name(app_name)
+    if not cleaned:
+        return False
+    lowered = cleaned.lower()
+    if lowered in {"browser", "edge", "chrome", "firefox", "calculator", "calc", "explorer"}:
+        return False
+    if cleaned in {"浏览器", "计算器", "资源管理器", "文件资源管理器"}:
+        return False
+    if _looks_like_open_target_url(cleaned):
+        return False
+    return not any(token in lowered for token in ("http://", "https://", "www.", "/", "\\"))
+
+
+def _open_app_actions(app_name: str) -> list[dict]:
+    return [
+        {"type": "open_app_if_needed", "app": _clean_app_name(app_name)},
+        {"type": "wait", "seconds": 0.8},
+    ]
+
+
+def _save_as_actions(path: str) -> list[dict]:
+    cleaned_path = _clean_save_path(path)
+    actions: list[dict] = [
+        {"type": "hotkey", "keys": ["ctrl", "s"]},
+        {"type": "wait", "seconds": 0.4},
+    ]
+    if cleaned_path:
+        actions.extend(
+            [
+                {"type": "type", "text": cleaned_path},
+                {"type": "press", "key": "enter"},
+            ]
+        )
+    return actions
+
+
+def _clean_save_path(path: str) -> str:
+    cleaned = _clean_tail_text(path)
+    cleaned = cleaned.rstrip(".。")
+    return cleaned[:180].strip()
+
+
+def _build_uia_name_selector(name: str) -> str:
+    return f"name={_clean_tail_text(name)}"
+
+
+def _normalize_hotkey_keys(key: str) -> list[str] | None:
+    normalized = _clean_tail_text(key).lower()
+    replacements = {
+        "control": "ctrl",
+        "windows": "win",
+        "command": "win",
+        "cmd": "win",
+    }
+    for source, target in replacements.items():
+        normalized = re.sub(rf"\b{re.escape(source)}\b", target, normalized)
+    parts = [part for part in re.split(r"\s*(?:\+|-)\s*|\s+", normalized) if part]
+    if len(parts) < 2:
+        return None
+    modifiers = {"ctrl", "alt", "shift", "win"}
+    if not any(part in modifiers for part in parts[:-1]):
+        return None
+    aliases = {"escape": "esc", "return": "enter"}
+    cleaned_parts = [aliases.get(part, part) for part in parts]
+    if not all(re.fullmatch(r"[a-z0-9]{1,12}", part) for part in cleaned_parts):
+        return None
+    return cleaned_parts
+
+
+def _normalize_press_key(key: str) -> str | None:
+    normalized = _clean_tail_text(key).lower().replace("+", " ")
+    normalized = " ".join(normalized.split())
+    aliases = {
+        "enter": "enter",
+        "return": "enter",
+        "回车": "enter",
+        "确认": "enter",
+        "tab": "tab",
+        "制表": "tab",
+        "esc": "esc",
+        "escape": "esc",
+        "退出": "esc",
+        "backspace": "backspace",
+        "退格": "backspace",
+        "space": "space",
+        "空格": "space",
+        "up": "up",
+        "上": "up",
+        "down": "down",
+        "下": "down",
+        "left": "left",
+        "左": "left",
+        "right": "right",
+        "右": "right",
+    }
+    return aliases.get(normalized)
+
+
 def _normalize_calculator_expression(text: str) -> str | None:
     normalized = _clean_tail_text(text)
     replacements = (
@@ -1352,6 +1783,7 @@ def _extract_task_sub_goals(task: str, browser_command: WebCommand | None) -> li
         normalized = pattern.sub(separator, normalized)
 
     parts = [_clean_sub_goal_part(part) for part in normalized.split(separator)]
+    parts = _contextualize_follow_up_parts(parts)
     unique_parts: list[str] = []
     for part in parts:
         if part and part not in unique_parts:
@@ -1361,6 +1793,193 @@ def _extract_task_sub_goals(task: str, browser_command: WebCommand | None) -> li
 
 def _split_task_segments(task: str) -> list[str]:
     return _extract_task_sub_goals(task, None)
+
+
+def _contextualize_follow_up_parts(parts: list[str]) -> list[str]:
+    contextualized: list[str] = []
+    previous_part: str | None = None
+    active_app_context: str | None = None
+    for raw_part in parts:
+        part = _clean_sub_goal_part(raw_part)
+        if not part:
+            continue
+        expanded_parts = _expand_wait_then_follow_up_parts(part, previous_part=previous_part)
+        if len(expanded_parts) > 1:
+            for expanded_part in expanded_parts:
+                expanded_part = _contextualize_app_follow_up(
+                    expanded_part,
+                    app_name=active_app_context,
+                    prefer_zh=_contains_cjk(previous_part or expanded_part),
+                )
+                contextualized.append(expanded_part)
+                active_app_context = _update_active_app_context(expanded_part, active_app_context)
+                previous_part = expanded_part
+            continue
+        normalized = part.strip().lower()
+        if normalized in {"close", "close window", "close current window", "关闭", "关闭窗口", "关闭当前窗口"}:
+            app_name = active_app_context or _extract_target_app_name(previous_part or "")
+            if app_name:
+                part = _build_close_follow_up_title(app_name, prefer_zh=_contains_cjk(previous_part or part))
+        else:
+            part = _contextualize_app_follow_up(
+                part,
+                app_name=active_app_context,
+                prefer_zh=_contains_cjk(previous_part or part),
+            )
+        contextualized.append(part)
+        active_app_context = _update_active_app_context(part, active_app_context)
+        previous_part = part
+    return contextualized
+
+
+def _update_active_app_context(part: str, current_app: str | None) -> str | None:
+    canonical_app_name = _extract_target_app_name(part)
+    if not canonical_app_name:
+        return current_app
+    if canonical_app_name == "browser":
+        return None
+    return _extract_target_app_display_name(part) or canonical_app_name
+
+
+def _contextualize_app_follow_up(part: str, *, app_name: str | None, prefer_zh: bool) -> str:
+    if not app_name or app_name == "browser":
+        return part
+    if _extract_target_app_name(part) or _looks_like_open_target_url(part):
+        return part
+    if not _is_app_follow_up_operation(part):
+        return part
+    if prefer_zh or _contains_cjk(app_name):
+        return f"打开{app_name}并{part}"
+    return f"open {app_name} and {part}"
+
+
+def _is_app_follow_up_operation(part: str) -> bool:
+    stripped = _clean_sub_goal_part(part)
+    if not stripped:
+        return False
+    operation_patterns = (
+        r"^(?:search(?:\s+for)?|find)\s+.+$",
+        r"^(?:click|open|select|choose|tap)\s+.+$",
+        r"^(?:type|enter|write)\s+.+$",
+        r"^(?:fill|set)\s+.+$",
+        r"^(?:calculate|compute|evaluate)\s+.+$",
+        r"^save(?:\s+(?:as|to))?\s+.+$",
+        r"^press\s+.+$",
+        r"^(?:搜索|查找|点击|打开|选择|输入|键入|写入|填写|在|按).+$",
+    )
+    return any(re.match(pattern, stripped, re.I) for pattern in operation_patterns)
+
+
+def _extract_target_app_display_name(title: str) -> str | None:
+    canonical = _extract_target_app_name(title)
+    if canonical:
+        zh_labels = {
+            "calculator": "计算器",
+            "notepad": "记事本",
+            "explorer": "资源管理器",
+            "browser": "浏览器",
+            "excel": "Excel",
+            "powerpoint": "PowerPoint",
+            "word": "Word",
+            "paint": "画图",
+            "settings": "设置",
+            "wechat": "微信",
+            "dingtalk": "钉钉",
+            "wps": "WPS",
+            "vscode": "Visual Studio Code",
+        }
+        en_labels = {
+            "calculator": "calculator",
+            "notepad": "notepad",
+            "explorer": "explorer",
+            "browser": "browser",
+            "excel": "excel",
+            "powerpoint": "powerpoint",
+            "word": "word",
+            "paint": "paint",
+            "settings": "settings",
+            "wechat": "wechat",
+            "dingtalk": "dingtalk",
+            "wps": "wps",
+            "vscode": "vscode",
+        }
+        if canonical in zh_labels:
+            return zh_labels[canonical] if _contains_cjk(title) else en_labels[canonical]
+    if match := re.match(
+        r"^(?:打开|启动|open|launch)\s*(?:一个\s*|(?:an?|the)\s+)?"
+        r"(?P<app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78}?)"
+        r"(?=\s*(?:并且|并|然后|再|and(?:\s+then)?|then|$))",
+        title.strip(),
+        re.I,
+    ):
+        app_name = _clean_app_name(match.group("app"))
+        if app_name:
+            return app_name
+    return None
+
+
+def _build_close_follow_up_title(app_name: str, *, prefer_zh: bool) -> str:
+    zh_labels = {
+        "calculator": "关闭计算器",
+        "notepad": "关闭记事本",
+        "explorer": "关闭资源管理器",
+        "browser": "关闭浏览器",
+        "excel": "关闭 Excel",
+        "powerpoint": "关闭 PowerPoint",
+        "word": "关闭 Word",
+    }
+    en_labels = {
+        "calculator": "close calculator",
+        "notepad": "close notepad",
+        "explorer": "close explorer",
+        "browser": "close browser",
+        "excel": "close excel",
+        "powerpoint": "close powerpoint",
+        "word": "close word",
+    }
+    labels = zh_labels if prefer_zh else en_labels
+    if app_name in labels:
+        return labels[app_name]
+    return f"关闭{app_name}" if prefer_zh else f"close {app_name}"
+
+
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _expand_wait_then_follow_up_parts(part: str, *, previous_part: str | None) -> list[str]:
+    stripped = _clean_sub_goal_part(part)
+    if not stripped:
+        return []
+    if re.match(
+        r"^(?:\u7b49\u5f85|\u7b49|wait)\s*(?P<seconds>[0-9]+(?:\.[0-9]+)?)\s*(?:\u79d2|seconds?|s)?\s*$",
+        stripped,
+        re.I,
+    ):
+        return [stripped]
+    match = re.match(
+        r"^(?:\u7b49\u5f85|\u7b49)\s*(?P<seconds>[0-9]+(?:\.[0-9]+)?)\s*(?:\u79d2|s)?\s*(?P<follow>.+)$",
+        stripped,
+        re.I,
+    ) or re.match(
+        r"^wait\s*(?P<seconds>[0-9]+(?:\.[0-9]+)?)\s*(?:seconds?|s)?\s+(?P<follow>.+)$",
+        stripped,
+        re.I,
+    )
+    if not match:
+        return [stripped]
+    seconds = match.group("seconds")
+    follow_up = _clean_sub_goal_part(match.group("follow"))
+    if not follow_up:
+        return [stripped]
+    expanded = [f"等{seconds}秒" if _contains_cjk(stripped) else f"wait {seconds} seconds"]
+    normalized_follow = follow_up.strip().lower()
+    if normalized_follow in {"close", "close window", "close current window", "关闭", "关闭窗口", "关闭当前窗口"}:
+        app_name = _extract_target_app_name(previous_part or "")
+        if app_name:
+            follow_up = _build_close_follow_up_title(app_name, prefer_zh=_contains_cjk(previous_part or stripped))
+    expanded.append(follow_up)
+    return expanded
 
 
 def _infer_intent_risk(task: str) -> str:
@@ -1623,6 +2242,35 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term and term in text for term in terms)
 
 
+def _keyword_matches_text(text: str, keyword: str) -> bool:
+    candidate = str(keyword or "").strip().lower()
+    if not candidate:
+        return False
+    if candidate.isascii() and re.search(r"[a-z0-9]", candidate):
+        return bool(re.search(rf"(?<![a-z0-9]){re.escape(candidate)}(?![a-z0-9])", text, re.I))
+    return candidate in text
+
+
+def _looks_like_open_target_url(value: str) -> bool:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return False
+    return bool(
+        re.match(
+            r"^(?:https?://|www\.)[^\s]+$|^(?:[a-z0-9-]+\.)+[a-z0-9-]+(?:/[^\s]*)?$",
+            cleaned,
+            re.I,
+        )
+    )
+
+
+def _ensure_browser_target_url(value: str) -> str:
+    cleaned = _clean_tail_text(value)
+    if re.match(r"^https?://", cleaned, re.I):
+        return cleaned
+    return f"https://{cleaned}"
+
+
 def _dedupe_strings(values: list[str]) -> list[str]:
     deduped: list[str] = []
     seen: set[str] = set()
@@ -1713,6 +2361,14 @@ def _clean_sub_goal_part(text: str) -> str:
 def _build_subgoal_success_condition(title: str, *, world_model: WorldModel | None = None) -> str:
     normalized = title.strip()
     lowered = normalized.lower()
+    if any(token in lowered for token in ("save", "download", "upload", "export", "\u4fdd\u5b58", "\u4e0b\u8f7d", "\u4e0a\u4f20")):
+        return f"Verify that the requested file or artifact was saved for: {normalized}"
+    if any(token in lowered for token in ("calculate", "compute", "evaluate", "\u8ba1\u7b97")):
+        return f"Verify that the requested calculation or transformation is visible for: {normalized}"
+    if any(token in lowered for token in ("type", "fill", "enter", "input", "paste", "\u8f93\u5165", "\u586b\u5199", "\u7c98\u8d34")):
+        return f"Verify that the requested content was entered for: {normalized}"
+    if any(token in lowered for token in ("click", "select", "choose", "\u70b9\u51fb", "\u9009\u62e9")):
+        return f"Verify that the requested control changed state after: {normalized}"
     if any(token in lowered for token in ("open ", "launch ", "visit ", "\u6253\u5f00", "\u542f\u52a8", "\u8bbf\u95ee")):
         return f"Verify that the requested destination or application is open: {normalized}"
     if any(token in lowered for token in ("search", "find", "lookup", "\u641c\u7d22", "\u67e5\u627e", "\u67e5\u8be2")):
@@ -1736,6 +2392,14 @@ def _build_subgoal_success_condition(title: str, *, world_model: WorldModel | No
 
 def _infer_goal_type(title: str) -> str:
     lowered = title.strip().lower()
+    if any(keyword in lowered for keyword in ("save", "download", "upload", "export", "bookmark", "\u4fdd\u5b58", "\u4e0b\u8f7d", "\u4e0a\u4f20")):
+        return "save"
+    if any(keyword in lowered for keyword in ("calculate", "compute", "evaluate", "\u8ba1\u7b97")):
+        return "transform"
+    if any(keyword in lowered for keyword in ("type", "fill", "enter", "input", "paste", "\u8f93\u5165", "\u586b\u5199", "\u7c98\u8d34")):
+        return "fill"
+    if any(keyword in lowered for keyword in ("click", "select", "choose", "submit", "\u70b9\u51fb", "\u9009\u62e9", "\u63d0\u4ea4")):
+        return "confirm"
     supplemental_mapping = (
         ("navigate", ("open ", "launch ", "visit ", "go to", "navigate", "search", "\u641c\u7d22", "\u6253\u5f00", "\u542f\u52a8", "\u8bbf\u95ee")),
         ("locate", ("find", "locate", "look for", "\u67e5\u627e", "\u5b9a\u4f4d")),
@@ -1786,6 +2450,8 @@ def _infer_completion_evidence(
     world_model: WorldModel | None = None,
 ) -> dict[str, str]:
     lowered = title.strip().lower()
+    if re.match(r"^(?:\u7b49\u5f85|\u7b49|wait)\s*[0-9]+(?:\.[0-9]+)?\s*(?:\u79d2|seconds?|s)?\s*$", lowered, re.I):
+        return {"kind": "action_executed", "detail": f"The wait action finished for: {title}"}
     if goal_type == "navigate":
         if app_name := _extract_target_app_name(title):
             return {"kind": "active_app_is", "value": app_name, "detail": f"The target application becomes active for: {title}"}
@@ -1832,9 +2498,33 @@ def _extract_target_app_name(title: str) -> str | None:
         "excel": ("excel",),
         "powerpoint": ("powerpoint", "ppt"),
         "word": ("word",),
+        "paint": ("paint", "mspaint", "画图"),
+        "settings": ("settings", "设置"),
+        "wechat": ("wechat", "weixin", "微信"),
+        "dingtalk": ("dingtalk", "钉钉"),
+        "wps": ("wps",),
     }
     for app_name, keywords in app_aliases.items():
-        if any(keyword in lowered for keyword in keywords):
+        if any(_keyword_matches_text(lowered, keyword) for keyword in keywords):
+            return app_name
+    if match := re.match(
+        r"^(?:打开|启动|open|launch)\s*(?:一个\s*|(?:an?|the)\s+)?"
+        r"(?P<app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78}?)"
+        r"(?=\s*(?:并且|并|然后|再|and(?:\s+then)?|then|$))",
+        title.strip(),
+        re.I,
+    ):
+        app_name = _clean_app_name(match.group("app"))
+        if _is_generic_desktop_app_name(app_name):
+            return app_name
+    if match := re.match(
+        r"^(?:关闭|close)\s*(?:(?:当前|current)\s*)?"
+        r"(?P<app>[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]{0,78}?)(?:\s*(?:窗口|window))?$",
+        title.strip(),
+        re.I,
+    ):
+        app_name = _clean_app_name(match.group("app"))
+        if _is_generic_desktop_app_name(app_name):
             return app_name
     return None
 
@@ -1858,6 +2548,7 @@ def _extract_content_hint(title: str) -> str | None:
     stripped = title.strip()
     patterns = (
         re.compile(r"^(?:type|fill|enter|input|paste|calculate|compute|evaluate)\s+(?P<content>.+)$", re.I),
+        re.compile(r"^.*(?:type|fill|enter|input|paste|calculate|compute|evaluate)\s+(?P<content>.+)$", re.I),
         re.compile(r"^(?:\u8f93\u5165|\u586b\u5199|\u7c98\u8d34|\u8ba1\u7b97|\u5199)\s*(?P<content>.+)$"),
         re.compile(r"^(?:search\s+for|find|look\s+for|\u641c\u7d22|\u67e5\u627e|\u67e5\u8be2)\s*(?P<content>.+)$", re.I),
         re.compile(r"^(?:输入|填写|粘贴|计算)\s*(?P<content>.+)$"),
@@ -1875,6 +2566,11 @@ def _extract_content_hint(title: str) -> str | None:
 
 def _infer_capability_preference(title: str, *, world_model: WorldModel | None = None) -> str | None:
     lowered = title.strip().lower()
+    target_app = _extract_target_app_name(title)
+    if target_app and target_app != "browser":
+        if target_app in {"excel", "powerpoint", "word"}:
+            return "office_com"
+        return "windows_uia"
     if any(token in lowered for token in ("browser", "website", "web", "search", "visit", "\u6d4f\u89c8\u5668", "\u7f51\u9875", "\u7f51\u7ad9", "\u641c\u7d22", "\u67e5\u627e", "\u67e5\u8be2", "\u8bbf\u95ee", "\u8d44\u6599")):
         return "browser_dom"
     if any(token in lowered for token in ("copy", "paste", "clipboard", "\u590d\u5236", "\u7c98\u8d34", "\u526a\u8d34\u677f")):
@@ -2100,12 +2796,21 @@ def _planner_json_schema() -> dict:
                         "y": {"type": "integer"},
                         "width": {"type": "integer"},
                         "height": {"type": "integer"},
+                        "end_x": {"type": "integer"},
+                        "end_y": {"type": "integer"},
                         "relative_x": {"type": "number"},
                         "relative_y": {"type": "number"},
                         "button": {"type": "string"},
                         "clicks": {"type": "integer"},
                         "seconds": {"type": "number"},
                         "amount": {"type": "integer"},
+                        "risk_level": {"type": "string"},
+                        "expected_evidence": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                        },
+                        "target_scope": {"type": "string"},
+                        "recipe": {"type": "string"},
                     },
                     "required": ["type"],
                     "additionalProperties": False,

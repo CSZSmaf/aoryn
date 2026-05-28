@@ -451,19 +451,24 @@ await runTest("mixed history items keep stable sorting while active state follow
     { id: "run-1", task: "visit openai", created_at: 100, started_at: 100, finished_at: 300 },
     { id: "run-2", task: "open calculator", created_at: 100, started_at: 100, finished_at: 200 },
   ];
+  context.__appTest.state.agentSessions = [
+    { id: "agent-1", title: "visit openai", created_at: 100, updated_at: 300, run_ids: ["run-1"] },
+    { id: "agent-2", title: "open calculator", created_at: 100, updated_at: 200, run_ids: ["run-2"] },
+  ];
+  context.__appTest.state.agentRunSessionMap = { "run-1": "agent-1", "run-2": "agent-2" };
 
   context.__appTest.state.uiMode = "chat";
   context.__appTest.state.selectedChatSessionId = "chat-1";
   let items = context.__appTest.buildSidebarHistoryItems();
-  assert.deepEqual(snapshot(items.map((item) => item.id)), ["chat-1", "run-1", "run-2"]);
+  assert.deepEqual(snapshot(items.map((item) => item.id)), ["chat-1", "agent-1", "agent-2"]);
   assert.equal(items[0].active, true);
   assert.equal(items[1].active, false);
 
   context.__appTest.state.uiMode = "agent";
   context.__appTest.state.showWelcome = false;
-  context.__appTest.state.selectedRunId = "run-1";
+  context.__appTest.state.selectedAgentSessionId = "agent-1";
   items = context.__appTest.buildSidebarHistoryItems();
-  assert.deepEqual(snapshot(items.map((item) => item.id)), ["chat-1", "run-1", "run-2"]);
+  assert.deepEqual(snapshot(items.map((item) => item.id)), ["chat-1", "agent-1", "agent-2"]);
   assert.equal(items[0].active, false);
   assert.equal(items[1].active, true);
 });

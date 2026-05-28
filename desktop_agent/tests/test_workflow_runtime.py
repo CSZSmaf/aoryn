@@ -8,6 +8,7 @@ from desktop_agent.orchestrator import TaskOrchestrator
 from desktop_agent.planner import TaskGraphPlanner, classify_task_intent
 from desktop_agent.recipes import TaskRecipeMemory, build_recipe_from_state
 from desktop_agent.workflow import (
+    EvidenceRequirement,
     ExecutionState,
     PendingDecision,
     StepProposal,
@@ -122,6 +123,130 @@ def test_task_graph_planner_handles_cross_app_research_write_workflow():
     assert len(graph.subgoals) >= 2
     assert graph.subgoals[0].capability_preference == "browser_dom"
     assert any("\u603b\u7ed3" in subgoal.title or "write" in subgoal.title.lower() for subgoal in graph.subgoals)
+
+
+def test_task_graph_planner_contextualizes_close_follow_up_for_calculator():
+    planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
+
+    graph = planner.plan("打开计算器计算3加5之后关闭")
+
+    assert len(graph.subgoals) >= 2
+    assert graph.subgoals[0].title == "打开计算器计算3加5"
+    assert graph.subgoals[1].title == "关闭计算器"
+
+
+def test_task_graph_planner_expands_wait_then_close_for_calculator():
+    planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
+
+    graph = planner.plan("打开计算器计算3加5之后等5秒关闭")
+
+    assert len(graph.subgoals) >= 3
+    assert graph.subgoals[0].title == "打开计算器计算3加5"
+    assert graph.subgoals[1].title == "等5秒"
+    assert graph.subgoals[2].title == "关闭计算器"
+
+
+def test_task_graph_planner_keeps_wait_seconds_as_single_subgoal():
+    planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
+
+    graph = planner.plan("open notepad and type smoke test then wait 1 seconds then close notepad")
+
+    titles = [subgoal.title for subgoal in graph.subgoals]
+    assert titles == ["open notepad", "open notepad and type smoke test", "wait 1 seconds", "close notepad"]
+    assert all(title != "s" for title in titles)
+    assert graph.subgoals[2].completion_evidence == {
+        "kind": "action_executed",
+        "detail": "The wait action finished for: wait 1 seconds",
+    }
+
+
+def test_task_graph_planner_contextualizes_calculator_expression_follow_up():
+    planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
+
+    graph = planner.plan("open calculator then calculate 2+3 then wait 1 seconds then close")
+
+    assert [subgoal.title for subgoal in graph.subgoals] == [
+        "open calculator",
+        "open calculator and calculate 2+3",
+        "wait 1 seconds",
+        "close calculator",
+    ]
+    assert graph.subgoals[1].capability_preference == "windows_uia"
+
+
+def test_task_graph_planner_contextualizes_save_follow_up_for_notepad():
+    planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
+
+    graph = planner.plan("open notepad, type hello, then save as notes.txt")
+
+    assert [subgoal.title for subgoal in graph.subgoals] == [
+        "open notepad",
+        "open notepad and type hello",
+        "open notepad and save as notes.txt",
+    ]
+    assert graph.subgoals[2].goal_type == "save"
+    assert graph.subgoals[2].completion_evidence == {
+        "kind": "file_observation",
+        "detail": "A file or saved artifact is observed for: open notepad and save as notes.txt",
+    }
+
+
+def test_desktop_app_open_prefers_windows_capability_over_browser():
+    config = AgentConfig(complex_task_planning="heuristic")
+    graph = TaskGraphPlanner(config).plan("open calculator then wait 1 seconds then close calculator")
+    state = ExecutionState(task=graph.task, run_id="demo", task_graph=graph)
+    world_model = WorldModel(screenshot_path=Path("demo.png"), structured_sources=["windows_env"])
+    executor = CapabilityExecutor(
+        config=config,
+        planner=_PlannerStub(),
+        registry=build_capability_registry(),
+        driver_registry=build_driver_registry(),
+    )
+
+    ranked = executor.rank_capabilities(
+        subgoal=graph.subgoals[0],
+        world_model=world_model,
+        execution_state=state,
+    )
+
+    assert ranked[0][0].name == "windows_uia"
+    assert next(score for capability, score in ranked if capability.name == "browser_dom") < ranked[0][1]
+
+
+def test_task_graph_planner_keeps_desktop_app_context_for_follow_up_actions():
+    planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
+
+    graph = planner.plan("打开微信然后搜索张三然后点击聊天之后关闭")
+
+    titles = [subgoal.title for subgoal in graph.subgoals]
+    assert titles[:4] == ["打开微信", "打开微信并搜索张三", "打开微信并点击聊天", "关闭微信"]
+    assert graph.subgoals[1].capability_preference == "windows_uia"
+    assert graph.subgoals[2].capability_preference == "windows_uia"
+
+
+def test_task_graph_planner_keeps_english_desktop_app_context_for_follow_up_actions():
+    planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
+
+    graph = planner.plan("open slack then search for Alice then click New message")
+
+    titles = [subgoal.title for subgoal in graph.subgoals]
+    assert titles[:3] == ["open slack", "open slack and search for Alice", "open slack and click New message"]
+    assert all(subgoal.capability_preference == "windows_uia" for subgoal in graph.subgoals[:3])
+
+
+def test_task_graph_planner_routes_generic_app_close_to_desktop():
+    planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
+
+    graph = planner.plan("open slack then search for Alice then click New message then close")
+
+    titles = [subgoal.title for subgoal in graph.subgoals]
+    assert titles[:4] == [
+        "open slack",
+        "open slack and search for Alice",
+        "open slack and click New message",
+        "close slack",
+    ]
+    assert all(subgoal.capability_preference == "windows_uia" for subgoal in graph.subgoals[:4])
 
 
 def test_pending_decision_round_trips_decision_type():
@@ -273,6 +398,45 @@ def test_verification_without_completion_evidence_does_not_auto_succeed():
 
     assert result.status == "failed"
     assert result.success is False
+
+
+def test_verification_accepts_localized_calculator_window_for_active_app_evidence():
+    config = AgentConfig()
+    executor = CapabilityExecutor(
+        config=config,
+        planner=_PlannerStub(),
+        registry=build_capability_registry(),
+        driver_registry=build_driver_registry(),
+    )
+    subgoal = Subgoal(
+        id="subgoal_01",
+        title="打开计算器",
+        goal="打开计算器",
+        goal_type="navigate",
+        success_condition="计算器已打开。",
+        completion_evidence={"kind": "active_app_is", "value": "calculator"},
+    )
+    state = ExecutionState(task="打开计算器", run_id="demo", task_graph=TaskGraphPlanner(config).plan("打开计算器"))
+    state.task_graph.subgoals = [subgoal]
+    before = WorldModel(screenshot_path=Path("before.png"), active_window_title="Aoryn", active_app="browser")
+    after = WorldModel(
+        screenshot_path=Path("after.png"),
+        active_window_title="MSCTFIME UI",
+        active_app="msctfime ui",
+        visible_windows=[{"title": "计算器", "process_name": "calc.exe"}],
+    )
+    step = StepProposal(
+        intent="打开计算器",
+        actions=[Action.from_dict({"type": "open_app_if_needed", "app": "calculator"})],
+        expected_evidence=[EvidenceRequirement(kind="active_app_is", value="calculator", required=True)],
+        capability="windows_uia",
+        completes_subgoal=True,
+    )
+
+    result = executor.verify_step(execution_state=state, step=step, before=before, after=after)
+
+    assert result.status == "success"
+    assert result.success is True
 
 
 def test_capability_ranking_penalizes_recent_failures():

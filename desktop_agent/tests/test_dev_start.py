@@ -26,8 +26,13 @@ def test_dev_start_default_plan_includes_source_agent_and_browser(tmp_path):
     assert Path(plan.dashboard_command[1]).name == "run_agent.py"
     assert Path(plan.browser_command[1]).name == "run_browser.py"
     assert plan.dashboard_command[2:5] == ["ui", "--host", "127.0.0.1"]
+    assert plan.dashboard_url == "http://127.0.0.1:8766"
     assert "--profile-root" in plan.browser_command
-    assert str(tmp_path / ".tmp" / "browser-runtime" / "browser-profile") in plan.browser_command
+    assert str(tmp_path / ".tmp" / "source-test" / "browser-profile") in plan.browser_command
+    assert "--config" in plan.dashboard_command
+    assert "--config-path" in plan.browser_command
+    assert plan.config_path == tmp_path / ".tmp" / "source-test" / "config.yaml"
+    assert "managed_browser_port: 38992" in plan.config_path.read_text(encoding="utf-8")
 
 
 def test_dev_start_web_mode_uses_dashboard_only_flags(tmp_path):
@@ -100,4 +105,36 @@ def test_dev_start_dashboard_port_conflict_fails_before_launch(monkeypatch, tmp_
 
     assert dev_start.run([], project_root=tmp_path) == 2
 
-    assert "Dashboard port 8765 is already in use" in capsys.readouterr().err
+    assert "Dashboard port 8766 is already in use" in capsys.readouterr().err
+
+
+def test_dev_start_generated_config_preserves_user_config_and_overrides_dev_ports(tmp_path):
+    dev_start = _load_dev_start()
+    user_config = tmp_path / "config.yaml"
+    user_config.write_text(
+        "model_provider: openai_compatible\nmanaged_browser_port: 38991\n",
+        encoding="utf-8",
+    )
+
+    args = dev_start.parse_args(["--managed-browser-port", "39010"])
+    plan = dev_start.build_launch_plan(args, project_root=tmp_path)
+
+    generated = plan.config_path.read_text(encoding="utf-8")
+    assert "model_provider: openai_compatible" in generated
+    assert "managed_browser_port: 39010" in generated
+
+
+def test_dev_start_packaged_dashboard_on_port_is_not_reused(monkeypatch):
+    dev_start = _load_dev_start()
+
+    monkeypatch.setattr(dev_start, "_tcp_port_open", lambda host, port: True)
+    monkeypatch.setattr(
+        dev_start,
+        "_read_json",
+        lambda url, timeout=0.45: {"title": "Aoryn", "runtime_mode": "packaged"} if url.endswith("/api/meta") else {},
+    )
+
+    probe = dev_start._probe_dashboard_port("127.0.0.1", 8765)
+
+    assert probe.is_occupied
+    assert "packaged" in probe.detail

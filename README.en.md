@@ -35,11 +35,11 @@ The equivalent Python entrypoint is:
 python scripts/dev_start.py
 ```
 
-By default this starts the source-mode workbench and tries to start the managed browser runtime:
+By default this starts the source-mode workbench and tries to start the managed browser runtime on ports that are separate from an installed Aoryn session:
 
 ```text
-Dashboard: http://127.0.0.1:8765
-Browser Runtime: http://127.0.0.1:38991
+Dashboard: http://127.0.0.1:8766
+Browser Runtime: http://127.0.0.1:38992
 ```
 
 Useful development flags:
@@ -47,23 +47,31 @@ Useful development flags:
 ```bash
 python scripts/dev_start.py --ui web --no-browser-tab
 python scripts/dev_start.py --no-managed-browser
-python scripts/dev_start.py --port 8766
+python scripts/dev_start.py --port 8770 --managed-browser-port 39000
 python scripts/dev_start.py --print-commands
 ```
 
-If port `8765` is already an Aoryn dashboard, the launcher reuses it. If another service owns the port, it fails early with a replacement port hint. Source-mode browser data stays under `.tmp/browser-runtime/browser-profile`; packaged AppData paths are unchanged.
+The launcher writes `.tmp/source-test/config.yaml` and points the workbench at the same managed browser runtime port. Source-mode browser data stays under `.tmp/source-test/browser-profile`; packaged AppData paths are unchanged. Build and installer validation can wait until the source-mode result looks good.
 
-### 2.3 Lower-Level Entrypoints
+### 2.3 Logic Benchmark
+
+Run the deterministic task-logic benchmark before packaging to check common planner routes such as desktop app launch, browser follow-up clicks, calculator expressions, hotkeys, and save-as flows:
+
+```bash
+python scripts/run_logic_benchmark.py
+```
+
+### 2.4 Lower-Level Entrypoints
 
 The direct commands are still available for debugging:
 
 ```bash
 python run_agent.py
-python run_agent.py ui --browser --no-browser --port 8765
-python run_browser.py --port 38991 --profile-root .tmp/browser-runtime/browser-profile
+python run_agent.py ui --browser --no-browser --port 8766 --config .tmp/source-test/config.yaml
+python run_browser.py --port 38992 --profile-root .tmp/source-test/browser-profile --config-path .tmp/source-test/config.yaml
 ```
 
-### 2.4 Build a Windows EXE
+### 2.5 Build a Windows EXE
 
 Build artifacts are for release validation, not daily source-mode testing. The desktop shell can be packaged as a Windows app with PyInstaller:
 
@@ -91,7 +99,7 @@ release/Aoryn-0.1.6-win64/
 release/Aoryn-Setup-0.1.6.exe
 ```
 
-### 2.4 Deploy the Official Website
+### 2.6 Deploy the Official Website
 
 The public website lives in:
 
