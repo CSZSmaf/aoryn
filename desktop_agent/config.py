@@ -12,7 +12,7 @@ from desktop_agent.runtime_paths import default_run_root
 class AgentConfig:
     planner_mode: str = "auto"
     dry_run: bool = True
-    max_steps: int = 12
+    max_steps: int = 20
     max_run_seconds: float | None = None
     pause_after_action: float = 0.12
     cursor_motion_enabled: bool = False
@@ -28,6 +28,7 @@ class AgentConfig:
     model_name: str = "auto"
     model_api_key: str | None = None
     model_request_timeout: float = 90.0
+    task_graph_request_timeout: float = 12.0
     model_auto_discover: bool = True
     model_structured_output: str = "auto"
     default_surface_policy: str = "current_user_desktop"
@@ -54,12 +55,12 @@ class AgentConfig:
     approval_policy: str = "tiered"
     complex_task_planning: str = "hybrid"
     plan_review_policy: str = "low_risk_auto"
-    max_task_subgoals: int = 8
+    max_task_subgoals: int = 12
     max_subgoal_retries: int = 2
     orchestrator_mode: str = "unified"
     stage_review_policy: str = "risk_change"
     task_workspace_enabled: bool = True
-    max_replans_per_run: int = 2
+    max_replans_per_run: int = 3
     max_failures_per_subgoal: int = 3
     enabled_capabilities: list[str] = field(
         default_factory=lambda: [
@@ -196,6 +197,12 @@ class AgentConfig:
             default=90.0,
             minimum=5.0,
             maximum=300.0,
+        )
+        self.task_graph_request_timeout = _clamped_float(
+            self.task_graph_request_timeout,
+            default=12.0,
+            minimum=0.5,
+            maximum=60.0,
         )
         if self.max_run_seconds is not None:
             try:

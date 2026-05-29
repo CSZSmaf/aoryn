@@ -4,6 +4,7 @@ import base64
 import json
 import re
 import socket
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1417,10 +1418,18 @@ def _resolve_text_model_name(config: AgentConfig, requests_module, api_base: str
 
 def _task_graph_model_timeout(config: AgentConfig) -> float:
     try:
-        configured = float(config.model_request_timeout)
+        request_timeout = float(config.model_request_timeout)
     except (TypeError, ValueError):
-        configured = 3.0
-    return max(0.5, min(configured, 3.0))
+        request_timeout = 90.0
+    try:
+        graph_budget = float(getattr(config, "task_graph_request_timeout", 12.0))
+    except (TypeError, ValueError):
+        graph_budget = 12.0
+    # Allow the structured task-graph call enough headroom to actually return a
+    # decomposition for complex tasks, while never exceeding the overall request
+    # timeout. The previous hard 3s cap forced almost every complex task to fall
+    # back to heuristic planning.
+    return max(0.5, min(request_timeout, graph_budget))
 
 
 def _build_task_graph_payload(
@@ -2640,7 +2649,40 @@ def _infer_subgoal_risk(title: str) -> str:
     return "low"
 
 
+class _PooledRequests:
+    """Proxy that routes ``get``/``post`` through a keep-alive session.
+
+    All other attribute lookups (``RequestException``, ``adapters``, ...) fall
+    through to the underlying :mod:`requests` module, so existing call sites that
+    reference ``requests.RequestException`` keep working unchanged. Reusing a
+    pooled session avoids opening a fresh TCP/TLS connection on every LLM
+    round-trip, which is the dominant per-step latency for remote endpoints.
+    """
+
+    __slots__ = ("_module", "_session")
+
+    def __init__(self, module, session):
+        self._module = module
+        self._session = session
+
+    def get(self, *args, **kwargs):
+        return self._session.get(*args, **kwargs)
+
+    def post(self, *args, **kwargs):
+        return self._session.post(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._module, name)
+
+
+_POOLED_REQUESTS: _PooledRequests | None = None
+_POOLED_REQUESTS_LOCK = threading.Lock()
+
+
 def _import_requests():
+    global _POOLED_REQUESTS
+    if _POOLED_REQUESTS is not None:
+        return _POOLED_REQUESTS
     try:
         import requests
     except ModuleNotFoundError as exc:
@@ -2648,7 +2690,18 @@ def _import_requests():
             "VLMPlanner requires the requests package. "
             "Run `python -m pip install requests` or install from requirements.txt."
         ) from exc
-    return requests
+    with _POOLED_REQUESTS_LOCK:
+        if _POOLED_REQUESTS is None:
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=4,
+                pool_maxsize=8,
+                max_retries=0,
+            )
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            _POOLED_REQUESTS = _PooledRequests(requests, session)
+    return _POOLED_REQUESTS
 
 
 def _normalize_api_base_url(base_url: str) -> str:

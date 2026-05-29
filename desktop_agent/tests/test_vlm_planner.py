@@ -9,10 +9,12 @@ from desktop_agent.planner import (
     _build_task_decomposition,
     _build_vlm_payload,
     _build_response_format,
+    _import_requests,
     _needs_model_discovery,
     _normalize_api_base_url,
     _normalize_structured_output_mode,
     _pick_model_name,
+    _task_graph_model_timeout,
 )
 from desktop_agent.windows_env import DesktopEnvironment, MonitorSnapshot, Rect, TaskbarState, WindowSnapshot
 
@@ -78,6 +80,27 @@ def test_vlm_planner_caches_auto_discovered_model_name():
     assert planner._resolve_model_name(requests, api_base) == "qwen2.5-vl-7b-instruct"
     assert planner._resolve_model_name(requests, api_base) == "qwen2.5-vl-7b-instruct"
     assert requests.calls == 1
+
+
+def test_task_graph_timeout_honors_configurable_budget():
+    config = AgentConfig(model_request_timeout=90, task_graph_request_timeout=12)
+    # The budget is used as-is when it fits within the overall request timeout,
+    # replacing the previous hard-coded 3s cap that starved complex planning.
+    assert _task_graph_model_timeout(config) == 12.0
+
+
+def test_task_graph_timeout_capped_by_request_timeout():
+    config = AgentConfig(model_request_timeout=5, task_graph_request_timeout=30)
+    assert _task_graph_model_timeout(config) == 5.0
+
+
+def test_import_requests_returns_pooled_session_proxy():
+    pooled = _import_requests()
+    # Reused across calls so connections stay keep-alive instead of reopening.
+    assert _import_requests() is pooled
+    assert callable(pooled.get) and callable(pooled.post)
+    # Falls through to the underlying module for everything else.
+    assert pooled.RequestException is not None
 
 
 def test_vlm_planner_short_circuits_explicit_browser_tasks():
