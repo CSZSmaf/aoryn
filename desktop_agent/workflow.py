@@ -63,7 +63,7 @@ def _normalize_verification_status(value: str | None, success: bool | None = Non
     normalized = str(value or "").strip().lower()
     if normalized in VERIFICATION_STATUSES:
         return normalized
-    if success is True:
+    if _optional_bool(success) is True:
         return "success"
     return "failed"
 
@@ -113,7 +113,7 @@ class EvidenceRequirement:
             value=_optional_str(payload.get("value")),
             detail=_optional_str(payload.get("detail")),
             selector=_optional_str(payload.get("selector")),
-            required=bool(payload.get("required", True)),
+            required=_bool_value(payload.get("required"), default=True),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -136,6 +136,7 @@ class VerificationResult:
     verified_at: float = field(default_factory=time.time)
 
     def __post_init__(self) -> None:
+        self.success = _optional_bool(self.success)
         self.status = _normalize_verification_status(self.status, self.success)
         if self.success is None:
             self.success = self.status == "success"
@@ -146,9 +147,10 @@ class VerificationResult:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "VerificationResult":
+        success = _optional_bool(payload.get("success"))
         return cls(
-            success=payload.get("success"),
-            status=_normalize_verification_status(payload.get("status"), payload.get("success")),
+            success=success,
+            status=_normalize_verification_status(payload.get("status"), success),
             evidence=list(payload.get("evidence", []) or []),
             failure_kind=_normalize_failure_kind(payload.get("failure_kind")),
             message=_optional_str(payload.get("message")),
@@ -236,7 +238,7 @@ class StepProposal:
             timeout=_optional_float(payload.get("timeout")),
             cost_hint=_optional_str(payload.get("cost_hint")),
             capability=str(payload.get("capability", "desktop_gui")).strip() or "desktop_gui",
-            requires_approval=bool(payload.get("requires_approval", False)),
+            requires_approval=_bool_value(payload.get("requires_approval")),
             target_scope=_optional_str(payload.get("target_scope")),
             surface_kind=normalize_surface_kind(payload.get("surface_kind")),
             primary_anchor=TargetAnchor.from_dict(payload["primary_anchor"])
@@ -250,7 +252,7 @@ class StepProposal:
             rationale=_optional_str(payload.get("rationale")),
             current_focus=_optional_str(payload.get("current_focus")),
             remaining_steps=[str(item).strip() for item in payload.get("remaining_steps", []) or [] if str(item).strip()],
-            completes_subgoal=bool(payload.get("completes_subgoal", False)),
+            completes_subgoal=_bool_value(payload.get("completes_subgoal")),
         )
 
     def to_plan_result(self, *, done: bool = False) -> PlanResult:
@@ -463,6 +465,9 @@ class PendingDecision:
     risk_level: str
     decision_type: str = "step_approval"
     actions: list[Action] = field(default_factory=list)
+    approval_policy: str | None = None
+    requires_user_presence: bool = False
+    operator_hint: str | None = None
     requested_at: float = field(default_factory=time.time)
     status: str = "pending"
     response_note: str | None = None
@@ -476,6 +481,9 @@ class PendingDecision:
             risk_level=_normalize_risk_level(payload.get("risk_level")),
             decision_type=_normalize_decision_type(payload.get("decision_type")),
             actions=[Action.from_dict(item) for item in payload.get("actions", []) or []],
+            approval_policy=_optional_str(payload.get("approval_policy")),
+            requires_user_presence=_bool_value(payload.get("requires_user_presence")),
+            operator_hint=_optional_str(payload.get("operator_hint")),
             requested_at=float(payload.get("requested_at", time.time()) or time.time()),
             status=str(payload.get("status", "pending")).strip() or "pending",
             response_note=_optional_str(payload.get("response_note")),
@@ -489,6 +497,9 @@ class PendingDecision:
             "risk_level": self.risk_level,
             "decision_type": self.decision_type,
             "actions": [item.to_dict() for item in self.actions],
+            "approval_policy": self.approval_policy,
+            "requires_user_presence": self.requires_user_presence,
+            "operator_hint": self.operator_hint,
             "requested_at": self.requested_at,
             "status": self.status,
             "response_note": self.response_note,
@@ -743,7 +754,7 @@ class ExecutionState:
             last_progress_at=_optional_float(payload.get("last_progress_at")),
             repair_history=list(payload.get("repair_history", []) or []),
             current_surface_kind=normalize_surface_kind(payload.get("current_surface_kind")),
-            completed=bool(payload.get("completed", False)),
+            completed=_bool_value(payload.get("completed")),
             started_at=float(payload.get("started_at", time.time()) or time.time()),
             updated_at=float(payload.get("updated_at", time.time()) or time.time()),
         )
@@ -780,28 +791,41 @@ class ExecutionState:
         }
 
     def current_subgoal(self) -> Subgoal | None:
-        return self.task_graph.current_subgoal()
+        return _active_subgoal_from_context(self) or self.task_graph.current_subgoal()
 
 
 def build_execution_plan_summary(state: ExecutionState) -> dict[str, Any]:
-    current_subgoal = state.current_subgoal()
+    current_subgoal = _active_subgoal_from_context(state) or _select_summary_subgoal(state)
+    plan_health = _build_plan_health(state, next_subgoal=current_subgoal)
     last_step = state.last_step
     last_verification = state.last_verification
     pending_repair = state.app_context.get("pending_repair") if isinstance(state.app_context, dict) else None
+    manual_resume_status = (
+        str(state.app_context.get("manual_resume_status") or "").strip().lower()
+        if isinstance(state.app_context, dict)
+        else ""
+    )
+    manual_resume_cleared = manual_resume_status in {"resumed", "complete", "completed", "cleared"}
     recovery_reason = None
     if isinstance(pending_repair, dict):
         recovery_reason = _optional_str(pending_repair.get("failure_kind")) or _optional_str(pending_repair.get("message"))
-    if recovery_reason is None and state.failures:
+    if recovery_reason is None and state.failures and not manual_resume_cleared:
         latest_failure = state.failures[-1]
         if isinstance(latest_failure, dict):
             recovery_reason = _optional_str(latest_failure.get("message")) or _optional_str(latest_failure.get("failure_kind"))
+    if recovery_reason is None and isinstance(state.app_context, dict):
+        recovery_reason = _optional_str(state.app_context.get("recovery_reason")) or _optional_str(
+            state.app_context.get("human_handoff_reason")
+        )
     return {
         "task": state.task,
         "completed": state.completed,
         "intent": dict(state.task_graph.intent) if isinstance(state.task_graph.intent, dict) else None,
         "orchestration_phase": state.orchestration_phase,
         "active_specialist": state.active_specialist,
+        "plan_health": plan_health,
         "workspace_summary": state.workspace.summary(),
+        "plan_review_status": state.app_context.get("plan_review_status") if isinstance(state.app_context, dict) else None,
         "stage_review_status": state.app_context.get("stage_review_status") if isinstance(state.app_context, dict) else None,
         "last_replan_reason": state.last_replan_reason,
         "current_goal": current_subgoal.title if current_subgoal is not None else None,
@@ -828,11 +852,270 @@ def build_execution_plan_summary(state: ExecutionState) -> dict[str, Any]:
     }
 
 
+def _select_summary_subgoal(state: ExecutionState) -> Subgoal | None:
+    active_subgoal = _active_subgoal_from_context(state)
+    if active_subgoal is not None:
+        return active_subgoal
+    for status in ("in_progress", "pending", "blocked"):
+        for subgoal in state.task_graph.subgoals:
+            if subgoal.status != status or not state.task_graph.is_ready(subgoal):
+                continue
+            if _subgoal_can_continue_for_summary(state, subgoal):
+                return subgoal
+    for subgoal in state.task_graph.subgoals:
+        if subgoal.status != "completed" and state.task_graph.is_ready(subgoal):
+            return subgoal
+    return None
+
+
+def _active_subgoal_from_context(state: ExecutionState) -> Subgoal | None:
+    active_id = None
+    if isinstance(state.app_context, dict):
+        active_id = _optional_str(state.app_context.get("active_subgoal_id"))
+    if not active_id:
+        return None
+    subgoal = next((item for item in state.task_graph.subgoals if item.id == active_id), None)
+    if subgoal is None or subgoal.status == "completed" or not state.task_graph.is_ready(subgoal):
+        return None
+    pending_repair = state.app_context.get("pending_repair") if isinstance(state.app_context, dict) else None
+    if isinstance(pending_repair, dict) and str(pending_repair.get("subgoal_id") or "") == subgoal.id:
+        return subgoal
+    if subgoal.status == "blocked" and _summary_retry_remaining(state, subgoal) <= 0 and not subgoal.can_retry():
+        return None
+    return subgoal
+
+
+def _build_plan_health(state: ExecutionState, *, next_subgoal: Subgoal | None) -> dict[str, Any]:
+    subgoals = list(state.task_graph.subgoals)
+    counts = {
+        "total": len(subgoals),
+        "completed": 0,
+        "pending": 0,
+        "in_progress": 0,
+        "blocked": 0,
+        "failed": 0,
+        "ready": 0,
+        "exhausted": 0,
+    }
+    items: list[dict[str, Any]] = []
+    for subgoal in subgoals:
+        status = subgoal.status
+        if status in counts:
+            counts[status] += 1
+        ready = state.task_graph.is_ready(subgoal)
+        retry_remaining = _summary_retry_remaining(state, subgoal)
+        exhausted = subgoal.status != "completed" and retry_remaining <= 0
+        if exhausted:
+            counts["exhausted"] += 1
+        if ready and subgoal.status != "completed" and not exhausted:
+            counts["ready"] += 1
+        items.append(
+            {
+                "id": subgoal.id,
+                "title": subgoal.title,
+                "status": subgoal.status,
+                "goal_type": subgoal.goal_type,
+                "risk_level": subgoal.risk_level,
+                "capability_preference": subgoal.capability_preference,
+                "ready": ready,
+                "attempts": subgoal.attempts,
+                "max_attempts": subgoal.max_attempts,
+                "retry_remaining": retry_remaining,
+                "exhausted": exhausted,
+                "is_next": next_subgoal is not None and subgoal.id == next_subgoal.id,
+                "prerequisites": state.task_graph.prerequisites_for(subgoal),
+                "notes": list(subgoal.notes[-2:]),
+            }
+        )
+    blocked_reason = _plan_blocked_reason(state, items)
+    return {
+        "counts": counts,
+        "next_subgoal_id": next_subgoal.id if next_subgoal is not None else None,
+        "next_subgoal": next_subgoal.to_dict() if next_subgoal is not None else None,
+        "remaining": max(0, counts["total"] - counts["completed"]),
+        "blocked_reason": blocked_reason,
+        "autonomy": _build_autonomy_readiness(
+            state,
+            items=items,
+            next_subgoal=next_subgoal,
+            blocked_reason=blocked_reason,
+        ),
+        "items": items,
+    }
+
+
+def _build_autonomy_readiness(
+    state: ExecutionState,
+    *,
+    items: list[dict[str, Any]],
+    next_subgoal: Subgoal | None,
+    blocked_reason: str | None,
+) -> dict[str, Any]:
+    app_context = state.app_context if isinstance(state.app_context, dict) else {}
+    phase = str(state.orchestration_phase or "").strip().lower()
+    pending_decision = state.pending_decision
+    pending_type = (
+        _normalize_decision_type(getattr(pending_decision, "decision_type", None))
+        if pending_decision is not None
+        else None
+    )
+    plan_review_status = str(app_context.get("plan_review_status") or "").strip().lower()
+    stage_review_status = str(app_context.get("stage_review_status") or "").strip().lower()
+    plan_review_pending = plan_review_status in {"pending", "cancelled", "canceled"}
+    stage_review_pending = stage_review_status in {"pending", "cancelled", "canceled"}
+    warnings: list[str] = []
+    blockers: list[str] = []
+    next_action = "execute"
+    status = "ready"
+    can_continue = True
+    requires_review = False
+    requires_user = False
+
+    human_reason = _optional_str(app_context.get("human_handoff_reason"))
+    if phase == "awaiting_user" or human_reason:
+        status = "waiting_user"
+        next_action = "resume_after_user"
+        can_continue = False
+        requires_user = True
+        blockers.append(human_reason or "Waiting for the user before automation can continue.")
+    elif pending_type in {"plan_review", "stage_review", "step_approval"} or plan_review_pending or stage_review_pending:
+        review_type = pending_type or ("stage_review" if stage_review_pending else "plan_review")
+        status = "review_required"
+        next_action = {
+            "stage_review": "approve_stage",
+            "step_approval": "approve_step",
+        }.get(review_type, "approve_plan")
+        can_continue = False
+        requires_review = True
+        blockers.append(_review_blocker_message(review_type))
+    elif phase == "awaiting_approval":
+        status = "review_required"
+        next_action = "approve_step"
+        can_continue = False
+        requires_review = True
+        blockers.append(_review_blocker_message("step_approval"))
+    elif state.completed or state.task_graph.is_complete():
+        status = "complete"
+        next_action = "done"
+        can_continue = False
+    elif phase == "blocked":
+        status = "blocked"
+        next_action = "inspect_failure"
+        can_continue = False
+        requires_review = False
+        requires_user = False
+        blockers.append(
+            _optional_str(app_context.get("recovery_reason"))
+            or _optional_str(app_context.get("standard_recovery_kind"))
+            or blocked_reason
+            or "Inspect the failed run before automation can continue."
+        )
+    elif next_subgoal is None:
+        status = "blocked"
+        next_action = "recover_or_replan"
+        can_continue = False
+        blockers.append(blocked_reason or "No continuable subgoal is ready.")
+    elif next_subgoal.goal_type == "clarify":
+        status = "needs_clarification"
+        next_action = "ask_user"
+        can_continue = False
+        requires_user = True
+        blockers.append(next_subgoal.success_condition or "The task needs clarification before automation continues.")
+    else:
+        pending_repair = app_context.get("pending_repair")
+        if isinstance(pending_repair, dict) and str(pending_repair.get("subgoal_id") or "") == next_subgoal.id:
+            status = "recovering"
+            next_action = "repair"
+        exhausted_ids = [str(item.get("id")) for item in items if item.get("exhausted")]
+        if exhausted_ids:
+            warnings.append(f"Retry budget exhausted for {', '.join(exhausted_ids[:3])}.")
+        if not next_subgoal.capability_preference:
+            warnings.append("The next subgoal has no preferred capability.")
+        if not next_subgoal.completion_evidence:
+            warnings.append("The next subgoal has no explicit completion evidence requirement.")
+
+    return {
+        "status": status,
+        "can_continue": can_continue,
+        "requires_review": requires_review,
+        "requires_user": requires_user,
+        "next_action": next_action,
+        "next_subgoal_id": next_subgoal.id if next_subgoal is not None else None,
+        "blockers": blockers[:4],
+        "warnings": warnings[:4],
+    }
+
+
+def _review_blocker_message(review_type: str | None) -> str:
+    if review_type == "stage_review":
+        return "A replanned stage is waiting for review before execution continues."
+    if review_type == "step_approval":
+        return "The next action is waiting for approval before execution continues."
+    return "The generated plan is waiting for review before execution starts."
+
+
+def _summary_retry_remaining(state: ExecutionState, subgoal: Subgoal) -> int:
+    if subgoal.status == "completed":
+        return 0
+    if subgoal.id in state.failure_budget:
+        return max(0, int(state.failure_budget.get(subgoal.id, 0) or 0))
+    return max(0, int(subgoal.max_attempts or 1) - int(subgoal.attempts or 0))
+
+
+def _subgoal_can_continue_for_summary(state: ExecutionState, subgoal: Subgoal) -> bool:
+    pending_repair = state.app_context.get("pending_repair") if isinstance(state.app_context, dict) else None
+    if isinstance(pending_repair, dict) and str(pending_repair.get("subgoal_id") or "") == subgoal.id:
+        return True
+    return _summary_retry_remaining(state, subgoal) > 0 and subgoal.can_retry()
+
+
+def _plan_blocked_reason(state: ExecutionState, items: list[dict[str, Any]]) -> str | None:
+    if state.task_graph.is_complete():
+        return None
+    if any(item.get("is_next") for item in items):
+        return None
+    exhausted = [item["id"] for item in items if item.get("exhausted")]
+    waiting = [
+        item["id"]
+        for item in items
+        if item.get("status") != "completed" and not item.get("ready") and not item.get("exhausted")
+    ]
+    if exhausted:
+        return f"Retry budget exhausted for {', '.join(exhausted[:3])}."
+    if waiting:
+        return f"Waiting on prerequisites for {', '.join(waiting[:3])}."
+    if state.task_graph.subgoals:
+        return "No remaining subgoal is ready to execute."
+    return "The task graph has no subgoals."
+
+
 def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if not lowered:
+            return None
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        return None
+    return bool(value)
+
+
+def _bool_value(value: Any, *, default: bool = False) -> bool:
+    parsed = _optional_bool(value)
+    return default if parsed is None else parsed
 
 
 def _normalize_decision_type(value: Any) -> str:

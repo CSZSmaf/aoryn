@@ -1,11 +1,66 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dataclass_fields
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus, urlparse
 
 from desktop_agent.runtime_paths import default_run_root
+
+
+_AUTONOMY_MODE_ALIASES = {
+    "conservative": "conservative",
+    "safe": "conservative",
+    "default": "conservative",
+    "standard": "conservative",
+    "balanced": "conservative",
+    "review-first": "review_first",
+    "review_first": "review_first",
+    "supervised": "review_first",
+    "strict": "review_first",
+    "autonomous": "autonomous",
+    "aggressive": "autonomous",
+    "high-autonomy": "autonomous",
+    "high_autonomy": "autonomous",
+    "auto": "autonomous",
+}
+
+_AUTONOMY_MODE_PRESETS = {
+    "conservative": {
+        "plan_review_policy": "low_risk_auto",
+        "approval_policy": "tiered",
+        "stage_review_policy": "risk_change",
+        "replan_on_recoverable_error": True,
+        "recoverable_error_retry_limit": 2,
+        "max_replans_per_run": 3,
+        "max_failures_per_subgoal": 3,
+    },
+    "review_first": {
+        "plan_review_policy": "always",
+        "approval_policy": "strict",
+        "stage_review_policy": "always",
+        "replan_on_recoverable_error": True,
+        "recoverable_error_retry_limit": 1,
+        "max_replans_per_run": 2,
+        "max_failures_per_subgoal": 2,
+    },
+    "autonomous": {
+        "plan_review_policy": "never",
+        "approval_policy": "autonomous",
+        "stage_review_policy": "never",
+        "replan_on_recoverable_error": True,
+        "recoverable_error_retry_limit": 4,
+        "max_replans_per_run": 5,
+        "max_failures_per_subgoal": 5,
+    },
+}
+
+def desktop_autonomy_mode_presets() -> dict[str, dict[str, Any]]:
+    return {key: dict(value) for key, value in _AUTONOMY_MODE_PRESETS.items()}
+
+
+_TRUE_STRING_VALUES = {"1", "true", "t", "yes", "y", "on"}
+_FALSE_STRING_VALUES = {"0", "false", "f", "no", "n", "off"}
 
 
 @dataclass(slots=True)
@@ -161,6 +216,7 @@ class AgentConfig:
         ]
     )
     allowed_browser_schemes: list[str] = field(default_factory=lambda: ["http", "https"])
+    _provided_keys: set[str] = field(default_factory=set, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.normalize()
@@ -179,10 +235,20 @@ class AgentConfig:
         payload = dict(data)
         if "run_root" in payload and payload["run_root"]:
             payload["run_root"] = Path(payload["run_root"])
+        allowed_fields = {item.name for item in dataclass_fields(cls)}
+        payload["_provided_keys"] = {key for key in payload if key in allowed_fields and key != "_provided_keys"}
         return cls(**payload)
 
     def normalize(self) -> None:
-        self.cursor_motion_enabled = bool(self.cursor_motion_enabled)
+        self.dry_run = _normalized_bool(self.dry_run, default=True)
+        self.cursor_motion_enabled = _normalized_bool(self.cursor_motion_enabled, default=False)
+        self.model_auto_discover = _normalized_bool(self.model_auto_discover, default=True)
+        self.managed_browser_enabled = _normalized_bool(self.managed_browser_enabled, default=True)
+        self.external_browser_attach_enabled = _normalized_bool(self.external_browser_attach_enabled, default=True)
+        self.safe_mode_enabled = _normalized_bool(self.safe_mode_enabled, default=False)
+        self.browser_headless = _normalized_bool(self.browser_headless, default=False)
+        self.display_override_enabled = _normalized_bool(self.display_override_enabled, default=False)
+        self.generic_app_launch_enabled = _normalized_bool(self.generic_app_launch_enabled, default=True)
         try:
             duration = float(self.cursor_motion_duration)
         except (TypeError, ValueError):
@@ -214,6 +280,14 @@ class AgentConfig:
         self.complex_task_planning = planning_mode if planning_mode in {"off", "heuristic", "hybrid", "model"} else "hybrid"
         review_policy = str(self.plan_review_policy or "low_risk_auto").strip().lower()
         self.plan_review_policy = review_policy if review_policy in {"never", "low_risk_auto", "always"} else "low_risk_auto"
+        approval_policy = str(self.approval_policy or "tiered").strip().lower().replace("_", " ")
+        self.approval_policy = (
+            approval_policy
+            if approval_policy in {"tiered", "strict", "always", "autonomous", "high autonomy"}
+            else "tiered"
+        )
+        autonomy_mode = str(self.desktop_autonomy_mode or "conservative").strip().lower().replace(" ", "-")
+        self.desktop_autonomy_mode = _AUTONOMY_MODE_ALIASES.get(autonomy_mode, "conservative")
         orchestrator_mode = str(self.orchestrator_mode or "unified").strip().lower()
         self.orchestrator_mode = orchestrator_mode if orchestrator_mode in {"off", "unified"} else "unified"
         stage_review_policy = str(self.stage_review_policy or "risk_change").strip().lower()
@@ -222,7 +296,8 @@ class AgentConfig:
             if stage_review_policy in {"never", "risk_change", "always"}
             else "risk_change"
         )
-        self.task_workspace_enabled = bool(self.task_workspace_enabled)
+        self._apply_desktop_autonomy_mode_preset()
+        self.task_workspace_enabled = _normalized_bool(self.task_workspace_enabled, default=True)
         try:
             max_subgoals = int(self.max_task_subgoals)
         except (TypeError, ValueError):
@@ -238,6 +313,24 @@ class AgentConfig:
         except (TypeError, ValueError):
             max_failures = 3
         self.max_failures_per_subgoal = max(1, min(12, max_failures))
+        self.replan_on_recoverable_error = _normalized_bool(self.replan_on_recoverable_error, default=True)
+        try:
+            recoverable_retry_limit = int(self.recoverable_error_retry_limit)
+        except (TypeError, ValueError):
+            recoverable_retry_limit = 2
+        self.recoverable_error_retry_limit = max(0, min(10, recoverable_retry_limit))
+
+    def _apply_desktop_autonomy_mode_preset(self) -> None:
+        provided_keys = set(self._provided_keys or set())
+        mode_was_explicit = "desktop_autonomy_mode" in provided_keys
+        if self.desktop_autonomy_mode == "conservative" and not mode_was_explicit:
+            return
+        preset = _AUTONOMY_MODE_PRESETS.get(self.desktop_autonomy_mode)
+        if not preset:
+            return
+        for key, value in preset.items():
+            if key not in provided_keys:
+                setattr(self, key, value)
 
     def hotkey_set(self) -> set[tuple[str, ...]]:
         return {tuple(key.lower() for key in combo) for combo in self.allowed_hotkeys}
@@ -259,3 +352,23 @@ def _clamped_float(value: Any, *, default: float, minimum: float, maximum: float
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(maximum, parsed))
+
+
+def _normalized_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _TRUE_STRING_VALUES:
+            return True
+        if normalized in _FALSE_STRING_VALUES:
+            return False
+    return default

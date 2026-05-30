@@ -210,7 +210,7 @@ class PlanResult:
             str(payload.get("status_summary", "")).strip()
             or "No status summary provided."
         )
-        done = bool(payload.get("done", False))
+        done = _optional_bool(payload.get("done")) or False
         raw_actions = payload.get("actions", [])
         if raw_actions is None:
             raw_actions = []
@@ -255,6 +255,28 @@ def _optional_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
     return float(value)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+        return None
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    return None
 
 
 def _optional_compact_str(value: Any) -> str | None:

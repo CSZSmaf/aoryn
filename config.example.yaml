@@ -1,6 +1,6 @@
 planner_mode: auto
 dry_run: true
-max_steps: 6
+max_steps: 20
 max_run_seconds:
 pause_after_action: 0.12
 cursor_motion_enabled: false
@@ -22,16 +22,19 @@ task_graph_request_timeout: 12
 model_auto_discover: true
 model_structured_output: auto
 model_provider: lmstudio_local
+desktop_autonomy_mode: conservative
 approval_policy: tiered
 complex_task_planning: hybrid
 plan_review_policy: low_risk_auto
-max_task_subgoals: 8
+max_task_subgoals: 12
 max_subgoal_retries: 2
 orchestrator_mode: unified
 stage_review_policy: risk_change
 task_workspace_enabled: true
-max_replans_per_run: 2
+max_replans_per_run: 3
 max_failures_per_subgoal: 3
+replan_on_recoverable_error: true
+recoverable_error_retry_limit: 2
 enabled_capabilities:
   - browser_dom
   - windows_uia
@@ -56,7 +59,7 @@ app_launch_map:
   explorer: explorer.exe
   browser: msedge.exe
   paint: mspaint.exe
-  settings: ms-settings:
+  settings: "ms-settings:"
   word: winword.exe
   excel: excel.exe
   powerpoint: powerpnt.exe

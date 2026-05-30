@@ -196,6 +196,23 @@ def test_build_internal_page_html_setup_renders_effective_ai_configuration():
     assert "qwen/qwen3-14b" in document
 
 
+def test_build_internal_page_html_setup_parses_string_boolean_flags():
+    title, document = build_internal_page_html(
+        "setup",
+        assistant_setup={
+            "status": "Ready",
+            "provider_label": "OpenAI API",
+            "model_display": "gpt-test",
+            "api_key_configured": "false",
+            "browser_headless": "false",
+        },
+    )
+
+    assert title == "Browser Setup"
+    assert "API key</strong><span>Not configured</span>" in document
+    assert "Headless mode</strong><div class=\"tblr-meta\">Off</div>" in document
+
+
 def test_normalize_annotation_entries_filters_invalid_rows():
     entries = normalize_annotation_entries(
         [
@@ -327,6 +344,25 @@ def test_build_browser_ai_setup_summary_reports_missing_api_key_for_hosted_provi
     assert summary["status"] == "API key needed"
     assert summary["provider_label"] == "OpenAI API"
     assert summary["browser_channel_label"] == "Microsoft Edge"
+
+
+def test_build_browser_ai_setup_summary_parses_string_boolean_flags():
+    summary = build_browser_ai_setup_summary(
+        AgentConfig(
+            model_provider="openai_api",
+            model_base_url="https://api.example.test/v1",
+            model_name="gpt-test",
+            model_api_key=None,
+            browser_headless="false",
+        ),
+        provider_options=[
+            {"value": "openai_api", "label": "OpenAI API", "api_key_required": "false"},
+        ],
+    )
+
+    assert summary["status"] == "Ready"
+    assert summary["api_key_configured"] is False
+    assert summary["browser_headless"] is False
 
 
 def test_build_browser_assistant_setup_snapshot_avoids_dashboard_meta_and_runtime_probe(monkeypatch):

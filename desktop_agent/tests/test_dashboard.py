@@ -12,7 +12,7 @@ from uuid import uuid4
 import desktop_agent.dashboard as dashboard
 import pytest
 from desktop_agent.dashboard import DashboardApp, DashboardJob, TaskQueue, _clean_config_overrides
-from desktop_agent.controller import load_agent_config
+from desktop_agent.controller import AgentRunResult, load_agent_config
 from desktop_agent.provider_tools import ProviderModelEntry, ProviderSnapshot
 from desktop_agent.version import APP_ASSET_VERSION, APP_VERSION
 
@@ -23,12 +23,28 @@ def test_clean_config_overrides_accepts_model_browser_and_display_fields():
         "model_base_url": "https://api.example.com/v1",
         "model_name": "gpt-test",
         "model_api_key": "  secret \n",
+        "model_request_timeout": "120",
+        "task_graph_request_timeout": "18",
         "model_auto_discover": False,
         "model_structured_output": "json_object",
+        "desktop_autonomy_mode": "autonomous",
+        "complex_task_planning": "model",
+        "plan_review_policy": "always",
+        "max_task_subgoals": "14",
+        "max_subgoal_retries": "3",
+        "orchestrator_mode": "unified",
+        "stage_review_policy": "always",
+        "task_workspace_enabled": "true",
+        "max_replans_per_run": "4",
+        "max_failures_per_subgoal": "5",
+        "replan_on_recoverable_error": "false",
+        "recoverable_error_retry_limit": "6",
         "browser_control_mode": "dom",
         "browser_dom_backend": "playwright",
         "browser_dom_timeout": "12.5",
+        "max_steps": "9",
         "max_run_seconds": "3600",
+        "pause_after_action": "0.35",
         "cursor_motion_enabled": "false",
         "cursor_motion_duration": "1.8",
         "browser_headless": "true",
@@ -51,12 +67,28 @@ def test_clean_config_overrides_accepts_model_browser_and_display_fields():
         "model_base_url": "https://api.example.com/v1",
         "model_name": "gpt-test",
         "model_api_key": "secret",
+        "model_request_timeout": 120.0,
+        "task_graph_request_timeout": 18.0,
         "model_auto_discover": False,
         "model_structured_output": "json_object",
+        "desktop_autonomy_mode": "autonomous",
+        "complex_task_planning": "model",
+        "plan_review_policy": "always",
+        "max_task_subgoals": 14,
+        "max_subgoal_retries": 3,
+        "orchestrator_mode": "unified",
+        "stage_review_policy": "always",
+        "task_workspace_enabled": True,
+        "max_replans_per_run": 4,
+        "max_failures_per_subgoal": 5,
+        "replan_on_recoverable_error": False,
+        "recoverable_error_retry_limit": 6,
         "browser_control_mode": "dom",
         "browser_dom_backend": "playwright",
         "browser_dom_timeout": 12.5,
+        "max_steps": 9,
         "max_run_seconds": 3600.0,
+        "pause_after_action": 0.35,
         "cursor_motion_enabled": False,
         "cursor_motion_duration": 1.8,
         "browser_headless": True,
@@ -94,6 +126,10 @@ def test_dashboard_meta_exposes_dom_and_model_defaults(monkeypatch):
                     "model_provider: lmstudio_local",
                     "model_base_url: http://127.0.0.1:1234/v1",
                     "model_name: auto",
+                    "model_request_timeout: 120",
+                    "task_graph_request_timeout: 18",
+                    "max_task_subgoals: 14",
+                    "max_replans_per_run: 4",
                     "browser_control_mode: hybrid",
                     "browser_dom_backend: playwright",
                     "browser_dom_timeout: 8",
@@ -112,6 +148,10 @@ def test_dashboard_meta_exposes_dom_and_model_defaults(monkeypatch):
         assert meta["defaults"]["planner_mode"] == "auto"
         assert meta["defaults"]["dry_run"] is False
         assert meta["defaults"]["model_provider"] == "lmstudio_local"
+        assert meta["defaults"]["model_request_timeout"] == 120.0
+        assert meta["defaults"]["task_graph_request_timeout"] == 18.0
+        assert meta["defaults"]["max_task_subgoals"] == 14
+        assert meta["defaults"]["max_replans_per_run"] == 4
         assert meta["defaults"]["browser_control_mode"] == "hybrid"
         assert meta["defaults"]["cursor_motion_enabled"] is False
         assert meta["defaults"]["cursor_motion_duration"] == 0.12
@@ -120,6 +160,9 @@ def test_dashboard_meta_exposes_dom_and_model_defaults(monkeypatch):
         assert meta["dom_status"]["detail"] == "Playwright missing"
         assert any(item["value"] == "openai_api" for item in meta["model_providers"])
         assert any(item["value"] == "openai_compatible" for item in meta["model_providers"])
+        assert meta["autonomy_mode_presets"]["conservative"]["plan_review_policy"] == "low_risk_auto"
+        assert meta["autonomy_mode_presets"]["review_first"]["approval_policy"] == "strict"
+        assert meta["autonomy_mode_presets"]["autonomous"]["approval_policy"] == "autonomous"
         assert meta["browser_control_modes"] == [{"value": "hybrid", "label": "Hybrid GUI + DOM"}]
         assert meta["browser_dom_backends"] == [{"value": "playwright", "label": "Playwright"}]
         assert meta["browser_channels"] == [
@@ -200,6 +243,149 @@ def test_dashboard_overview_returns_runs_on_first_load():
 
         refreshed = app.overview()["runs"]
         assert refreshed[0]["id"] == "20260409_000001_cached"
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_dashboard_overview_refreshes_runs_when_terminal_job_run_is_missing_from_cache():
+    temp_root = Path("test_artifacts") / f"dashboard_terminal_job_refresh_{uuid4().hex}"
+    run_root = temp_root / "runs"
+    cached_run_dir = run_root / "20260409_000001_cached"
+    finished_run_dir = run_root / "20260409_000002_finished"
+    cached_run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        config_path = temp_root / "config.yaml"
+        config_path.write_text(
+            f"model_provider: lmstudio_local\nrun_root: {json.dumps(run_root.as_posix())}\n",
+            encoding="utf-8",
+        )
+        (cached_run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "task": "cached overview",
+                    "completed": True,
+                    "steps": 1,
+                    "started_at": 100.0,
+                    "finished_at": 101.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        app = DashboardApp(host="127.0.0.1", port=8765, config_path=config_path)
+
+        first_payload = app.overview()
+        assert [item["id"] for item in first_payload["runs"]] == ["20260409_000001_cached"]
+
+        finished_run_dir.mkdir(parents=True, exist_ok=True)
+        (finished_run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "task": "finished from active job",
+                    "completed": True,
+                    "steps": 2,
+                    "started_at": 200.0,
+                    "finished_at": 201.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        job = DashboardJob(
+            job_id="job-terminal-refresh",
+            task="finished from active job",
+            planner_mode="auto",
+            dry_run=False,
+            max_steps=6,
+            pause_after_action=0.1,
+            status="completed",
+            result={
+                "run_id": "20260409_000002_finished",
+                "completed": True,
+                "steps": 2,
+                "finished_at": 201.0,
+            },
+        )
+        app.queue.jobs[job.job_id] = job
+
+        refreshed_payload = app.overview()
+
+        assert refreshed_payload["jobs"][0]["result"]["run_id"] == "20260409_000002_finished"
+        assert refreshed_payload["runs"][0]["id"] == "20260409_000002_finished"
+        assert {item["id"] for item in refreshed_payload["runs"]} == {
+            "20260409_000001_cached",
+            "20260409_000002_finished",
+        }
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_dashboard_overview_refreshes_runs_when_active_job_run_is_missing_from_cache():
+    temp_root = Path("test_artifacts") / f"dashboard_active_job_refresh_{uuid4().hex}"
+    run_root = temp_root / "runs"
+    cached_run_dir = run_root / "20260409_000001_cached"
+    active_run_dir = run_root / "20260409_000002_approval"
+    cached_run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        config_path = temp_root / "config.yaml"
+        config_path.write_text(
+            f"model_provider: lmstudio_local\nrun_root: {json.dumps(run_root.as_posix())}\n",
+            encoding="utf-8",
+        )
+        (cached_run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "task": "cached overview",
+                    "completed": True,
+                    "steps": 1,
+                    "started_at": 100.0,
+                    "finished_at": 101.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        app = DashboardApp(host="127.0.0.1", port=8765, config_path=config_path)
+
+        first_payload = app.overview()
+        assert [item["id"] for item in first_payload["runs"]] == ["20260409_000001_cached"]
+
+        active_run_dir.mkdir(parents=True, exist_ok=True)
+        (active_run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "task": "approval from active job",
+                    "completed": False,
+                    "steps": 1,
+                    "started_at": 200.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        job = DashboardJob(
+            job_id="job-active-refresh",
+            task="approval from active job",
+            planner_mode="auto",
+            dry_run=False,
+            max_steps=6,
+            pause_after_action=0.1,
+            status="approval",
+            result={
+                "run_id": "20260409_000002_approval",
+                "pending_decision": {
+                    "decision_type": "plan_review",
+                    "summary": "Review the active plan.",
+                },
+            },
+        )
+        app.queue.jobs[job.job_id] = job
+        app.queue.active_job_id = job.job_id
+
+        refreshed_payload = app.overview()
+
+        assert refreshed_payload["active_job"]["result"]["run_id"] == "20260409_000002_approval"
+        assert refreshed_payload["runs"][0]["id"] == "20260409_000002_approval"
+        assert {item["id"] for item in refreshed_payload["runs"]} == {
+            "20260409_000001_cached",
+            "20260409_000002_approval",
+        }
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -357,6 +543,33 @@ def test_load_agent_config_allows_dashboard_to_disable_dry_run():
         config = load_agent_config(config_path, dry_run=False)
 
         assert config.dry_run is False
+    finally:
+        if config_path.exists():
+            config_path.unlink()
+        temp_root.rmdir()
+
+
+def test_load_agent_config_run_budget_arguments_override_config_overrides():
+    temp_root = Path("test_artifacts") / f"dashboard_run_budget_{uuid4().hex}"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    try:
+        config_path = temp_root / "config.yaml"
+        config_path.write_text("max_steps: 2\npause_after_action: 0.2\nmax_run_seconds: 10\n", encoding="utf-8")
+
+        config = load_agent_config(
+            config_path,
+            max_steps=9,
+            pause_after_action=0.05,
+            config_overrides={
+                "max_steps": 4,
+                "pause_after_action": 0.6,
+                "max_run_seconds": 20,
+            },
+        )
+
+        assert config.max_steps == 9
+        assert config.pause_after_action == 0.05
+        assert config.max_run_seconds == 20
     finally:
         if config_path.exists():
             config_path.unlink()
@@ -701,6 +914,47 @@ def test_dashboard_provider_load_model_can_unload_loaded_instances_before_loadin
     assert payload["unloaded_instance_ids"] == ["qwen/qwen3-vl-30b"]
 
 
+def test_dashboard_provider_load_model_route_parses_string_unload_flag(monkeypatch):
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        DashboardApp,
+        "provider_load_model",
+        lambda self, **kwargs: captured.append(kwargs) or {"ok": True, "model_id": kwargs["model_id"]},
+    )
+
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/provider/load-model",
+            data=json.dumps(
+                {
+                    "model_id": "qwen/qwen3-14b",
+                    "unload_first": "false",
+                    "config_overrides": {"browser_headless": "false"},
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+            assert payload["model_id"] == "qwen/qwen3-14b"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert captured
+    assert captured[0]["model_id"] == "qwen/qwen3-14b"
+    assert captured[0]["unload_first"] is False
+    assert captured[0]["config_overrides"]["browser_headless"] is False
+
+
 def test_dashboard_job_serializes_manual_handoff_state():
     job = DashboardJob(
         job_id="job123",
@@ -724,6 +978,41 @@ def test_dashboard_job_serializes_manual_handoff_state():
     assert payload["finished_at"] is None
 
 
+def test_dashboard_job_serializes_terminal_state_without_stale_pending_decision():
+    job = DashboardJob(
+        job_id="job-failed-stale-review",
+        task="fail after plan review",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.4,
+        status="failed",
+        error="planner stopped",
+        requires_human=False,
+        result={
+            "error": "planner stopped",
+            "requires_human": "false",
+            "pending_decision": {"decision_type": "plan_review"},
+            "execution_state": {
+                "pending_decision": {"decision_type": "plan_review"},
+                "plan_review_status": "pending",
+            },
+            "state": {
+                "pending_decision": {"decision_type": "plan_review"},
+                "plan_review_status": "pending",
+            },
+        },
+    )
+
+    payload = job.to_dict()
+
+    assert payload["status"] == "failed"
+    assert payload["requires_human"] is False
+    assert payload["result"].get("pending_decision") is None
+    assert payload["result"]["execution_state"].get("pending_decision") is None
+    assert payload["result"]["state"].get("pending_decision") is None
+
+
 def test_task_queue_cancel_active_marks_job_stopping():
     queue = TaskQueue(config_path=None)
     job = DashboardJob(
@@ -733,10 +1022,25 @@ def test_task_queue_cancel_active_marks_job_stopping():
         dry_run=False,
         max_steps=6,
         pause_after_action=0.4,
-        status="running",
+        status="approval",
+        result={
+            "pending_decision": {"decision_type": "plan_review"},
+            "execution_state": {
+                "pending_decision": {"decision_type": "plan_review"},
+                "plan_health": {
+                    "autonomy": {
+                        "status": "review_required",
+                        "can_continue": False,
+                        "requires_review": True,
+                    }
+                },
+            },
+        },
     )
     queue.jobs[job.job_id] = job
     queue.cancel_events[job.job_id] = threading.Event()
+    queue.decision_events[job.job_id] = threading.Event()
+    queue.pending_decisions[job.job_id] = {"decision_type": "plan_review"}
     queue.active_job_id = job.job_id
 
     payload = queue.cancel_active()
@@ -744,6 +1048,2467 @@ def test_task_queue_cancel_active_marks_job_stopping():
     assert payload["status"] == "stopping"
     assert payload["cancel_requested"] is True
     assert queue.cancel_events[job.job_id].is_set() is True
+    assert queue.decision_events[job.job_id].is_set() is True
+    assert queue.pending_decisions.get(job.job_id) is None
+    assert payload["result"].get("pending_decision") is None
+    assert payload["result"]["execution_state"].get("pending_decision") is None
+    assert payload["result"]["execution_state"]["plan_health"]["autonomy"]["status"] == "waiting_user"
+    assert payload["result"]["execution_state"]["plan_health"]["autonomy"]["requires_review"] is False
+
+
+def test_clear_pending_decision_updates_top_level_review_status():
+    result = {
+        "pending_decision": {"decision_type": "stage_review", "summary": "Review the replanned stage."},
+        "stage_review_status": "pending",
+        "execution_state": {
+            "orchestration_phase": "stage_review",
+            "stage_review_status": "pending",
+            "pending_decision": {"decision_type": "stage_review"},
+            "app_context": {"stage_review_status": "pending"},
+            "plan_health": {
+                "autonomy": {
+                    "status": "review_required",
+                    "can_continue": False,
+                    "requires_review": True,
+                    "next_action": "approve_stage",
+                }
+            },
+        },
+    }
+
+    cleaned = dashboard._clear_pending_decision_from_result(result, decision="approved")
+
+    state_payload = cleaned["execution_state"]
+    assert cleaned.get("pending_decision") is None
+    assert cleaned["stage_review_status"] == "approved"
+    assert state_payload.get("pending_decision") is None
+    assert state_payload["orchestration_phase"] == "stage_ready"
+    assert state_payload["stage_review_status"] == "approved"
+    assert state_payload["app_context"]["stage_review_status"] == "approved"
+    assert state_payload["plan_health"]["autonomy"]["status"] == "ready"
+    assert state_payload["plan_health"]["autonomy"]["next_action"] == "execute"
+
+    summary_state = dashboard._clear_pending_decision_from_result(
+        {
+            "state": {
+                "orchestration_phase": "stage_review",
+                "stage_review_status": "pending",
+                "pending_decision": {"decision_type": "stage_review"},
+                "app_context": {"stage_review_status": "pending"},
+                "plan_health": {
+                    "autonomy": {
+                        "status": "review_required",
+                        "can_continue": False,
+                        "requires_review": True,
+                    }
+                },
+            },
+        },
+        decision="approve",
+    )
+
+    assert summary_state["stage_review_status"] == "approved"
+    assert summary_state["state"].get("pending_decision") is None
+    assert summary_state["state"]["orchestration_phase"] == "stage_ready"
+    assert summary_state["state"]["stage_review_status"] == "approved"
+    assert summary_state["state"]["app_context"]["stage_review_status"] == "approved"
+    assert summary_state["state"]["plan_health"]["autonomy"]["status"] == "ready"
+
+    without_context = dashboard._clear_pending_decision_from_result(
+        {
+            "pending_decision": {"decision_type": "stage_review"},
+            "stage_review_status": "pending",
+            "execution_state": {
+                "orchestration_phase": "stage_review",
+                "stage_review_status": "pending",
+                "pending_decision": {"decision_type": "stage_review"},
+            },
+        },
+        decision="reject",
+    )
+
+    assert without_context["stage_review_status"] == "rejected"
+    assert without_context["execution_state"]["stage_review_status"] == "rejected"
+
+    plan_review = dashboard._clear_pending_decision_from_result(
+        {
+            "pending_decision": {"decision_type": "plan_review"},
+            "plan_review_status": "pending",
+            "execution_state": {
+                "orchestration_phase": "plan_review",
+                "plan_review_status": "pending",
+                "pending_decision": {"decision_type": "plan_review"},
+            },
+        },
+        decision="cancelled",
+    )
+
+    assert plan_review["plan_review_status"] == "cancelled"
+    assert plan_review["execution_state"]["plan_review_status"] == "cancelled"
+
+    empty_shell = dashboard._clear_pending_decision_from_result(
+        {
+            "pending_decision": {},
+            "stage_review_status": "pending",
+            "execution_state": {
+                "orchestration_phase": "stage_review",
+                "stage_review_status": "pending",
+                "pending_decision": {"decision_type": "stage_review"},
+                "app_context": {"stage_review_status": "pending"},
+            },
+            "state": {"pending_decision": {}},
+        },
+        decision="approved",
+    )
+
+    assert empty_shell.get("pending_decision") is None
+    assert empty_shell["stage_review_status"] == "approved"
+    assert empty_shell["execution_state"]["stage_review_status"] == "approved"
+    assert empty_shell["execution_state"]["app_context"]["stage_review_status"] == "approved"
+
+
+def test_task_queue_progress_preserves_plan_health_for_frontend():
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-plan-health",
+        task="recover and continue",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="running",
+    )
+    queue.jobs[job.job_id] = job
+    queue.active_job_id = job.job_id
+
+    queue._update_job_progress(
+        job.job_id,
+        {
+            "run_id": "run-plan-health",
+            "latest_summary": "Review the generated plan.",
+            "execution_state": {
+                "orchestration_phase": "plan_review",
+                "pending_decision": {
+                    "decision_type": "plan_review",
+                    "summary": "Review the task plan.",
+                },
+                "plan_health": {
+                    "counts": {"total": 2, "completed": 0, "blocked": 1, "ready": 1},
+                    "next_subgoal_id": "subgoal_02",
+                },
+            },
+        },
+    )
+
+    assert job.status == "approval"
+    assert queue.pending_decisions[job.job_id]["decision_type"] == "plan_review"
+    assert job.result["execution_state"]["plan_health"]["next_subgoal_id"] == "subgoal_02"
+    assert job.result["execution_state"]["plan_health"]["counts"]["ready"] == 1
+
+
+def test_task_queue_progress_ignores_empty_display_state_shells_over_full_state():
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-empty-display-shells",
+        task="preserve full state through empty display shells",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="running",
+    )
+    queue.jobs[job.job_id] = job
+    queue.active_job_id = job.job_id
+
+    queue._update_job_progress(
+        job.job_id,
+        {
+            "run_id": "run-empty-display-shells",
+            "latest_summary": "Review the generated plan.",
+            "execution_state": {
+                "orchestration_phase": "plan_review",
+                "pending_decision": {
+                    "decision_type": "plan_review",
+                    "summary": "Review the generated plan.",
+                },
+                "plan_health": {
+                    "counts": {"total": 2, "completed": 0, "ready": 1},
+                    "next_subgoal_id": "subgoal_01",
+                },
+                "workspace_summary": {
+                    "facts": [{"key": "route", "value": "Generated plan is ready."}],
+                },
+            },
+            "state": {
+                "current_goal": "Review summarized plan",
+                "pending_decision": {},
+                "plan_health": {"counts": {}, "autonomy": {}, "items": []},
+                "workspace_summary": {"facts": [], "sources": [], "evidence": [], "notes": []},
+            },
+        },
+    )
+
+    assert job.status == "approval"
+    assert queue.pending_decisions[job.job_id]["summary"] == "Review the generated plan."
+    assert job.result["pending_decision"]["summary"] == "Review the generated plan."
+    assert job.result["state"]["current_goal"] == "Review summarized plan"
+    assert job.result["state"]["pending_decision"]["summary"] == "Review the generated plan."
+    assert job.result["state"]["plan_health"]["next_subgoal_id"] == "subgoal_01"
+    assert job.result["state"]["workspace_summary"]["facts"][0]["value"] == "Generated plan is ready."
+
+
+def test_task_queue_progress_mirrors_state_summary_over_stale_top_level_fields():
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-state-summary-progress",
+        task="continue with state-only progress",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="running",
+        result={
+            "run_id": "run-state-summary-progress",
+            "current_goal": "Review the stale goal",
+            "plan_review_status": "pending",
+            "chosen_capability": "browser_dom",
+            "verification_status": "failed",
+            "pending_decision": {"decision_type": "plan_review"},
+            "step_proposal": {"intent": "review stale goal", "capability": "browser_dom"},
+            "verification": {"status": "failed", "message": "Old verification."},
+            "state": {
+                "current_goal": "Review the stale goal",
+                "plan_review_status": "pending",
+                "pending_decision": {"decision_type": "plan_review"},
+            },
+        },
+    )
+    queue.jobs[job.job_id] = job
+    queue.active_job_id = job.job_id
+
+    queue._update_job_progress(
+        job.job_id,
+        {
+            "run_id": "run-state-summary-progress",
+            "latest_summary": "Continuing with verified progress.",
+            "state": {
+                "orchestration_phase": "stage_ready",
+                "current_goal": "Verify updated goal",
+                "plan_review_status": "approved",
+                "chosen_capability": "shell",
+                "verification_status": "success",
+                "pending_decision": None,
+                "last_step": {"intent": "verify updated goal", "capability": "shell"},
+                "last_verification": {"status": "success", "message": "Updated goal verified."},
+            },
+        },
+    )
+
+    assert job.status == "running"
+    assert queue.pending_decisions.get(job.job_id) is None
+    assert job.result.get("pending_decision") is None
+    assert job.result["state"].get("pending_decision") is None
+    assert job.result["current_goal"] == "Verify updated goal"
+    assert job.result["plan_review_status"] == "approved"
+    assert job.result["chosen_capability"] == "shell"
+    assert job.result["verification_status"] == "success"
+    assert job.result["step_proposal"]["intent"] == "verify updated goal"
+    assert job.result["verification"]["status"] == "success"
+
+
+def test_task_queue_progress_handles_top_level_pending_decision_and_clears_it():
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-top-level-approval",
+        task="review top-level approval payload",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="running",
+    )
+    queue.jobs[job.job_id] = job
+    queue.active_job_id = job.job_id
+
+    queue._update_job_progress(
+        job.job_id,
+        {
+            "run_id": "run-top-level-approval",
+            "latest_summary": "Review the generated plan.",
+            "pending_decision": {
+                "decision_type": "plan_review",
+                "summary": "Review the task plan.",
+            },
+            "execution_state": {
+                "orchestration_phase": "plan_review",
+                "plan_health": {
+                    "autonomy": {"status": "review_required", "can_continue": False},
+                },
+            },
+        },
+    )
+
+    assert job.status == "approval"
+    assert queue.pending_decisions[job.job_id]["decision_type"] == "plan_review"
+    assert job.result["pending_decision"]["summary"] == "Review the task plan."
+
+    queue._update_job_progress(
+        job.job_id,
+        {
+            "run_id": "run-top-level-approval",
+            "latest_summary": "Continuing after review.",
+            "execution_state": {
+                "orchestration_phase": "stage_ready",
+                "plan_health": {
+                    "autonomy": {"status": "ready", "can_continue": True},
+                },
+            },
+        },
+    )
+
+    assert job.status == "running"
+    assert queue.pending_decisions.get(job.job_id) is None
+    assert job.result.get("pending_decision") is None
+    assert job.result["execution_state"].get("pending_decision") is None
+    assert job.result["execution_state"]["plan_health"]["autonomy"]["status"] == "ready"
+
+
+def test_task_queue_await_job_decision_accepts_nested_state_pending_decision():
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-nested-state-approval",
+        task="review nested approval payload",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="running",
+    )
+    queue.jobs[job.job_id] = job
+    queue.active_job_id = job.job_id
+    queue.decision_events[job.job_id] = threading.Event()
+    responses: list[dict[str, object]] = []
+    waiter = threading.Thread(
+        target=lambda: responses.append(
+            queue._await_job_decision(
+                job.job_id,
+                {
+                    "pending_decision": {},
+                    "state": {
+                        "orchestration_phase": "plan_review",
+                        "pending_decision": {
+                            "decision_type": "plan_review",
+                            "summary": "Review the nested task plan.",
+                        },
+                        "app_context": {"plan_review_status": "pending"},
+                    },
+                    "step_proposal": {"capability": "browser_dom"},
+                },
+            )
+        ),
+        daemon=True,
+    )
+    waiter.start()
+
+    deadline = time.time() + 3
+    while job.status != "approval" and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert job.status == "approval"
+    assert queue.pending_decisions[job.job_id]["decision_type"] == "plan_review"
+    assert job.result["pending_decision"]["summary"] == "Review the nested task plan."
+    assert job.result["execution_state"]["pending_decision"]["summary"] == "Review the nested task plan."
+
+    queue.decide(job.job_id, decision="approved", note="Looks good.")
+    waiter.join(timeout=3)
+
+    assert responses == [{"decision": "approve", "note": "Looks good."}]
+    assert queue.pending_decisions.get(job.job_id) is None
+    assert job.status == "running"
+    assert job.result.get("pending_decision") is None
+    assert job.result["execution_state"].get("pending_decision") is None
+    assert job.result["execution_state"]["plan_review_status"] == "approved"
+
+
+def test_task_queue_await_job_decision_rejects_empty_pending_payload():
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-empty-approval",
+        task="reject empty approval payload",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="running",
+    )
+    queue.jobs[job.job_id] = job
+    queue.active_job_id = job.job_id
+    queue.decision_events[job.job_id] = threading.Event()
+
+    with pytest.raises(RuntimeError, match="pending decision"):
+        queue._await_job_decision(
+            job.job_id,
+            {
+                "pending_decision": {},
+                "state": {
+                    "orchestration_phase": "plan_review",
+                    "pending_decision": {},
+                },
+            },
+        )
+
+    assert job.status == "running"
+    assert queue.pending_decisions.get(job.job_id) is None
+    assert job.result is None
+
+
+def test_task_queue_buffered_unknown_decision_rejects_pending_review():
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-unknown-buffered-decision",
+        task="review unknown buffered decision",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="approval",
+        result={
+            "pending_decision": {
+                "decision_type": "plan_review",
+                "summary": "Review the buffered task plan.",
+            },
+            "execution_state": {
+                "orchestration_phase": "plan_review",
+                "plan_review_status": "pending",
+                "pending_decision": {
+                    "decision_type": "plan_review",
+                    "summary": "Review the buffered task plan.",
+                },
+                "app_context": {"plan_review_status": "pending"},
+            },
+        },
+    )
+    queue.jobs[job.job_id] = job
+    queue.pending_decisions[job.job_id] = {"decision_type": "plan_review"}
+
+    response = queue._apply_decision_response_locked(job.job_id, {"decision": "later", "note": "unknown"})
+
+    assert response == {"decision": "reject", "note": "unknown"}
+    assert queue.pending_decisions.get(job.job_id) is None
+    assert job.status == "running"
+    assert job.result.get("pending_decision") is None
+    assert job.result["plan_review_status"] == "rejected"
+    assert job.result["execution_state"].get("pending_decision") is None
+    assert job.result["execution_state"]["plan_review_status"] == "rejected"
+    assert job.result["execution_state"]["app_context"]["plan_review_status"] == "rejected"
+
+
+def test_task_queue_submit_seeds_preview_plan_state_before_first_progress(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "plan_review_policy: always",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    preview = app.preview_task(task="open calculator", config_overrides={})
+    queue = TaskQueue(config_path=config_path)
+    run_started = threading.Event()
+    release_run = threading.Event()
+    run_dir = tmp_path / "run-preview"
+    run_dir.mkdir()
+
+    def _run_task(*args, **kwargs):
+        run_started.set()
+        release_run.wait(timeout=3)
+        return AgentRunResult(
+            task="open calculator",
+            completed=False,
+            steps=0,
+            run_dir=run_dir,
+            started_at=10.0,
+            finished_at=11.0,
+            error="stopped after seed assertion",
+        )
+
+    monkeypatch.setattr(dashboard, "run_task", _run_task)
+
+    job = queue.submit(
+        task="open calculator",
+        planner_mode=None,
+        dry_run=False,
+        max_steps=None,
+        pause_after_action=None,
+        initial_task_graph=preview["task_graph"],
+    )
+
+    try:
+        assert job.status == "approval"
+        assert queue.active_job()["status"] == "approval"
+        assert queue.pending_decisions[job.job_id]["decision_type"] == "plan_review"
+        assert job.result["pending_decision"]["decision_type"] == "plan_review"
+        assert job.result["execution_state"]["pending_decision"]["decision_type"] == "plan_review"
+        assert job.result["execution_state"]["plan_health"]["autonomy"]["status"] == "review_required"
+        assert job.result["execution_state"]["plan_health"]["autonomy"]["next_action"] == "approve_plan"
+        assert queue.active_job()["result"]["execution_state"]["plan_health"]["autonomy"]["can_continue"] is False
+        assert run_started.wait(timeout=3)
+        assert queue.active_job()["status"] == "approval"
+    finally:
+        release_run.set()
+        deadline = time.time() + 3
+        while queue.active_job_id is not None and time.time() < deadline:
+            time.sleep(0.01)
+
+
+def test_task_queue_submit_buffers_seeded_preview_plan_decision_before_runner_callback(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "plan_review_policy: always",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    preview = app.preview_task(task="open calculator", config_overrides={})
+    queue = TaskQueue(config_path=config_path)
+    run_started = threading.Event()
+    release_review_wait = threading.Event()
+    responses: list[dict[str, object]] = []
+    pending_decision_holder = {}
+    run_dir = tmp_path / "run-preview-approved"
+    run_dir.mkdir()
+
+    def _run_task(*args, **kwargs):
+        run_started.set()
+        release_review_wait.wait(timeout=3)
+        pending_decision = dict(pending_decision_holder["value"])
+        responses.append(
+            kwargs["decision_callback"](
+                {
+                    "execution_state": {
+                        "orchestration_phase": "plan_review",
+                        "pending_decision": pending_decision,
+                        "plan_review_status": "pending",
+                        "app_context": {"plan_review_status": "pending"},
+                        "plan_health": {
+                            "autonomy": {
+                                "status": "review_required",
+                                "can_continue": False,
+                                "requires_review": True,
+                                "next_action": "approve_plan",
+                                "blockers": ["Plan review is required before execution."],
+                            }
+                        },
+                    },
+                }
+            )
+        )
+        return AgentRunResult(
+            task="open calculator",
+            completed=True,
+            steps=1,
+            run_dir=run_dir,
+            started_at=10.0,
+            finished_at=11.0,
+            execution_state={
+                "orchestration_phase": "complete",
+                "plan_review_status": "approved",
+                "app_context": {"plan_review_status": "approved"},
+            },
+        )
+
+    monkeypatch.setattr(dashboard, "run_task", _run_task)
+
+    job = queue.submit(
+        task="open calculator",
+        planner_mode=None,
+        dry_run=False,
+        max_steps=None,
+        pause_after_action=None,
+        initial_task_graph=preview["task_graph"],
+    )
+
+    try:
+        pending_decision_holder["value"] = dict(job.result["pending_decision"])
+        assert job.status == "approval"
+        assert queue.active_job()["status"] == "approval"
+        assert queue.pending_decisions[job.job_id]["decision_type"] == "plan_review"
+        assert job.result["execution_state"]["plan_health"]["autonomy"]["can_continue"] is False
+        assert run_started.wait(timeout=3)
+
+        decided = queue.decide(job.job_id, decision="approve", note="Preview approved.")
+        assert decided["status"] == "running"
+        assert decided["result"].get("pending_decision") is None
+        assert decided["result"]["execution_state"].get("pending_decision") is None
+        release_review_wait.set()
+
+        deadline = time.time() + 3
+        while queue.active_job_id is not None and time.time() < deadline:
+            time.sleep(0.01)
+
+        assert responses == [{"decision": "approve", "note": "Preview approved."}]
+        assert queue.jobs[job.job_id].status == "completed"
+        assert queue.jobs[job.job_id].result.get("pending_decision") is None
+        assert queue.jobs[job.job_id].result["execution_state"].get("pending_decision") is None
+        assert queue.jobs[job.job_id].result["execution_state"]["plan_review_status"] == "approved"
+    finally:
+        release_review_wait.set()
+        deadline = time.time() + 3
+        while queue.active_job_id is not None and time.time() < deadline:
+            active = queue.jobs.get(job.job_id)
+            if active is not None and active.status == "approval":
+                try:
+                    queue.decide(job.job_id, decision="approve", note="cleanup")
+                except RuntimeError:
+                    pass
+            time.sleep(0.01)
+
+
+def test_resume_job_initial_result_prefers_display_state_summary():
+    result = dashboard._build_resume_job_result(
+        run_id="run-human",
+        details={
+            "task": "continue interrupted task",
+            "steps": 2,
+            "interruption_reason": "Waiting for manual verification.",
+            "timeline": [
+                {
+                    "screenshot": "step_02.png",
+                    "plan": {"status_summary": "Paused for manual verification."},
+                }
+            ],
+            "state": {
+                "current_goal": "Resume after verification",
+                "plan_health": {
+                    "counts": {"total": 2, "completed": 1, "ready": 1},
+                    "autonomy": {"status": "waiting_user", "can_continue": False},
+                },
+            },
+            "execution_state": {
+                "task_graph": {"subgoals": [{"id": "full-state-only"}]},
+            },
+        },
+    )
+
+    assert result["run_id"] == "run-human"
+    assert result["latest_screenshot"] == "step_02.png"
+    assert result["latest_summary"] == "Paused for manual verification."
+    assert result["execution_state"]["current_goal"] == "Resume after verification"
+    assert result["execution_state"]["plan_health"]["autonomy"]["status"] == "ready"
+    assert result["execution_state"]["plan_health"]["autonomy"]["can_continue"] is True
+    assert result["execution_state"]["app_context"]["manual_resume_status"] == "resumed"
+    assert result["execution_state"]["task_graph"]["subgoals"][0]["id"] == "full-state-only"
+
+
+def test_resume_job_initial_result_preserves_clarification_wait():
+    result = dashboard._build_resume_job_result(
+        run_id="run-clarify",
+        details={
+            "task": "ask which folder to use",
+            "steps": 1,
+            "interruption_kind": "requires_clarification",
+            "interruption_reason": "Choose the destination folder.",
+            "timeline": [],
+            "state": {
+                "current_goal": "Ask the user for the folder",
+                "orchestration_phase": "awaiting_user",
+                "app_context": {
+                    "human_handoff_kind": "requires_clarification",
+                    "human_handoff_reason": "Choose the destination folder.",
+                },
+                "last_verification": {
+                    "success": False,
+                    "status": "failed",
+                    "failure_kind": "requires_clarification",
+                    "message": "Choose the destination folder.",
+                },
+                "plan_health": {
+                    "counts": {"total": 1, "completed": 0, "ready": 1},
+                    "autonomy": {
+                        "status": "waiting_user",
+                        "can_continue": False,
+                        "requires_user": True,
+                        "next_action": "resume_after_user",
+                    },
+                },
+            },
+            "execution_state": {
+                "task_graph": {
+                    "subgoals": [
+                        {"id": "subgoal_01", "title": "Ask the user for the folder", "goal_type": "clarify"}
+                    ]
+                },
+            },
+        },
+    )
+
+    assert result["execution_state"]["orchestration_phase"] == "awaiting_user"
+    assert result["execution_state"]["plan_health"]["autonomy"]["status"] == "waiting_user"
+    assert result["execution_state"]["app_context"]["human_handoff_kind"] == "requires_clarification"
+
+
+def test_resume_job_initial_result_uses_verification_message_for_manual_resume_reason():
+    result = dashboard._build_resume_job_result(
+        run_id="run-auth-message",
+        details={
+            "task": "resume after auth prompt",
+            "steps": 1,
+            "requires_human": True,
+            "timeline": [],
+            "state": {
+                "orchestration_phase": "awaiting_user",
+                "last_verification": {
+                    "success": False,
+                    "status": "failed",
+                    "failure_kind": "requires_auth",
+                    "message": "Complete the sign-in challenge.",
+                },
+                "plan_health": {
+                    "counts": {"total": 1, "completed": 0, "ready": 1},
+                    "autonomy": {
+                        "status": "waiting_user",
+                        "can_continue": False,
+                        "requires_user": True,
+                    },
+                },
+            },
+            "execution_state": {
+                "task_graph": {
+                    "task": "resume after auth prompt",
+                    "subgoals": [{"id": "subgoal_01", "title": "Continue after auth"}],
+                },
+            },
+        },
+    )
+
+    assert result["execution_state"]["orchestration_phase"] == "stage_ready"
+    assert result["execution_state"]["app_context"]["manual_resume_status"] == "resumed"
+    assert result["execution_state"]["app_context"]["manual_resume_reason"] == "Complete the sign-in challenge."
+    assert result["execution_state"]["last_verification"] is None
+    assert result["execution_state"]["plan_health"]["autonomy"]["can_continue"] is True
+
+
+def test_resume_job_initial_result_ignores_empty_pending_shell_for_manual_resume():
+    result = dashboard._build_resume_job_result(
+        run_id="run-empty-pending-shell",
+        details={
+            "task": "resume after empty pending shell",
+            "steps": 1,
+            "requires_human": True,
+            "timeline": [],
+            "state": {
+                "orchestration_phase": "awaiting_user",
+                "pending_decision": {},
+                "app_context": {
+                    "human_handoff_reason": "Complete the local confirmation.",
+                    "standard_recovery_kind": "requires_user",
+                },
+                "plan_health": {
+                    "counts": {"total": 1, "completed": 0, "ready": 1},
+                    "autonomy": {
+                        "status": "waiting_user",
+                        "can_continue": False,
+                        "requires_user": True,
+                    },
+                },
+            },
+            "execution_state": {
+                "task_graph": {
+                    "task": "resume after empty pending shell",
+                    "subgoals": [{"id": "subgoal_01", "title": "Continue after confirmation"}],
+                },
+            },
+        },
+    )
+
+    execution_state = result["execution_state"]
+    assert execution_state["orchestration_phase"] == "stage_ready"
+    assert execution_state["pending_decision"] is None
+    assert execution_state["app_context"]["manual_resume_status"] == "resumed"
+    assert execution_state["app_context"]["manual_resume_reason"] == "Complete the local confirmation."
+    assert "standard_recovery_kind" not in execution_state["app_context"]
+    assert execution_state["plan_health"]["autonomy"]["status"] == "ready"
+    assert execution_state["plan_health"]["autonomy"]["can_continue"] is True
+
+
+def test_resume_job_initial_result_preserves_pending_review_decision():
+    result = dashboard._build_resume_job_result(
+        run_id="run-review",
+        details={
+            "task": "review generated task plan",
+            "steps": 1,
+            "requires_human": True,
+            "resume_mode": "manual",
+            "timeline": [],
+            "state": {
+                "current_goal": "Review generated task plan",
+                "orchestration_phase": "plan_review",
+                "plan_review_status": "pending",
+                "pending_decision": {
+                    "decision_type": "plan_review",
+                    "summary": "Review the generated task plan.",
+                    "reason": "The plan touches an external account.",
+                    "risk_level": "high",
+                },
+                "app_context": {
+                    "plan_review_status": "pending",
+                    "human_handoff_reason": "Review the generated task plan.",
+                    "standard_recovery_kind": "requires_user",
+                },
+                "plan_health": {
+                    "counts": {"total": 1, "completed": 0, "ready": 1},
+                    "autonomy": {
+                        "status": "review_required",
+                        "can_continue": False,
+                        "requires_review": True,
+                        "next_action": "approve_plan",
+                    },
+                },
+            },
+            "execution_state": {
+                "task_graph": {
+                    "task": "review generated task plan",
+                    "subgoals": [{"id": "subgoal_01", "title": "Review generated task plan"}],
+                }
+            },
+        },
+    )
+
+    assert result["execution_state"]["orchestration_phase"] == "plan_review"
+    assert result["execution_state"]["plan_review_status"] == "pending"
+    assert result["execution_state"]["pending_decision"]["decision_type"] == "plan_review"
+    assert result["execution_state"]["plan_health"]["autonomy"]["status"] == "review_required"
+    assert "human_handoff_reason" not in result["execution_state"]["app_context"]
+    assert "standard_recovery_kind" not in result["execution_state"]["app_context"]
+    assert "manual_resume_status" not in result["execution_state"]["app_context"]
+
+
+def test_resume_job_initial_result_marks_saved_step_approval_as_resumed():
+    result = dashboard._build_resume_job_result(
+        run_id="run-step-approval",
+        details={
+            "task": "continue the guarded action",
+            "steps": 2,
+            "timeline": [],
+            "state": {
+                "current_goal": "Click guarded confirm",
+                "orchestration_phase": "awaiting_approval",
+                "plan_health": {
+                    "counts": {"total": 1, "completed": 0, "ready": 1},
+                    "autonomy": {
+                        "status": "review_required",
+                        "can_continue": False,
+                        "requires_review": True,
+                        "requires_user": False,
+                        "next_action": "approve_step",
+                    },
+                },
+            },
+            "execution_state": {
+                "task_graph": {
+                    "task": "continue the guarded action",
+                    "subgoals": [{"id": "subgoal_01", "title": "Click guarded confirm"}],
+                }
+            },
+        },
+    )
+
+    execution_state = result["execution_state"]
+
+    assert execution_state["orchestration_phase"] == "stage_ready"
+    assert execution_state["pending_decision"] is None
+    assert execution_state["app_context"]["manual_resume_status"] == "resumed"
+    assert execution_state["plan_health"]["autonomy"]["status"] == "ready"
+    assert execution_state["plan_health"]["autonomy"]["can_continue"] is True
+    assert execution_state["plan_health"]["autonomy"]["requires_review"] is False
+
+
+def test_resume_job_initial_result_can_seed_plan_only_details():
+    result = dashboard._build_resume_job_result(
+        run_id="run-plan-only",
+        details={
+            "task": "continue a saved plan",
+            "steps": 1,
+            "timeline": [],
+            "plan": {
+                "task": "continue a saved plan",
+                "subgoals": [
+                    {"id": "subgoal_01", "title": "Recover the saved plan", "status": "pending"},
+                ],
+                "dependencies": {"subgoal_01": []},
+            },
+        },
+    )
+
+    assert result["run_id"] == "run-plan-only"
+    assert result["latest_summary"] == "continue a saved plan"
+    assert result["execution_state"]["task_graph"]["subgoals"][0]["title"] == "Recover the saved plan"
+
+
+def test_details_can_resume_honors_backend_resume_flags():
+    assert dashboard._details_can_resume({"completed": False, "can_resume": True}) is True
+    assert dashboard._details_can_resume({"completed": "false", "can_resume": "true"}) is True
+    assert dashboard._details_can_resume({"completed": "true", "can_resume": "true"}) is False
+    assert dashboard._details_can_resume({"completed": False, "resume_mode": "manual"}) is True
+    assert (
+        dashboard._details_can_resume(
+            {
+                "completed": False,
+                "cancelled": True,
+                "execution_state": {"task_graph": {"subgoals": [{"id": "subgoal_01"}]}},
+            }
+        )
+        is True
+    )
+    assert (
+        dashboard._details_can_resume(
+            {
+                "completed": False,
+                "can_resume": False,
+                "requires_human": True,
+                "execution_state": {"task_graph": {"subgoals": [{"id": "subgoal_01"}]}},
+            }
+        )
+        is False
+    )
+    assert (
+        dashboard._details_can_resume(
+            {
+                "completed": "false",
+                "can_resume": "false",
+                "requires_human": "true",
+                "execution_state": {"task_graph": {"subgoals": [{"id": "subgoal_01"}]}},
+            }
+        )
+        is False
+    )
+    assert (
+        dashboard._details_can_resume(
+            {
+                "completed": "false",
+                "requires_human": "false",
+                "plan": {"subgoals": [{"id": "subgoal_01"}]},
+            }
+        )
+        is True
+    )
+
+
+def test_task_queue_resume_accepts_legacy_interruption_marker(monkeypatch, tmp_path):
+    run_root = tmp_path / "runs"
+    run_dir = run_root / "legacy-human-run"
+    run_dir.mkdir(parents=True)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f'run_root: "{run_root.as_posix()}"\n', encoding="utf-8")
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "task": "finish the legacy login flow",
+                "completed": False,
+                "steps": 2,
+                "requires_human": False,
+                "interruption_kind": "login",
+                "interruption_reason": "A login prompt needs user input.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    queue = TaskQueue(config_path=config_path)
+    run_started = threading.Event()
+
+    def _resume_task(*args, **kwargs):
+        run_started.set()
+        return AgentRunResult(
+            task="finish the legacy login flow",
+            completed=False,
+            steps=2,
+            run_dir=run_dir,
+            started_at=10.0,
+            finished_at=11.0,
+            error="stopped after resume assertion",
+        )
+
+    monkeypatch.setattr(dashboard, "resume_task", _resume_task)
+
+    job = queue.resume(run_id="legacy-human-run")
+
+    assert job.resume_run_id == "legacy-human-run"
+    assert run_started.wait(timeout=3)
+    deadline = time.time() + 3
+    while queue.active_job_id is not None and time.time() < deadline:
+        time.sleep(0.01)
+    assert queue.jobs[job.job_id].status == "failed"
+
+
+def test_task_queue_resume_accepts_execution_state_handoff_context(monkeypatch, tmp_path):
+    run_root = tmp_path / "runs"
+    run_dir = run_root / "state-handoff-run"
+    run_dir.mkdir(parents=True)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f'run_root: "{run_root.as_posix()}"\n', encoding="utf-8")
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "task": "finish the state login flow",
+                "completed": False,
+                "steps": 2,
+                "requires_human": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "execution_state.json").write_text(
+        json.dumps(
+            {
+                "orchestration_phase": "awaiting_user",
+                "app_context": {
+                    "human_handoff_kind": "login",
+                    "human_handoff_reason": "A login prompt needs user input.",
+                    "standard_recovery_kind": "requires_user",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    queue = TaskQueue(config_path=config_path)
+    run_started = threading.Event()
+
+    def _resume_task(*args, **kwargs):
+        run_started.set()
+        return AgentRunResult(
+            task="finish the state login flow",
+            completed=False,
+            steps=2,
+            run_dir=run_dir,
+            started_at=10.0,
+            finished_at=11.0,
+            error="stopped after resume assertion",
+        )
+
+    monkeypatch.setattr(dashboard, "resume_task", _resume_task)
+
+    job = queue.resume(run_id="state-handoff-run")
+
+    assert job.resume_run_id == "state-handoff-run"
+    assert run_started.wait(timeout=3)
+    deadline = time.time() + 3
+    while queue.active_job_id is not None and time.time() < deadline:
+        time.sleep(0.01)
+    assert queue.jobs[job.job_id].status == "failed"
+
+
+def test_task_queue_resume_accepts_failed_run_with_saved_execution_state(monkeypatch, tmp_path):
+    run_root = tmp_path / "runs"
+    run_dir = run_root / "failed-graph-run"
+    run_dir.mkdir(parents=True)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f'run_root: "{run_root.as_posix()}"\n', encoding="utf-8")
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "task": "recover the blocked checkout",
+                "completed": False,
+                "steps": 4,
+                "requires_human": False,
+                "error": "Subgoal became stuck after repeated failed attempts.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "execution_state.json").write_text(
+        json.dumps(
+            {
+                "task": "recover the blocked checkout",
+                "run_id": "failed-graph-run",
+                "task_graph": {
+                    "task": "recover the blocked checkout",
+                    "subgoals": [
+                        {
+                            "id": "subgoal_01",
+                            "title": "Recover blocked checkout",
+                            "status": "blocked",
+                            "attempts": 3,
+                            "max_attempts": 3,
+                        },
+                        {"id": "subgoal_02", "title": "Finish checkout", "status": "pending"},
+                    ],
+                    "dependencies": {"subgoal_01": [], "subgoal_02": []},
+                },
+                "failure_budget": {"subgoal_01": 0, "subgoal_02": 2},
+                "app_context": {"pending_repair": {"subgoal_id": "subgoal_02", "failure_kind": "blocked_by_ui"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    queue = TaskQueue(config_path=config_path)
+    run_started = threading.Event()
+    captured_kwargs: dict[str, object] = {}
+
+    def _resume_task(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        run_started.set()
+        return AgentRunResult(
+            task="recover the blocked checkout",
+            completed=False,
+            steps=4,
+            run_dir=run_dir,
+            started_at=10.0,
+            finished_at=11.0,
+            error="stopped after failed-state resume assertion",
+        )
+
+    monkeypatch.setattr(dashboard, "resume_task", _resume_task)
+
+    job = queue.resume(
+        run_id="failed-graph-run",
+        max_steps=7,
+        pause_after_action=0.25,
+        config_overrides={"max_run_seconds": 30},
+    )
+
+    assert job.resume_run_id == "failed-graph-run"
+    assert job.max_steps == 7
+    assert job.pause_after_action == 0.25
+    assert job.max_run_seconds == 30
+    assert job.to_dict()["max_run_seconds"] == 30
+    assert job.result["execution_state"]["task_graph"]["subgoals"][0]["id"] == "subgoal_01"
+    assert run_started.wait(timeout=3)
+    assert captured_kwargs["max_steps"] == 7
+    assert captured_kwargs["pause_after_action"] == 0.25
+    assert captured_kwargs["config_overrides"] == {"max_run_seconds": 30}
+    deadline = time.time() + 3
+    while queue.active_job_id is not None and time.time() < deadline:
+        time.sleep(0.01)
+    assert queue.jobs[job.job_id].status == "failed"
+
+
+def test_task_queue_resume_buffers_seeded_pending_review_decision(monkeypatch, tmp_path):
+    run_root = tmp_path / "runs"
+    run_dir = run_root / "pending-review-run"
+    run_dir.mkdir(parents=True)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f'run_root: "{run_root.as_posix()}"\n', encoding="utf-8")
+    pending_decision = {
+        "decision_type": "plan_review",
+        "summary": "Review the saved plan before continuing.",
+    }
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "task": "continue a saved review",
+                "completed": False,
+                "steps": 2,
+                "requires_human": "true",
+                "resume_mode": "manual",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "execution_state.json").write_text(
+        json.dumps(
+            {
+                "task": "continue a saved review",
+                "run_id": "pending-review-run",
+                "orchestration_phase": "plan_review",
+                "pending_decision": pending_decision,
+                "plan_review_status": "pending",
+                "app_context": {
+                    "plan_review_status": "pending",
+                    "human_handoff_kind": "requires_user",
+                    "standard_recovery_kind": "requires_user",
+                },
+                "plan_health": {
+                    "autonomy": {
+                        "status": "review_required",
+                        "can_continue": False,
+                        "requires_review": True,
+                    }
+                },
+                "task_graph": {
+                    "task": "continue a saved review",
+                    "subgoals": [{"id": "subgoal_01", "title": "Review saved plan", "status": "pending"}],
+                    "dependencies": {"subgoal_01": []},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    queue = TaskQueue(config_path=config_path)
+    run_started = threading.Event()
+    release_review_wait = threading.Event()
+    responses: list[dict[str, object]] = []
+
+    def _resume_task(*args, **kwargs):
+        run_started.set()
+        release_review_wait.wait(timeout=3)
+        response = kwargs["decision_callback"](
+            {
+                "execution_state": {
+                    "orchestration_phase": "plan_review",
+                    "pending_decision": pending_decision,
+                    "plan_review_status": "pending",
+                    "app_context": {"plan_review_status": "pending"},
+                },
+            }
+        )
+        responses.append(response)
+        return AgentRunResult(
+            task="continue a saved review",
+            completed=True,
+            steps=3,
+            run_dir=run_dir,
+            started_at=10.0,
+            finished_at=12.0,
+            execution_budget={
+                "max_steps": 8,
+                "max_run_seconds": 180,
+                "pause_after_action": 0.2,
+                "desktop_autonomy_mode": "autonomous",
+                "approval_policy": "autonomous",
+                "recoverable_error_retry_limit": 4,
+            },
+            execution_environment={
+                "browser_control_mode": "hybrid",
+                "browser_dom_backend": "playwright",
+                "browser_headless": False,
+                "shell_recipe_policy": "approval_required",
+            },
+            execution_state={
+                "orchestration_phase": "complete",
+                "plan_review_status": "approved",
+                "app_context": {"plan_review_status": "approved"},
+            },
+        )
+
+    monkeypatch.setattr(dashboard, "resume_task", _resume_task)
+
+    job = queue.resume(run_id="pending-review-run")
+
+    try:
+        assert job.status == "approval"
+        assert queue.active_job()["status"] == "approval"
+        assert queue.pending_decisions[job.job_id] == pending_decision
+        assert job.result["pending_decision"] == pending_decision
+        assert job.result["execution_state"]["pending_decision"] == pending_decision
+        assert "manual_resume_status" not in job.result["execution_state"]["app_context"]
+        assert run_started.wait(timeout=3)
+
+        decided = queue.decide(job.job_id, decision="approve", note="Looks good.")
+        assert decided["status"] == "running"
+        assert decided["result"].get("pending_decision") is None
+        release_review_wait.set()
+
+        deadline = time.time() + 3
+        while queue.active_job_id is not None and time.time() < deadline:
+            time.sleep(0.01)
+
+        assert responses == [{"decision": "approve", "note": "Looks good."}]
+        assert queue.jobs[job.job_id].status == "completed"
+        assert queue.jobs[job.job_id].result["execution_budget"]["desktop_autonomy_mode"] == "autonomous"
+        assert queue.jobs[job.job_id].result["execution_budget"]["max_run_seconds"] == 180
+        assert queue.jobs[job.job_id].result["execution_environment"]["browser_control_mode"] == "hybrid"
+        assert queue.jobs[job.job_id].result["execution_environment"]["shell_recipe_policy"] == "approval_required"
+        assert queue.jobs[job.job_id].result["execution_state"]["plan_review_status"] == "approved"
+    finally:
+        release_review_wait.set()
+        deadline = time.time() + 3
+        while queue.active_job_id is not None and time.time() < deadline:
+            active = queue.jobs.get(job.job_id)
+            if active is not None and active.status == "approval":
+                try:
+                    queue.decide(job.job_id, decision="approve", note="cleanup")
+                except RuntimeError:
+                    pass
+            time.sleep(0.01)
+
+
+def test_task_queue_submit_records_effective_runtime_budget(monkeypatch, tmp_path):
+    run_root = tmp_path / "runs"
+    run_dir = run_root / "budget-run"
+    run_dir.mkdir(parents=True)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    queue = TaskQueue(config_path=config_path)
+    captured_kwargs: dict[str, object] = {}
+    run_started = threading.Event()
+
+    def _run_task(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        run_started.set()
+        return AgentRunResult(
+            task="open calculator",
+            completed=True,
+            steps=1,
+            run_dir=run_dir,
+            started_at=10.0,
+            finished_at=11.0,
+        )
+
+    monkeypatch.setattr(dashboard, "run_task", _run_task)
+
+    job = queue.submit(
+        task="open calculator",
+        planner_mode=None,
+        dry_run=False,
+        max_steps=None,
+        pause_after_action=None,
+        config_overrides={"max_steps": 5, "pause_after_action": 0.3, "max_run_seconds": 180},
+    )
+
+    assert job.max_steps == 5
+    assert job.pause_after_action == 0.3
+    assert job.max_run_seconds == 180
+    assert job.to_dict()["max_run_seconds"] == 180
+    assert run_started.wait(timeout=3)
+    assert captured_kwargs["max_steps"] == 5
+    assert captured_kwargs["pause_after_action"] == 0.3
+    assert captured_kwargs["config_overrides"] == {"max_steps": 5, "pause_after_action": 0.3, "max_run_seconds": 180}
+
+
+def test_task_queue_resume_rejects_failed_run_without_saved_state(tmp_path):
+    run_root = tmp_path / "runs"
+    run_dir = run_root / "failed-no-state-run"
+    run_dir.mkdir(parents=True)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f'run_root: "{run_root.as_posix()}"\n', encoding="utf-8")
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "task": "failed without a saved plan",
+                "completed": False,
+                "steps": 1,
+                "requires_human": False,
+                "error": "A generic failure happened before planning.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    queue = TaskQueue(config_path=config_path)
+
+    with pytest.raises(RuntimeError, match="no saved execution state"):
+        queue.resume(run_id="failed-no-state-run")
+
+
+def test_task_queue_final_result_preserves_latest_progress_and_execution_state(monkeypatch, tmp_path):
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-final-state",
+        task="finish a planned task",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="running",
+        started_at=10.0,
+        result={
+            "run_id": "run-final-state",
+            "latest_summary": "Executing the last planned step.",
+            "latest_screenshot": "step_01.png",
+        },
+    )
+    queue.jobs[job.job_id] = job
+    queue.cancel_events[job.job_id] = threading.Event()
+    queue.decision_events[job.job_id] = threading.Event()
+    queue.active_job_id = job.job_id
+    run_dir = tmp_path / "run-final-state"
+    run_dir.mkdir()
+
+    def _run_task(*args, **kwargs):
+        return AgentRunResult(
+            task="finish a planned task",
+            completed=True,
+            steps=2,
+            run_dir=run_dir,
+            started_at=10.0,
+            finished_at=20.0,
+            execution_state={
+                "orchestration_phase": "complete",
+                "plan_health": {
+                    "counts": {"total": 2, "completed": 2, "ready": 0},
+                    "next_subgoal_id": None,
+                },
+            },
+        )
+
+    monkeypatch.setattr(dashboard, "run_task", _run_task)
+
+    queue._run_job(job.job_id)
+
+    assert job.status == "completed"
+    assert job.result["latest_summary"] == "Executing the last planned step."
+    assert job.result["latest_screenshot"] == "step_01.png"
+    assert job.result["execution_state"]["orchestration_phase"] == "complete"
+    assert job.result["execution_state"]["plan_health"]["counts"]["completed"] == 2
+    assert queue.active_job_id is None
+
+
+def test_task_queue_final_result_replaces_stale_live_planning_state(monkeypatch, tmp_path):
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-final-clears-stale-state",
+        task="finish after review",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="approval",
+        started_at=10.0,
+        result={
+            "run_id": "run-final-clears-stale-state",
+            "latest_summary": "Waiting for plan review.",
+            "pending_decision": {"decision_type": "plan_review", "summary": "Review stale plan."},
+            "plan_review_status": "pending",
+            "current_goal": "Review stale plan",
+            "step_proposal": {"intent": "review stale plan", "capability": "browser_dom"},
+            "verification": {"status": "failed", "message": "Old verification."},
+            "state": {
+                "orchestration_phase": "plan_review",
+                "pending_decision": {"decision_type": "plan_review"},
+                "plan_review_status": "pending",
+                "last_step": {"intent": "review stale plan", "capability": "browser_dom"},
+            },
+            "execution_state": {
+                "orchestration_phase": "plan_review",
+                "pending_decision": {"decision_type": "plan_review"},
+                "plan_review_status": "pending",
+                "last_step": {"intent": "review stale plan", "capability": "browser_dom"},
+            },
+        },
+    )
+    queue.jobs[job.job_id] = job
+    queue.cancel_events[job.job_id] = threading.Event()
+    queue.decision_events[job.job_id] = threading.Event()
+    queue.pending_decisions[job.job_id] = {"decision_type": "plan_review"}
+    queue.active_job_id = job.job_id
+    run_dir = tmp_path / "run-final-clears-stale-state"
+    run_dir.mkdir()
+
+    def _run_task(*args, **kwargs):
+        return AgentRunResult(
+            task="finish after review",
+            completed=True,
+            steps=3,
+            run_dir=run_dir,
+            started_at=10.0,
+            finished_at=22.0,
+            execution_state={
+                "orchestration_phase": "complete",
+                "current_goal": "Verify final result",
+                "plan_review_status": "approved",
+                "chosen_capability": "shell",
+                "verification_status": "success",
+                "plan_health": {
+                    "counts": {"total": 2, "completed": 2, "ready": 0},
+                    "autonomy": {
+                        "status": "complete",
+                        "can_continue": False,
+                        "requires_review": False,
+                    },
+                },
+                "last_step": {"intent": "verify final result", "capability": "shell"},
+                "last_verification": {"status": "success", "message": "Final result verified."},
+                "app_context": {"plan_review_status": "approved"},
+            },
+        )
+
+    monkeypatch.setattr(dashboard, "run_task", _run_task)
+
+    queue._run_job(job.job_id)
+
+    assert job.status == "completed"
+    assert job.result["latest_summary"] == "Waiting for plan review."
+    assert job.result.get("pending_decision") is None
+    assert job.result["execution_state"].get("pending_decision") is None
+    assert job.result["state"].get("pending_decision") is None
+    assert job.result["plan_review_status"] == "approved"
+    assert job.result["current_goal"] == "Verify final result"
+    assert job.result["step_proposal"]["intent"] == "verify final result"
+    assert job.result["verification"]["status"] == "success"
+    assert queue.pending_decisions.get(job.job_id) is None
+    assert queue.active_job_id is None
+
+
+def test_task_queue_failed_runner_clears_stale_pending_review_state(monkeypatch):
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-failed-clears-review",
+        task="fail after review progress",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="running",
+    )
+    queue.jobs[job.job_id] = job
+    queue.cancel_events[job.job_id] = threading.Event()
+    queue.decision_events[job.job_id] = threading.Event()
+    queue.active_job_id = job.job_id
+
+    def _run_task(*args, **kwargs):
+        kwargs["progress_callback"](
+            {
+                "run_id": "run-failed-clears-review",
+                "latest_summary": "Waiting for plan review.",
+                "pending_decision": {"decision_type": "plan_review", "summary": "Review generated plan."},
+                "execution_state": {
+                    "orchestration_phase": "plan_review",
+                    "pending_decision": {"decision_type": "plan_review"},
+                    "plan_review_status": "pending",
+                    "app_context": {"plan_review_status": "pending"},
+                    "plan_health": {
+                        "autonomy": {
+                            "status": "review_required",
+                            "can_continue": False,
+                            "requires_review": True,
+                            "blockers": [],
+                        },
+                    },
+                },
+            }
+        )
+        raise RuntimeError("planner crashed after review progress")
+
+    monkeypatch.setattr(dashboard, "run_task", _run_task)
+
+    queue._run_job(job.job_id)
+
+    assert job.status == "failed"
+    assert job.error == "planner crashed after review progress"
+    assert job.requires_human is False
+    assert job.result["latest_summary"] == "Waiting for plan review."
+    assert job.result["error"] == "planner crashed after review progress"
+    assert job.result.get("pending_decision") is None
+    assert job.result["execution_state"].get("pending_decision") is None
+    assert job.result["execution_state"]["orchestration_phase"] == "blocked"
+    assert job.result["execution_state"]["plan_review_status"] == "failed"
+    assert job.result["execution_state"]["app_context"]["plan_review_status"] == "failed"
+    autonomy = job.result["execution_state"]["plan_health"]["autonomy"]
+    assert autonomy["status"] == "blocked"
+    assert autonomy["requires_review"] is False
+    assert autonomy["next_action"] == "inspect_failure"
+    assert "planner crashed after review progress" in autonomy["blockers"]
+    assert queue.pending_decisions.get(job.job_id) is None
+    assert queue.active_job_id is None
+
+
+def test_task_queue_failed_result_clears_stale_pending_review_state(monkeypatch, tmp_path):
+    queue = TaskQueue(config_path=None)
+    job = DashboardJob(
+        job_id="job-failed-result-clears-review",
+        task="fail after stale review state",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=6,
+        pause_after_action=0.1,
+        status="approval",
+        result={
+            "pending_decision": {"decision_type": "plan_review", "summary": "Review stale plan."},
+            "execution_state": {
+                "pending_decision": {"decision_type": "plan_review"},
+                "plan_review_status": "pending",
+            },
+        },
+    )
+    queue.jobs[job.job_id] = job
+    queue.cancel_events[job.job_id] = threading.Event()
+    queue.decision_events[job.job_id] = threading.Event()
+    queue.pending_decisions[job.job_id] = {"decision_type": "plan_review"}
+    queue.active_job_id = job.job_id
+    run_dir = tmp_path / "run-failed-result-clears-review"
+    run_dir.mkdir()
+
+    def _run_task(*args, **kwargs):
+        return AgentRunResult(
+            task="fail after stale review state",
+            completed=False,
+            steps=2,
+            run_dir=run_dir,
+            started_at=10.0,
+            finished_at=12.0,
+            error="planner returned failure",
+            requires_human=False,
+            execution_state={
+                "orchestration_phase": "failed",
+                "pending_decision": {"decision_type": "plan_review"},
+                "plan_review_status": "pending",
+            },
+        )
+
+    monkeypatch.setattr(dashboard, "run_task", _run_task)
+
+    queue._run_job(job.job_id)
+
+    assert job.status == "failed"
+    assert job.requires_human is False
+    assert job.result["error"] == "planner returned failure"
+    assert job.result.get("pending_decision") is None
+    assert job.result["execution_state"].get("pending_decision") is None
+    assert (job.result.get("state") or {}).get("pending_decision") is None
+    assert queue.pending_decisions.get(job.job_id) is None
+    assert queue.active_job_id is None
+
+
+def test_dashboard_job_decision_route_releases_approval_wait():
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    job = DashboardJob(
+        job_id="job-approval-route",
+        task="review generated plan",
+        planner_mode="auto",
+        dry_run=False,
+        max_steps=3,
+        pause_after_action=0.1,
+        status="approval",
+        result={
+            "pending_decision": {"decision_type": "plan_review"},
+            "execution_state": {
+                "orchestration_phase": "plan_review",
+                "pending_decision": {"decision_type": "plan_review"},
+                "app_context": {"plan_review_status": "pending"},
+                "plan_health": {
+                    "autonomy": {
+                        "status": "review_required",
+                        "can_continue": False,
+                        "requires_review": True,
+                        "next_action": "approve_plan",
+                        "blockers": ["The generated plan is waiting for review before execution starts."],
+                    }
+                },
+            },
+        },
+    )
+    app.queue.jobs[job.job_id] = job
+    app.queue.active_job_id = job.job_id
+    app.queue.decision_events[job.job_id] = threading.Event()
+    app.queue.pending_decisions[job.job_id] = {
+        "decision_type": "plan_review",
+        "summary": "Review the task plan.",
+    }
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/jobs/{job.job_id}/decision",
+            data=json.dumps({"decision": "approve", "note": "Looks good."}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 202
+
+        assert payload["id"] == job.job_id
+        assert payload["status"] == "running"
+        assert payload["result"].get("pending_decision") is None
+        assert payload["result"]["execution_state"].get("pending_decision") is None
+        assert payload["result"]["execution_state"]["orchestration_phase"] == "stage_ready"
+        assert payload["result"]["execution_state"]["app_context"]["plan_review_status"] == "approved"
+        assert payload["result"]["execution_state"]["plan_health"]["autonomy"]["status"] == "ready"
+        assert payload["result"]["execution_state"]["plan_health"]["autonomy"]["can_continue"] is True
+        assert payload["result"]["execution_state"]["plan_health"]["autonomy"]["requires_review"] is False
+        assert app.queue.pending_decisions.get(job.job_id) is None
+        assert app.queue.decision_responses[job.job_id] == {"decision": "approve", "note": "Looks good."}
+        assert app.queue.decision_events[job.job_id].is_set() is True
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_previews_task_plan_without_queueing(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "max_task_subgoals: 4",
+                "max_steps: 6",
+                "max_run_seconds: 120",
+                "pause_after_action: 0.25",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+
+    payload = app.preview_task(
+        task="open calculator then wait 1 seconds",
+        config_overrides={"max_task_subgoals": "3"},
+    )
+
+    assert payload["task"] == "open calculator then wait 1 seconds"
+    assert payload["task_graph"]["task"] == payload["task"]
+    assert len(payload["task_graph"]["subgoals"]) >= 1
+    assert payload["plan_health"]["counts"]["total"] == len(payload["task_graph"]["subgoals"])
+    assert payload["execution_budget"] == {
+        "task_graph_request_timeout": 12.0,
+        "max_steps": 6,
+        "max_run_seconds": 120.0,
+        "pause_after_action": 0.25,
+        "desktop_autonomy_mode": "conservative",
+        "approval_policy": "tiered",
+        "complex_task_planning": "heuristic",
+        "plan_review_policy": "low_risk_auto",
+        "max_task_subgoals": 3,
+        "max_subgoal_retries": 2,
+        "stage_review_policy": "risk_change",
+        "max_replans_per_run": 3,
+        "max_failures_per_subgoal": 3,
+        "replan_on_recoverable_error": True,
+        "recoverable_error_retry_limit": 2,
+    }
+    assert payload["execution_environment"] == {
+        "browser_control_mode": "hybrid",
+        "browser_dom_backend": "playwright",
+        "browser_dom_timeout": 4.0,
+        "browser_headless": False,
+        "browser_channel": "msedge",
+        "browser_executable_path": None,
+        "cursor_motion_enabled": False,
+        "cursor_motion_duration": 0.12,
+        "display_override_enabled": False,
+        "display_override_monitor_device_name": None,
+        "display_override_dpi_scale": None,
+        "display_override_work_area_left": None,
+        "display_override_work_area_top": None,
+        "display_override_work_area_width": None,
+        "display_override_work_area_height": None,
+        "generic_app_launch_enabled": True,
+        "shell_recipe_policy": "approval_required",
+    }
+    assert payload["plan_health"]["next_subgoal_id"]
+    if payload["requires_review"]:
+        assert payload["plan_health"]["autonomy"]["status"] == "review_required"
+        assert payload["plan_health"]["autonomy"]["can_continue"] is False
+    else:
+        assert payload["plan_health"]["autonomy"]["status"] == "ready"
+        assert payload["plan_health"]["autonomy"]["can_continue"] is True
+    assert payload["risk_level"] in {"low", "medium", "high", "critical"}
+    assert isinstance(payload["task_graph_signature"], str)
+    assert len(payload["task_graph_signature"]) == 64
+    assert app.queue.list_jobs(limit=5) == []
+
+
+def test_dashboard_preview_task_route_returns_plan_health(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "max_task_subgoals: 4",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks/preview",
+            data=json.dumps(
+                {
+                    "task": "visit example.com and summarize the page",
+                    "config_overrides": {"max_task_subgoals": "2", "max_steps": "9", "max_run_seconds": "240", "pause_after_action": "0.35"},
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+
+        assert payload["task"] == "visit example.com and summarize the page"
+        assert len(payload["task_graph"]["subgoals"]) <= 2
+        assert isinstance(payload["task_graph_signature"], str)
+        assert payload["plan_health"]["counts"]["total"] == len(payload["task_graph"]["subgoals"])
+        assert payload["summary"]["plan_health"]["next_subgoal_id"] == payload["plan_health"]["next_subgoal_id"]
+        assert payload["summary"]["plan_health"]["autonomy"] == payload["plan_health"]["autonomy"]
+        assert payload["can_start"] is True
+        assert payload["start_blocker"] is None
+        assert payload["execution_budget"]["max_steps"] == 9
+        assert payload["execution_budget"]["max_run_seconds"] == 240.0
+        assert payload["execution_budget"]["pause_after_action"] == 0.35
+        assert payload["execution_budget"]["complex_task_planning"] == "heuristic"
+        assert payload["execution_budget"]["max_task_subgoals"] == 2
+        assert payload["execution_budget"]["max_replans_per_run"] == 3
+        assert payload["execution_budget"]["replan_on_recoverable_error"] is True
+        assert payload["execution_environment"]["browser_control_mode"] == "hybrid"
+        assert payload["execution_environment"]["browser_dom_backend"] == "playwright"
+        assert payload["execution_environment"]["browser_dom_timeout"] == 4.0
+        assert payload["execution_environment"]["cursor_motion_enabled"] is False
+        assert payload["execution_environment"]["display_override_enabled"] is False
+        assert app.queue.list_jobs(limit=5) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_preview_task_reports_clarification_autonomy(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+
+    payload = app.preview_task(task="do it", config_overrides={})
+
+    autonomy = payload["plan_health"]["autonomy"]
+    assert payload["requires_review"] is False
+    assert payload["can_start"] is False
+    assert payload["start_blocker"] == "Wait for the user to clarify the intended goal before automation continues."
+    assert payload["task_graph"]["subgoals"][0]["goal_type"] == "clarify"
+    assert autonomy["status"] == "needs_clarification"
+    assert autonomy["next_action"] == "ask_user"
+    assert autonomy["can_continue"] is False
+    assert autonomy["requires_user"] is True
+    assert autonomy["blockers"] == ["Wait for the user to clarify the intended goal before automation continues."]
+
+
+def test_dashboard_task_route_rejects_clarification_preview_graph(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    preview = app.preview_task(task="do it", config_overrides={})
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "do it",
+                    "task_graph": preview["task_graph"],
+                    "task_graph_signature": preview["task_graph_signature"],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(request)
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert "clarify" in payload["error"]
+        assert app.queue.list_jobs(limit=5) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_preview_plan_review_matches_execution_policy(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "plan_review_policy: always",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+
+    payload = app.preview_task(task="open calculator", config_overrides={})
+
+    assert payload["requires_review"] is True
+    assert payload["can_start"] is True
+    assert payload["start_blocker"] is None
+    assert payload["plan_health"]["autonomy"]["status"] == "review_required"
+    assert payload["plan_health"]["autonomy"]["next_action"] == "approve_plan"
+    assert payload["plan_health"]["autonomy"]["can_continue"] is False
+
+
+def test_dashboard_task_route_accepts_matching_preview_task_graph(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "max_task_subgoals: 4",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    captured: dict[str, object] = {}
+    task_graph = app.preview_task(
+        task="open calculator then wait 1 seconds",
+        config_overrides={},
+    )
+
+    def _submit(**kwargs):
+        captured.update(kwargs)
+        return DashboardJob(
+            job_id="job-preview",
+            task=kwargs["task"],
+            planner_mode=kwargs.get("planner_mode") or "auto",
+            dry_run=bool(kwargs.get("dry_run")),
+            max_steps=kwargs.get("max_steps"),
+            pause_after_action=kwargs.get("pause_after_action"),
+            config_overrides=dict(kwargs.get("config_overrides") or {}),
+            initial_task_graph=kwargs.get("initial_task_graph"),
+        )
+
+    monkeypatch.setattr(app.queue, "submit", _submit)
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "open calculator then wait 1 seconds",
+                    "task_graph": task_graph["task_graph"],
+                    "task_graph_signature": task_graph["task_graph_signature"],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 202
+
+        assert payload["id"] == "job-preview"
+        assert captured["initial_task_graph"]["task"] == "open calculator then wait 1 seconds"
+        assert captured["initial_task_graph"]["subgoals"]
+        assert all(item["status"] == "pending" for item in captured["initial_task_graph"]["subgoals"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_task_route_accepts_reviewed_preview_as_plan_approval(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "plan_review_policy: always",
+                "max_task_subgoals: 4",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    captured: dict[str, object] = {}
+    preview = app.preview_task(
+        task="open calculator then wait 1 seconds",
+        config_overrides={},
+    )
+
+    def _submit(**kwargs):
+        captured.update(kwargs)
+        return DashboardJob(
+            job_id="job-reviewed-preview",
+            task=kwargs["task"],
+            planner_mode=kwargs.get("planner_mode") or "auto",
+            dry_run=bool(kwargs.get("dry_run")),
+            max_steps=kwargs.get("max_steps"),
+            pause_after_action=kwargs.get("pause_after_action"),
+            config_overrides=dict(kwargs.get("config_overrides") or {}),
+            initial_task_graph=kwargs.get("initial_task_graph"),
+            initial_plan_review_status=kwargs.get("initial_plan_review_status"),
+        )
+
+    monkeypatch.setattr(app.queue, "submit", _submit)
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "open calculator then wait 1 seconds",
+                    "task_graph": preview["task_graph"],
+                    "task_graph_signature": preview["task_graph_signature"],
+                    "task_graph_review_status": "approved",
+                    "task_graph_review_signature": preview["task_graph_signature"],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 202
+
+        assert payload["id"] == "job-reviewed-preview"
+        assert payload["initial_plan_review_status"] == "approved"
+        assert captured["initial_plan_review_status"] == "approved"
+        assert captured["initial_task_graph"]["task"] == "open calculator then wait 1 seconds"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_task_route_rejects_review_status_when_preview_does_not_require_review(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "plan_review_policy: never",
+                "max_task_subgoals: 4",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    preview = app.preview_task(
+        task="open calculator then wait 1 seconds",
+        config_overrides={},
+    )
+    assert preview["requires_review"] is False
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "open calculator then wait 1 seconds",
+                    "task_graph": preview["task_graph"],
+                    "task_graph_signature": preview["task_graph_signature"],
+                    "task_graph_review_status": "approved",
+                    "task_graph_review_signature": preview["task_graph_signature"],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(request)
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert "review policy" in payload["error"]
+        assert app.queue.list_jobs(limit=5) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_task_route_accepts_preview_graph_with_matching_run_limit(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "max_task_subgoals: 4",
+                "run_root: runs",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    captured: dict[str, object] = {}
+    task_graph = app.preview_task(
+        task="open calculator then wait 1 seconds",
+        config_overrides={"max_run_seconds": "42"},
+    )
+
+    def _submit(**kwargs):
+        captured.update(kwargs)
+        return DashboardJob(
+            job_id="job-preview-run-limit",
+            task=kwargs["task"],
+            planner_mode=kwargs.get("planner_mode") or "auto",
+            dry_run=bool(kwargs.get("dry_run")),
+            max_steps=kwargs.get("max_steps"),
+            pause_after_action=kwargs.get("pause_after_action"),
+            config_overrides=dict(kwargs.get("config_overrides") or {}),
+            initial_task_graph=kwargs.get("initial_task_graph"),
+        )
+
+    monkeypatch.setattr(app.queue, "submit", _submit)
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "open calculator then wait 1 seconds",
+                    "task_graph": task_graph["task_graph"],
+                    "task_graph_signature": task_graph["task_graph_signature"],
+                    "config_overrides": {"max_run_seconds": "42"},
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 202
+
+        assert payload["id"] == "job-preview-run-limit"
+        assert captured["config_overrides"]["max_run_seconds"] == 42.0
+        assert captured["initial_task_graph"]["task"] == "open calculator then wait 1 seconds"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_task_route_rejects_stale_preview_task_graph_signature(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("complex_task_planning: heuristic\nmax_task_subgoals: 4\n", encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    preview = app.preview_task(
+        task="open calculator then wait 1 seconds",
+        config_overrides={"plan_review_policy": "never"},
+    )
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "open calculator then wait 1 seconds",
+                    "task_graph": preview["task_graph"],
+                    "task_graph_signature": preview["task_graph_signature"],
+                    "config_overrides": {"plan_review_policy": "always"},
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(request)
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert "signature" in payload["error"]
+        assert app.queue.list_jobs(limit=5) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_task_route_rejects_stale_preview_review_signature(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("complex_task_planning: heuristic\nmax_task_subgoals: 4\n", encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    preview = app.preview_task(task="open calculator then wait 1 seconds", config_overrides={})
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "open calculator then wait 1 seconds",
+                    "task_graph": preview["task_graph"],
+                    "task_graph_signature": preview["task_graph_signature"],
+                    "task_graph_review_status": "approved",
+                    "task_graph_review_signature": "stale-review-signature",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(request)
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert "review signature" in payload["error"]
+        assert app.queue.list_jobs(limit=5) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_task_route_rejects_preview_signature_after_config_file_change(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "complex_task_planning: heuristic\nmax_task_subgoals: 4\nplan_review_policy: never\n",
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    preview = app.preview_task(task="open calculator then wait 1 seconds", config_overrides={})
+    config_path.write_text(
+        "complex_task_planning: heuristic\nmax_task_subgoals: 4\nplan_review_policy: always\n",
+        encoding="utf-8",
+    )
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "open calculator then wait 1 seconds",
+                    "task_graph": preview["task_graph"],
+                    "task_graph_signature": preview["task_graph_signature"],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(request)
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert "signature" in payload["error"]
+        assert app.queue.list_jobs(limit=5) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_task_route_rejects_preview_signature_after_runtime_budget_file_change(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "max_task_subgoals: 4",
+                "max_steps: 6",
+                "max_run_seconds: 120",
+                "pause_after_action: 0.25",
+                "plan_review_policy: never",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    preview = app.preview_task(task="open calculator then wait 1 seconds", config_overrides={})
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "max_task_subgoals: 4",
+                "max_steps: 6",
+                "max_run_seconds: 240",
+                "pause_after_action: 0.25",
+                "plan_review_policy: never",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "open calculator then wait 1 seconds",
+                    "task_graph": preview["task_graph"],
+                    "task_graph_signature": preview["task_graph_signature"],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(request)
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert "signature" in payload["error"]
+        assert app.queue.list_jobs(limit=5) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_task_route_rejects_preview_signature_after_execution_environment_file_change(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "max_task_subgoals: 4",
+                "plan_review_policy: never",
+                "browser_control_mode: hybrid",
+                "browser_dom_backend: playwright",
+                "browser_dom_timeout: 4",
+                "browser_headless: false",
+                "browser_channel: msedge",
+                "cursor_motion_enabled: false",
+                "cursor_motion_duration: 0.12",
+                "display_override_enabled: false",
+                "generic_app_launch_enabled: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    preview = app.preview_task(task="open calculator then wait 1 seconds", config_overrides={})
+    config_path.write_text(
+        "\n".join(
+            [
+                "complex_task_planning: heuristic",
+                "max_task_subgoals: 4",
+                "plan_review_policy: never",
+                "browser_control_mode: hybrid",
+                "browser_dom_backend: playwright",
+                "browser_dom_timeout: 12",
+                "browser_headless: true",
+                "browser_channel: chrome",
+                "cursor_motion_enabled: true",
+                "cursor_motion_duration: 0.35",
+                "display_override_enabled: true",
+                "display_override_monitor_device_name: DISPLAY2",
+                "display_override_dpi_scale: 1.5",
+                "display_override_work_area_left: 2000",
+                "display_override_work_area_top: 20",
+                "display_override_work_area_width: 1600",
+                "display_override_work_area_height: 900",
+                "generic_app_launch_enabled: false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "open calculator then wait 1 seconds",
+                    "task_graph": preview["task_graph"],
+                    "task_graph_signature": preview["task_graph_signature"],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(request)
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert "signature" in payload["error"]
+        assert app.queue.list_jobs(limit=5) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_task_route_rejects_preview_task_graph_without_signature(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("complex_task_planning: heuristic\nmax_task_subgoals: 4\n", encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    preview = app.preview_task(task="open calculator then wait 1 seconds", config_overrides={})
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "open calculator then wait 1 seconds",
+                    "task_graph": preview["task_graph"],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(request)
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert "signature" in payload["error"]
+        assert app.queue.list_jobs(limit=5) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_task_route_rejects_mismatched_preview_task_graph(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("complex_task_planning: heuristic\nmax_task_subgoals: 4\n", encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    task_graph = app.preview_task(task="open calculator", config_overrides={})["task_graph"]
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps({"task": "open notepad", "task_graph": task_graph}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(request)
+        assert exc_info.value.code == 400
+        payload = json.loads(exc_info.value.read().decode("utf-8"))
+        assert "does not match" in payload["error"]
+        assert app.queue.list_jobs(limit=5) == []
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_dashboard_serves_shell_without_pwa_install_routes():
@@ -884,6 +3649,16 @@ def test_dashboard_runtime_preferences_roundtrip():
                     "model_provider": "openai_compatible",
                     "model_base_url": " https://api.example.com/v1 ",
                     "model_api_key": " secret \n",
+                    "task_graph_request_timeout": "18",
+                    "max_steps": "9",
+                    "max_run_seconds": "240",
+                    "pause_after_action": "0.35",
+                    "desktop_autonomy_mode": "autonomous",
+                    "max_task_subgoals": "14",
+                    "max_replans_per_run": "4",
+                    "approval_policy": "autonomous",
+                    "replan_on_recoverable_error": False,
+                    "recoverable_error_retry_limit": "6",
                     "cursor_motion_enabled": False,
                     "cursor_motion_duration": 0.35,
                     "browser_headless": True,
@@ -907,6 +3682,16 @@ def test_dashboard_runtime_preferences_roundtrip():
                 "model_provider": "openai_compatible",
                 "model_base_url": "https://api.example.com/v1",
                 "model_api_key": "secret",
+                "task_graph_request_timeout": 18.0,
+                "max_steps": 9,
+                "max_run_seconds": 240.0,
+                "pause_after_action": 0.35,
+                "desktop_autonomy_mode": "autonomous",
+                "max_task_subgoals": 14,
+                "max_replans_per_run": 4,
+                "approval_policy": "autonomous",
+                "replan_on_recoverable_error": False,
+                "recoverable_error_retry_limit": 6,
                 "cursor_motion_enabled": False,
                 "cursor_motion_duration": 0.35,
                 "browser_headless": True,
@@ -918,6 +3703,16 @@ def test_dashboard_runtime_preferences_roundtrip():
             assert response.status == 200
             assert persisted["config_overrides"]["model_provider"] == "openai_compatible"
             assert persisted["config_overrides"]["model_api_key"] == "secret"
+            assert persisted["config_overrides"]["task_graph_request_timeout"] == 18.0
+            assert persisted["config_overrides"]["max_steps"] == 9
+            assert persisted["config_overrides"]["max_run_seconds"] == 240.0
+            assert persisted["config_overrides"]["pause_after_action"] == 0.35
+            assert persisted["config_overrides"]["desktop_autonomy_mode"] == "autonomous"
+            assert persisted["config_overrides"]["max_task_subgoals"] == 14
+            assert persisted["config_overrides"]["max_replans_per_run"] == 4
+            assert persisted["config_overrides"]["approval_policy"] == "autonomous"
+            assert persisted["config_overrides"]["replan_on_recoverable_error"] is False
+            assert persisted["config_overrides"]["recoverable_error_retry_limit"] == 6
             assert persisted["config_overrides"]["cursor_motion_enabled"] is False
             assert persisted["config_overrides"]["cursor_motion_duration"] == 0.35
             assert persisted["ui_preferences"]["onboarding_completed"] is True
@@ -926,6 +3721,25 @@ def test_dashboard_runtime_preferences_roundtrip():
         server.shutdown()
         server.server_close()
         shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_dashboard_ui_preferences_parse_string_booleans():
+    assert dashboard._clean_ui_preferences({"onboarding_completed": "false"})["onboarding_completed"] is False
+    assert dashboard._clean_ui_preferences({"onboarding_completed": "true"})["onboarding_completed"] is True
+    assert (
+        dashboard._clean_ui_preferences(
+            {"onboarding_completed": "false"},
+            existing={"onboarding_completed": True},
+        )["onboarding_completed"]
+        is False
+    )
+    assert (
+        dashboard._clean_ui_preferences(
+            {"onboarding_completed": "not-a-bool"},
+            existing={"onboarding_completed": True},
+        )["onboarding_completed"]
+        is True
+    )
 
 
 def test_dashboard_provider_models_uses_runtime_preferences_when_request_overrides_are_empty(monkeypatch):
@@ -1035,6 +3849,12 @@ def test_dashboard_task_route_merges_runtime_preferences_with_request_overrides(
             "model_provider": "openai_compatible",
             "model_base_url": "https://runtime.example.com/v1",
             "model_api_key": "runtime-secret",
+            "max_steps": 5,
+            "max_run_seconds": 180,
+            "pause_after_action": 0.3,
+            "desktop_autonomy_mode": "review_first",
+            "approval_policy": "strict",
+            "replan_on_recoverable_error": False,
         }
     )
     captured: dict[str, object] = {}
@@ -1064,8 +3884,13 @@ def test_dashboard_task_route_merges_runtime_preferences_with_request_overrides(
             data=json.dumps(
                 {
                     "task": "visit openai.com and click login",
+                    "max_steps": "8",
+                    "pause_after_action": "0.2",
                     "config_overrides": {
                         "model_base_url": " https://override.example.com/v1 ",
+                        "desktop_autonomy_mode": "autonomous",
+                        "approval_policy": "autonomous",
+                        "recoverable_error_retry_limit": "4",
                     },
                 }
             ).encode("utf-8"),
@@ -1077,10 +3902,19 @@ def test_dashboard_task_route_merges_runtime_preferences_with_request_overrides(
             assert response.status == 202
             assert payload["id"] == "job-runtime"
 
+        assert captured["max_steps"] == 8
+        assert captured["pause_after_action"] == 0.2
         assert captured["config_overrides"] == {
             "model_provider": "openai_compatible",
             "model_base_url": "https://override.example.com/v1",
             "model_api_key": "runtime-secret",
+            "max_steps": 5,
+            "max_run_seconds": 180.0,
+            "pause_after_action": 0.3,
+            "desktop_autonomy_mode": "autonomous",
+            "approval_policy": "autonomous",
+            "replan_on_recoverable_error": False,
+            "recoverable_error_retry_limit": 4,
         }
     finally:
         server.shutdown()
@@ -1109,8 +3943,8 @@ def test_dashboard_resume_route_merges_runtime_preferences_with_request_override
             task="resume the interrupted browser task",
             planner_mode="auto",
             dry_run=False,
-            max_steps=None,
-            pause_after_action=None,
+            max_steps=kwargs.get("max_steps"),
+            pause_after_action=kwargs.get("pause_after_action"),
             resume_run_id=kwargs["run_id"],
             config_overrides=dict(kwargs.get("config_overrides") or {}),
         )
@@ -1130,6 +3964,8 @@ def test_dashboard_resume_route_merges_runtime_preferences_with_request_override
                     "config_overrides": {
                         "model_base_url": " https://override.example.com/v1 ",
                     },
+                    "max_steps": "8",
+                    "pause_after_action": "0.2",
                 }
             ).encode("utf-8"),
             headers={"Content-Type": "application/json"},
@@ -1142,6 +3978,8 @@ def test_dashboard_resume_route_merges_runtime_preferences_with_request_override
             assert payload["resume_run_id"] == "run-human-1"
 
         assert captured["run_id"] == "run-human-1"
+        assert captured["max_steps"] == 8
+        assert captured["pause_after_action"] == 0.2
         assert captured["config_overrides"] == {
             "model_provider": "openai_compatible",
             "model_base_url": "https://override.example.com/v1",

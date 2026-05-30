@@ -7,6 +7,7 @@ from desktop_agent.executor import (
     ExecutionCancelled,
     ExecutionError,
     RealDesktopExecutor,
+    _blocker_dismissal_mode,
     _find_known_blockers,
     _resolve_browser_binary,
 )
@@ -50,7 +51,8 @@ def test_launch_browser_dom_mode_uses_dom_session(monkeypatch):
 
 
 def test_browser_open_falls_back_to_default_browser(monkeypatch):
-    executor = RealDesktopExecutor(AgentConfig(dry_run=False))
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False, browser_control_mode="gui"))
+    executor.managed_browser = None
     opened: list[str] = []
 
     def fake_popen(*args, **kwargs):
@@ -308,6 +310,53 @@ def test_browser_open_attempts_to_dismiss_known_blockers(monkeypatch):
     assert ("focus", 12) in events
     assert ("open", "https://openai.com") in events
     assert ("close", 13) not in events
+
+
+def test_browser_open_dismisses_known_blockers_in_autonomous_mode(monkeypatch):
+    events: list[tuple[str, object]] = []
+    environment = DesktopEnvironment(
+        platform="windows",
+        virtual_bounds=Rect(0, 0, 1920, 1080),
+        monitors=[],
+        foreground_window=WindowSnapshot(handle=12, title="Microsoft Edge"),
+        visible_windows=[
+            WindowSnapshot(handle=11, title="Save password"),
+            WindowSnapshot(handle=12, title="Microsoft Edge"),
+        ],
+    )
+
+    monkeypatch.setattr(
+        "desktop_agent.executor.capture_effective_desktop_environment",
+        lambda config=None: environment,
+    )
+    monkeypatch.setattr(
+        "desktop_agent.executor.find_window",
+        lambda env, query: next((item for item in env.visible_windows if query.lower() in item.title.lower()), None),
+    )
+    monkeypatch.setattr("desktop_agent.executor.close_window", lambda handle: events.append(("close", handle)) or True)
+    monkeypatch.setattr("desktop_agent.executor.focus_window", lambda handle: events.append(("focus", handle)) or True)
+    monkeypatch.setattr(
+        "desktop_agent.executor.dom_backend_status",
+        lambda backend: type("Status", (), {"available": False, "detail": "Playwright missing"})(),
+    )
+    monkeypatch.setattr("desktop_agent.executor._resolve_browser_binary", lambda binary: None)
+    monkeypatch.setattr("desktop_agent.executor.webbrowser.open", lambda url: events.append(("open", url)) or True)
+
+    executor = RealDesktopExecutor(
+        AgentConfig(dry_run=False, browser_control_mode="hybrid", desktop_autonomy_mode="autonomous")
+    )
+    executor.execute(Action.from_dict({"type": "browser_open", "text": "openai.com"}))
+
+    assert ("close", 11) in events
+    assert ("focus", 12) in events
+    assert ("open", "https://openai.com") in events
+
+
+def test_blocker_dismissal_mode_maps_current_and_legacy_autonomy_names():
+    assert _blocker_dismissal_mode("review_first") == "conservative"
+    assert _blocker_dismissal_mode("autonomous") == "aggressive"
+    assert _blocker_dismissal_mode("aggressive") == "aggressive"
+    assert _blocker_dismissal_mode("balanced") == "balanced"
 
 
 def test_launch_app_falls_back_to_generic_windows_launcher_for_safe_unknown_app(monkeypatch):

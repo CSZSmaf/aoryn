@@ -49,16 +49,29 @@ _HIGH_RISK_TERMS = (
     "registry",
     "权限",
     "登录",
+    "登陆",
+    "验证码",
+    "密码",
     "支付",
+    "付款",
+    "购买",
+    "买",
     "购物车",
+    "结账",
     "下单",
     "提交",
     "发送",
     "删除",
+    "移除",
     "覆盖",
     "安装",
+    "卸载",
+    "授权",
+    "隐私",
     "终端",
+    "命令",
     "命令行",
+    "注册表",
 )
 
 _MEDIUM_RISK_TERMS = (
@@ -73,6 +86,27 @@ _MEDIUM_RISK_TERMS = (
     "上传",
 )
 
+_CRITICAL_RISK_TERMS = (
+    "run as administrator",
+    "administrator privilege",
+    "administrator privileges",
+    "admin privilege",
+    "admin privileges",
+    "elevated privilege",
+    "elevated privileges",
+    "uac",
+    "sudo",
+    "root privilege",
+    "root privileges",
+    "system32",
+    "\u4ee5\u7ba1\u7406\u5458\u8eab\u4efd",
+    "\u7ba1\u7406\u5458\u6743\u9650",
+    "\u7cfb\u7edf\u6743\u9650",
+    "\u63d0\u6743",
+)
+
+_RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
 
 def _normalize_text(value: str | None) -> str:
     return " ".join(str(value or "").strip().lower().split())
@@ -85,16 +119,44 @@ def _extract_domain(target: str) -> str:
 
 def infer_step_risk_level(text: str, actions: list[Action]) -> str:
     haystacks = [_normalize_text(text)]
-    haystacks.extend(_normalize_text(action.text) for action in actions if action.text)
-    haystacks.extend(_normalize_text(action.title) for action in actions if action.title)
+    for action in actions:
+        haystacks.extend(_action_risk_fragments(action))
     joined = " ".join(item for item in haystacks if item)
+    declared_action_risk = _max_risk_level(*(action.risk_level for action in actions))
+    if any(term in joined for term in _CRITICAL_RISK_TERMS):
+        return _max_risk_level(declared_action_risk, "critical")
     if any(term in joined for term in _HIGH_RISK_TERMS):
-        return "high"
+        return _max_risk_level(declared_action_risk, "high")
     if any(term in joined for term in _MEDIUM_RISK_TERMS):
-        return "medium"
+        return _max_risk_level(declared_action_risk, "medium")
     if any(action.type == "shell_recipe_request" for action in actions):
-        return "high"
-    return "low"
+        return _max_risk_level(declared_action_risk, "high")
+    return declared_action_risk or "low"
+
+
+def _action_risk_fragments(action: Action) -> list[str]:
+    fragments = [
+        action.type,
+        action.app,
+        action.text,
+        action.selector,
+        action.title,
+        action.key,
+        action.recipe,
+        action.target_scope,
+    ]
+    if action.keys:
+        fragments.append(" ".join(action.keys))
+    return [_normalize_text(fragment) for fragment in fragments if fragment]
+
+
+def _max_risk_level(*levels: str | None) -> str:
+    highest = "low"
+    for level in levels:
+        normalized = _normalize_text(level)
+        if normalized in _RISK_ORDER and _RISK_ORDER[normalized] > _RISK_ORDER[highest]:
+            highest = normalized
+    return highest
 
 
 def approval_required_for_policy(policy: str, risk_level: str, actions: list[Action]) -> bool:
@@ -317,6 +379,32 @@ class CapabilityAdapter:
             )
 
         if all_required_satisfied and completion_satisfied:
+            if completion_requirement is None and not any(
+                item.get("required", True) and item.get("satisfied") for item in evidence_results
+            ):
+                progress_detected = any_satisfied or _detect_progress_signals(
+                    step.progress_signals,
+                    before=before,
+                    after=after,
+                )
+                if progress_detected:
+                    return VerificationResult(
+                        success=False,
+                        status="partial_progress",
+                        evidence=evidence_results,
+                        failure_kind="verification_failed",
+                        message=(
+                            f"Observed progress for {subgoal.title}, but no required evidence "
+                            "proved the subgoal is complete."
+                        ),
+                    )
+                return VerificationResult(
+                    success=False,
+                    status="failed",
+                    evidence=evidence_results,
+                    failure_kind="verification_failed",
+                    message=f"No required evidence was available to verify completion for {subgoal.title}.",
+                )
             return VerificationResult(
                 success=True,
                 status="success",
@@ -733,6 +821,22 @@ class CapabilityRegistry:
         return ranked[0][0]
 
 
+def _capability_for_proposal(
+    *,
+    proposal: StepProposal,
+    ranked_capabilities: list[tuple[CapabilityAdapter, float]],
+    fallback: CapabilityAdapter | None = None,
+) -> CapabilityAdapter:
+    capability_name = _normalize_text(proposal.capability)
+    if capability_name:
+        match = next((candidate for candidate, _score in ranked_capabilities if candidate.name == capability_name), None)
+        if match is not None:
+            return match
+    if fallback is not None:
+        return fallback
+    return ranked_capabilities[0][0] if ranked_capabilities else DesktopGUICapability()
+
+
 @dataclass(slots=True)
 class CapabilityExecutor:
     config: AgentConfig
@@ -838,7 +942,97 @@ class CapabilityExecutor:
                 target_scope=target_scope,
             )
 
-        proposal.risk_level = _normalize_text(proposal.risk_level) or infer_step_risk_level(subgoal.title, proposal.actions)
+        return self._finalize_step_proposal(
+            proposal=proposal,
+            subgoal=subgoal,
+            world_model=world_model,
+            execution_state=execution_state,
+            ranked_capabilities=ranked_capabilities,
+            capability=capability,
+        )
+
+    def propose_repair(
+        self,
+        *,
+        execution_state: ExecutionState,
+        world_model: WorldModel,
+        previous_step: StepProposal | None,
+        verification: VerificationResult | None,
+    ) -> StepProposal | None:
+        subgoal = execution_state.current_subgoal()
+        if subgoal is None:
+            return None
+        if verification is not None and verification.failure_kind in {"requires_auth", "requires_human"}:
+            return None
+
+        ranked_capabilities = self.rank_capabilities(
+            subgoal=subgoal,
+            world_model=world_model,
+            execution_state=execution_state,
+        )
+        primary = next((item for item, _score in ranked_capabilities if item.name == (previous_step.capability if previous_step else "")), None)
+        if primary is None:
+            primary = ranked_capabilities[0][0] if ranked_capabilities else DesktopGUICapability()
+
+        proposal = primary.plan_repair(
+            subgoal=subgoal,
+            world_model=world_model,
+            execution_state=execution_state,
+            previous_step=previous_step,
+            verification=verification,
+            config=self.config,
+        )
+        if proposal is None and verification is not None and verification.failure_kind in {
+            "capability_mismatch",
+            "goal_ambiguous",
+            "verification_failed",
+            "stale_target",
+            "missing_data",
+        }:
+            for candidate, _score in ranked_capabilities:
+                if previous_step is not None and candidate.name == previous_step.capability:
+                    continue
+                proposal = candidate.propose_step(
+                    subgoal=subgoal,
+                    world_model=world_model,
+                    execution_state=execution_state,
+                    config=self.config,
+                    planner=self.planner,
+                )
+                if proposal is not None:
+                    proposal.repair_strategy = proposal.repair_strategy or ["switch_capability", "retry_with_fresh_observation"]
+                    break
+        if proposal is None:
+            return None
+        proposal_capability = _capability_for_proposal(
+            proposal=proposal,
+            ranked_capabilities=ranked_capabilities,
+            fallback=primary,
+        )
+        return self._finalize_step_proposal(
+            proposal=proposal,
+            subgoal=subgoal,
+            world_model=world_model,
+            execution_state=execution_state,
+            ranked_capabilities=ranked_capabilities,
+            capability=proposal_capability,
+        )
+
+    def _finalize_step_proposal(
+        self,
+        *,
+        proposal: StepProposal,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        execution_state: ExecutionState,
+        ranked_capabilities: list[tuple[CapabilityAdapter, float]],
+        capability: CapabilityAdapter,
+    ) -> StepProposal:
+        inferred_risk = infer_step_risk_level(
+            f"{subgoal.title} {subgoal.goal or ''} {proposal.intent}",
+            proposal.actions,
+        )
+        proposal.risk_level = _max_risk_level(proposal.risk_level, inferred_risk)
         if not proposal.rationale:
             proposal.rationale = _build_capability_choice_rationale(
                 selected=capability.name,
@@ -899,104 +1093,6 @@ class CapabilityExecutor:
         execution_state.current_surface_kind = proposal.surface_kind
         return proposal
 
-    def propose_repair(
-        self,
-        *,
-        execution_state: ExecutionState,
-        world_model: WorldModel,
-        previous_step: StepProposal | None,
-        verification: VerificationResult | None,
-    ) -> StepProposal | None:
-        subgoal = execution_state.current_subgoal()
-        if subgoal is None:
-            return None
-        if verification is not None and verification.failure_kind in {"requires_auth", "requires_human"}:
-            return None
-
-        ranked_capabilities = self.rank_capabilities(
-            subgoal=subgoal,
-            world_model=world_model,
-            execution_state=execution_state,
-        )
-        primary = next((item for item, _score in ranked_capabilities if item.name == (previous_step.capability if previous_step else "")), None)
-        if primary is None:
-            primary = ranked_capabilities[0][0] if ranked_capabilities else DesktopGUICapability()
-
-        proposal = primary.plan_repair(
-            subgoal=subgoal,
-            world_model=world_model,
-            execution_state=execution_state,
-            previous_step=previous_step,
-            verification=verification,
-            config=self.config,
-        )
-        if proposal is None and verification is not None and verification.failure_kind in {
-            "capability_mismatch",
-            "goal_ambiguous",
-            "verification_failed",
-            "stale_target",
-            "missing_data",
-        }:
-            for candidate, _score in ranked_capabilities:
-                if previous_step is not None and candidate.name == previous_step.capability:
-                    continue
-                proposal = candidate.propose_step(
-                    subgoal=subgoal,
-                    world_model=world_model,
-                    execution_state=execution_state,
-                    config=self.config,
-                    planner=self.planner,
-                )
-                if proposal is not None:
-                    proposal.repair_strategy = proposal.repair_strategy or ["switch_capability", "retry_with_fresh_observation"]
-                    break
-        if proposal is None:
-            return None
-        proposal.rationale = proposal.rationale or _build_capability_choice_rationale(
-            selected=proposal.capability,
-            ranked=ranked_capabilities,
-            subgoal=subgoal,
-            execution_state=execution_state,
-        )
-        if not proposal.fallbacks:
-            proposal.fallbacks = [
-                candidate.name
-                for candidate, _score in ranked_capabilities
-                if candidate.name != proposal.capability
-            ][:3]
-        if not proposal.expected_evidence:
-            proposal.expected_evidence = primary.build_expected_evidence(
-                subgoal=subgoal,
-                world_model=world_model,
-                actions=proposal.actions,
-            )
-        if not proposal.progress_signals:
-            proposal.progress_signals = primary.build_progress_signals(
-                subgoal=subgoal,
-                world_model=world_model,
-                actions=proposal.actions,
-            )
-        if not proposal.repair_strategy:
-            proposal.repair_strategy = ["retry_with_fresh_observation"]
-        proposal.cost_hint = proposal.cost_hint or _estimate_cost_hint(proposal.actions)
-        proposal.surface_kind = proposal.surface_kind or choose_surface_kind(
-            config=self.config,
-            active_app=world_model.active_app,
-            browser_snapshot=world_model.browser_snapshot,
-            goal_type=subgoal.goal_type,
-            subgoal_text=subgoal.title,
-        )
-        proposal.primary_anchor = proposal.primary_anchor or _build_primary_anchor(
-            proposal=proposal,
-            world_model=world_model,
-        )
-        if not proposal.fallback_anchors:
-            proposal.fallback_anchors = _build_fallback_anchors(
-                proposal=proposal,
-                world_model=world_model,
-            )
-        return proposal
-
     def verify_step(
         self,
         *,
@@ -1029,15 +1125,17 @@ class CapabilityExecutor:
         return result
 
     def build_pending_decision(self, *, step: StepProposal, subgoal: Subgoal) -> PendingDecision:
+        requires_user_presence = _step_requires_user_presence(step)
         return PendingDecision(
             id=f"{subgoal.id}-{int(step.timeout or 0)}-{len(step.actions)}",
             summary=step.intent,
-            reason=(
-                f"The next subgoal requires approval because it is classified as {step.risk_level} risk."
-            ),
+            reason=_step_approval_reason(step),
             risk_level=step.risk_level,
             decision_type="step_approval",
             actions=list(step.actions),
+            approval_policy=self.config.approval_policy,
+            requires_user_presence=requires_user_presence,
+            operator_hint=_operator_presence_hint() if requires_user_presence else None,
         )
 
     def _plan_with_fallback(
@@ -1324,6 +1422,32 @@ def _default_repair_strategy(*, subgoal: Subgoal, proposal: StepProposal) -> lis
     if subgoal.goal_type == "save":
         return ["verify_target_path", "retry_with_fresh_observation"]
     return ["retry_with_fresh_observation", "switch_capability"]
+
+
+def _step_requires_user_presence(step: StepProposal) -> bool:
+    if _normalize_text(step.risk_level) == "critical":
+        return True
+    haystack = " ".join(
+        [item for item in [_normalize_text(step.intent)] if item]
+        + [item for action in step.actions for item in _action_risk_fragments(action)]
+    )
+    return any(term in haystack for term in _CRITICAL_RISK_TERMS)
+
+
+def _step_approval_reason(step: StepProposal) -> str:
+    if _step_requires_user_presence(step):
+        return (
+            f"The next subgoal is classified as {step.risk_level} risk and may require an operator "
+            "at the screen for an administrator, UAC, or privileged-system prompt."
+        )
+    return f"The next subgoal requires approval because it is classified as {step.risk_level} risk."
+
+
+def _operator_presence_hint() -> str:
+    return (
+        "Keep a person at the screen before approving; the action may open an administrator, "
+        "UAC, or other privileged-system confirmation that automation cannot safely complete alone."
+    )
 
 
 def _estimate_cost_hint(actions: list[Action]) -> str:

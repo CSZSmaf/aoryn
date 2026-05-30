@@ -20,6 +20,26 @@ def test_plan_result_parses_optional_decomposition_fields():
     assert plan.remaining_steps == ["enter credentials", "submit the form"]
 
 
+def test_plan_result_parses_string_boolean_done_flag():
+    plan = PlanResult.from_payload(
+        {
+            "status_summary": "Keep going.",
+            "done": "false",
+            "actions": [{"type": "wait", "seconds": 0.1}],
+        }
+    )
+    complete = PlanResult.from_payload(
+        {
+            "status_summary": "Finished.",
+            "done": "true",
+            "actions": [],
+        }
+    )
+
+    assert plan.done is False
+    assert complete.done is True
+
+
 def test_plan_result_rejects_invalid_remaining_steps():
     with pytest.raises(ActionValidationError):
         PlanResult.from_payload(

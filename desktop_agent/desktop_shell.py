@@ -87,6 +87,51 @@ _FLOATING_IDLE_HEIGHT = 46
 _FLOATING_EXPANDED_HEIGHT = 54
 _FLOATING_DECISION_HEIGHT = 50
 _FLOATING_TITLE_LIMIT = 22
+_TRUE_STRING_VALUES = {"1", "true", "t", "yes", "y", "on"}
+_FALSE_STRING_VALUES = {"0", "false", "f", "no", "n", "off"}
+_EXECUTION_BUDGET_SUMMARY_FIELDS = (
+    "task_graph_request_timeout",
+    "max_steps",
+    "max_run_seconds",
+    "pause_after_action",
+    "desktop_autonomy_mode",
+    "approval_policy",
+    "complex_task_planning",
+    "plan_review_policy",
+    "max_task_subgoals",
+    "max_subgoal_retries",
+    "stage_review_policy",
+    "max_replans_per_run",
+    "max_failures_per_subgoal",
+    "replan_on_recoverable_error",
+    "recoverable_error_retry_limit",
+)
+_EXECUTION_BUDGET_BOOLEAN_FIELDS = {"replan_on_recoverable_error"}
+_EXECUTION_ENVIRONMENT_SUMMARY_FIELDS = (
+    "browser_control_mode",
+    "browser_dom_backend",
+    "browser_dom_timeout",
+    "browser_headless",
+    "browser_channel",
+    "browser_executable_path",
+    "cursor_motion_enabled",
+    "cursor_motion_duration",
+    "display_override_enabled",
+    "display_override_monitor_device_name",
+    "display_override_dpi_scale",
+    "display_override_work_area_left",
+    "display_override_work_area_top",
+    "display_override_work_area_width",
+    "display_override_work_area_height",
+    "generic_app_launch_enabled",
+    "shell_recipe_policy",
+)
+_EXECUTION_ENVIRONMENT_BOOLEAN_FIELDS = {
+    "browser_headless",
+    "cursor_motion_enabled",
+    "display_override_enabled",
+    "generic_app_launch_enabled",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,17 +164,159 @@ def _short_floating_text(value: object, *, fallback: str, limit: int = _FLOATING
     return f"{text[: max(1, limit - 3)]}..."
 
 
+def _optional_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _TRUE_STRING_VALUES:
+            return True
+        if normalized in _FALSE_STRING_VALUES:
+            return False
+    return None
+
+
+def _bool_value(value: object) -> bool:
+    return _optional_bool(value) is True
+
+
+def _summary_bool(value: object) -> object:
+    parsed = _optional_bool(value)
+    return value if parsed is None else parsed
+
+
+def _job_is_terminal_result(active_job: dict[str, Any]) -> bool:
+    if not isinstance(active_job, dict) or not active_job:
+        return False
+    result = active_job.get("result") if isinstance(active_job.get("result"), dict) else {}
+    status = str(active_job.get("status") or "").strip().lower()
+    return bool(
+        _bool_value(result.get("cancelled"))
+        or _bool_value(active_job.get("cancelled"))
+        or status == "cancelled"
+        or result.get("error")
+        or active_job.get("error")
+        or status == "failed"
+        or _bool_value(result.get("completed"))
+        or _bool_value(active_job.get("completed"))
+        or status == "completed"
+    )
+
+
 def _pending_decision_from_job(active_job: dict[str, Any]) -> dict[str, Any] | None:
+    pending_decision = active_job.get("pending_decision") if isinstance(active_job, dict) else None
+    if isinstance(pending_decision, dict) and pending_decision:
+        return pending_decision
     result = active_job.get("result") if isinstance(active_job.get("result"), dict) else {}
     pending_decision = result.get("pending_decision") if isinstance(result, dict) else None
+    if not isinstance(pending_decision, dict):
+        execution_state = _job_execution_state_from_result(result)
+        pending_decision = execution_state.get("pending_decision") if isinstance(execution_state, dict) else None
     return pending_decision if isinstance(pending_decision, dict) and pending_decision else None
+
+
+def _job_execution_state_from_result(result: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    full_state = result.get("execution_state") if isinstance(result.get("execution_state"), dict) else {}
+    summary_state = result.get("state") if isinstance(result.get("state"), dict) else {}
+    if full_state or summary_state:
+        return {**full_state, **summary_state}
+    return {}
+
+
+def _job_orchestration_phase(active_job: dict[str, Any]) -> str:
+    if not isinstance(active_job, dict):
+        return ""
+    result = active_job.get("result") if isinstance(active_job.get("result"), dict) else {}
+    execution_state = _job_execution_state_from_result(result)
+    return str(
+        active_job.get("orchestration_phase")
+        or result.get("orchestration_phase")
+        or execution_state.get("orchestration_phase")
+        or ""
+    ).strip().lower()
+
+
+def _run_execution_state(run: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(run, dict):
+        return {}
+    execution_state = run.get("execution_state") if isinstance(run.get("execution_state"), dict) else {}
+    state_payload = run.get("state") if isinstance(run.get("state"), dict) else {}
+    if execution_state or state_payload:
+        return {**execution_state, **state_payload}
+    return {}
+
+
+def _run_orchestration_phase(run: dict[str, Any] | None) -> str:
+    if not isinstance(run, dict):
+        return ""
+    execution_state = _run_execution_state(run)
+    return str(run.get("orchestration_phase") or execution_state.get("orchestration_phase") or "").strip().lower()
+
+
+def _job_waits_for_decision(active_job: dict[str, Any]) -> bool:
+    if not isinstance(active_job, dict) or not active_job:
+        return False
+    if _job_is_terminal_result(active_job):
+        return False
+    status = str(active_job.get("status") or "").strip().lower()
+    return (
+        status == "approval"
+        or _pending_decision_from_job(active_job) is not None
+        or _job_orchestration_phase(active_job) == "awaiting_approval"
+    )
+
+
+def _manual_handoff_title_from_state(execution_state: dict[str, Any]) -> str:
+    app_context = execution_state.get("app_context") if isinstance(execution_state.get("app_context"), dict) else {}
+    manual_resume_status = str(app_context.get("manual_resume_status") or "").strip().lower()
+    if manual_resume_status in {"resumed", "complete", "completed", "cleared"}:
+        return ""
+    orchestration_phase = str(execution_state.get("orchestration_phase") or "").strip().lower()
+    if orchestration_phase == "awaiting_approval":
+        return "\u7b49\u5f85\u786e\u8ba4: \u4e0b\u4e00\u6b65\u52a8\u4f5c\u9700\u8981\u6279\u51c6"
+    handoff_reason = str(
+        app_context.get("human_handoff_reason")
+        or app_context.get("human_handoff_summary")
+        or app_context.get("recovery_reason")
+        or ""
+    ).strip()
+    handoff_kind = str(app_context.get("human_handoff_kind") or "").strip()
+    recovery_kind = str(app_context.get("standard_recovery_kind") or "").strip().lower()
+    if not (handoff_reason or handoff_kind or recovery_kind == "requires_user"):
+        return ""
+    return f"等待人工处理: {handoff_reason or handoff_kind or '需要继续确认'}"
 
 
 def _active_job_goal_title(active_job: dict[str, Any], *, stop_requested: bool) -> str:
     if stop_requested:
         return "\u6b63\u5728\u505c\u6b62"
     result = active_job.get("result") if isinstance(active_job.get("result"), dict) else {}
-    execution_state = result.get("execution_state") if isinstance(result.get("execution_state"), dict) else {}
+    status = str(active_job.get("status") or "").strip().lower()
+    if _bool_value(result.get("cancelled")) or _bool_value(active_job.get("cancelled")) or status == "cancelled":
+        return "\u4efb\u52a1\u5df2\u505c\u6b62"
+    execution_state = _job_execution_state_from_result(result)
+    handoff_title = _manual_handoff_title_from_state(execution_state)
+    if handoff_title:
+        return handoff_title
+    result_handoff_reason = str(result.get("interruption_reason") or "").strip()
+    result_handoff_kind = str(result.get("interruption_kind") or "").strip()
+    if _bool_value(result.get("requires_human")) or result_handoff_reason or result_handoff_kind:
+        return f"等待人工处理: {result_handoff_reason or result_handoff_kind or '需要继续确认'}"
+    error_text = str(result.get("error") or active_job.get("error") or "").strip()
+    if error_text or status == "failed":
+        return "\u9700\u8981\u5904\u7406: " + (error_text or "\u6267\u884c\u5931\u8d25")
+    if _bool_value(result.get("completed")) or _bool_value(active_job.get("completed")) or status == "completed":
+        return "\u4efb\u52a1\u5b8c\u6210"
     recovery_reason = str(result.get("recovery_reason") or execution_state.get("recovery_reason") or "").strip()
     if recovery_reason:
         return f"\u4fee\u590d\u4e2d: {recovery_reason}"
@@ -157,9 +344,18 @@ def build_floating_view_state(
     draft = str(follow_up_draft or "").strip()
     has_job = bool(active)
     status = str(active.get("status") or "").strip().lower() if has_job else ""
+    result = active.get("result") if has_job and isinstance(active.get("result"), dict) else {}
+    terminal_cancelled = bool(
+        has_job and (_bool_value(result.get("cancelled")) or _bool_value(active.get("cancelled")) or status == "cancelled")
+    )
+    terminal_failed = bool(has_job and (result.get("error") or active.get("error") or status == "failed"))
+    terminal_completed = bool(
+        has_job and (_bool_value(result.get("completed")) or _bool_value(active.get("completed")) or status == "completed")
+    )
+    terminal_result = terminal_cancelled or terminal_failed or terminal_completed
     pending_decision = _pending_decision_from_job(active) if has_job else None
-    is_approval = has_job and (status == "approval" or pending_decision is not None)
-    stop_requested = bool(active.get("cancel_requested")) or status == "stopping"
+    is_approval = _job_waits_for_decision(active) if has_job and not terminal_result else False
+    stop_requested = _bool_value(active.get("cancel_requested")) or status == "stopping"
     has_resume = bool(str(resume_run_id or "").strip())
     expanded = bool(input_expanded)
 
@@ -186,6 +382,14 @@ def build_floating_view_state(
             _active_job_goal_title(active, stop_requested=stop_requested),
             fallback="\u6b63\u5728\u6267\u884c\u4efb\u52a1",
         )
+        if terminal_result:
+            return FloatingViewState(
+                mode="stopping" if terminal_cancelled else "running",
+                title=title,
+                width=_FLOATING_IDLE_WIDTH,
+                height=_FLOATING_IDLE_HEIGHT,
+                show_open=True,
+            )
         if expanded:
             return FloatingViewState(
                 mode="running_input",
@@ -937,14 +1141,7 @@ if QApplication is not None:
             self._apply_layout_state()
 
         def _is_approval_job(self) -> bool:
-            active = self._active_job or {}
-            if not active:
-                return False
-            if str(active.get("status") or "").strip().lower() == "approval":
-                return True
-            result = active.get("result") if isinstance(active, dict) else {}
-            pending_decision = result.get("pending_decision") if isinstance(result, dict) else None
-            return isinstance(pending_decision, dict) and bool(pending_decision)
+            return _job_waits_for_decision(self._active_job or {})
 
         def _refresh_timer_label(self) -> None:  # pragma: no cover - GUI runtime behavior
             if self._started_at is None:
@@ -1197,23 +1394,251 @@ if QApplication is not None:
             return json.dumps(summarized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
         @staticmethod
+        def _resolve_run_policy_value(record: dict[str, Any] | None, key: str) -> Any:
+            if not isinstance(record, dict):
+                return None
+            value = record.get(key)
+            if value is not None and value != "":
+                return value
+            result = record.get("result") if isinstance(record.get("result"), dict) else {}
+            value = result.get(key)
+            if value is not None and value != "":
+                return value
+            result_budget = result.get("execution_budget") if isinstance(result.get("execution_budget"), dict) else {}
+            value = result_budget.get(key)
+            if value is not None and value != "":
+                return value
+            overrides = record.get("config_overrides") if isinstance(record.get("config_overrides"), dict) else {}
+            value = overrides.get(key)
+            if value is not None and value != "":
+                return value
+            budget = record.get("execution_budget") if isinstance(record.get("execution_budget"), dict) else {}
+            value = budget.get(key)
+            return None if value == "" else value
+
+        @staticmethod
+        def _summarize_execution_budget(record: dict[str, Any] | None) -> dict[str, Any]:
+            summary: dict[str, Any] = {}
+            for key in _EXECUTION_BUDGET_SUMMARY_FIELDS:
+                value = DesktopShellController._resolve_run_policy_value(record, key)
+                if key in _EXECUTION_BUDGET_BOOLEAN_FIELDS:
+                    value = _summary_bool(value)
+                summary[key] = value
+            return summary
+
+        @staticmethod
+        def _resolve_run_environment_value(record: dict[str, Any] | None, key: str) -> Any:
+            if not isinstance(record, dict):
+                return None
+            value = record.get(key)
+            if value is not None and value != "":
+                return value
+            result = record.get("result") if isinstance(record.get("result"), dict) else {}
+            value = result.get(key)
+            if value is not None and value != "":
+                return value
+            result_environment = (
+                result.get("execution_environment")
+                if isinstance(result.get("execution_environment"), dict)
+                else {}
+            )
+            value = result_environment.get(key)
+            if value is not None and value != "":
+                return value
+            overrides = record.get("config_overrides") if isinstance(record.get("config_overrides"), dict) else {}
+            value = overrides.get(key)
+            if value is not None and value != "":
+                return value
+            environment = record.get("execution_environment") if isinstance(record.get("execution_environment"), dict) else {}
+            value = environment.get(key)
+            return None if value == "" else value
+
+        @staticmethod
+        def _summarize_execution_environment(record: dict[str, Any] | None) -> dict[str, Any]:
+            summary: dict[str, Any] = {}
+            for key in _EXECUTION_ENVIRONMENT_SUMMARY_FIELDS:
+                value = DesktopShellController._resolve_run_environment_value(record, key)
+                if key in _EXECUTION_ENVIRONMENT_BOOLEAN_FIELDS:
+                    value = _summary_bool(value)
+                summary[key] = value
+            return summary
+
+        @staticmethod
+        def _summary_has_value(value: Any) -> bool:
+            if value is None:
+                return False
+            if isinstance(value, str):
+                return bool(value.strip())
+            if isinstance(value, (dict, list, tuple, set)):
+                return bool(value)
+            return True
+
+        @staticmethod
+        def _summarize_autonomy_readiness(autonomy: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not isinstance(autonomy, dict):
+                return None
+            compact = {
+                "status": autonomy.get("status"),
+                "can_continue": _summary_bool(autonomy.get("can_continue")),
+                "requires_review": _summary_bool(autonomy.get("requires_review")),
+                "requires_user": _summary_bool(autonomy.get("requires_user")),
+                "next_action": autonomy.get("next_action"),
+                "next_subgoal_id": autonomy.get("next_subgoal_id"),
+                "blockers": autonomy.get("blockers")[:4] if isinstance(autonomy.get("blockers"), list) else [],
+                "warnings": autonomy.get("warnings")[:4] if isinstance(autonomy.get("warnings"), list) else [],
+            }
+            if any(DesktopShellController._summary_has_value(value) for value in compact.values()):
+                return compact
+            return None
+
+        @staticmethod
+        def _summarize_plan_health_item(item: Any) -> dict[str, Any] | None:
+            if not isinstance(item, dict):
+                return None
+            compact = {
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "status": item.get("status"),
+                "ready": _summary_bool(item.get("ready")),
+                "is_next": _summary_bool(item.get("is_next")),
+                "exhausted": _summary_bool(item.get("exhausted")),
+                "attempts": item.get("attempts"),
+                "retry_remaining": item.get("retry_remaining"),
+                "capability_preference": item.get("capability_preference") or item.get("capability"),
+                "risk_level": item.get("risk_level"),
+            }
+            if any(DesktopShellController._summary_has_value(value) for value in compact.values()):
+                return compact
+            return None
+
+        @staticmethod
+        def _summarize_plan_health(
+            plan_health: dict[str, Any] | None,
+            items: list[Any] | None,
+            *,
+            include_remaining: bool = False,
+        ) -> dict[str, Any] | None:
+            source = plan_health if isinstance(plan_health, dict) else {}
+            counts = source.get("counts") if isinstance(source.get("counts"), dict) else {}
+            count_keys = ("total", "completed", "pending", "in_progress", "ready", "blocked", "failed", "exhausted")
+            compact_counts = {key: counts.get(key) for key in count_keys}
+            if not any(DesktopShellController._summary_has_value(value) for value in compact_counts.values()):
+                compact_counts = {}
+            compact_items = [
+                compact
+                for compact in (DesktopShellController._summarize_plan_health_item(item) for item in (items or [])[:8])
+                if compact is not None
+            ]
+            compact: dict[str, Any] = {
+                "next_subgoal_id": source.get("next_subgoal_id"),
+                "blocked_reason": source.get("blocked_reason"),
+            }
+            if include_remaining:
+                compact["remaining"] = source.get("remaining")
+            if compact_counts:
+                compact["counts"] = compact_counts
+            autonomy = DesktopShellController._summarize_autonomy_readiness(
+                source.get("autonomy") if isinstance(source.get("autonomy"), dict) else None
+            )
+            if autonomy is not None:
+                compact["autonomy"] = autonomy
+            if compact_items:
+                compact["items"] = compact_items
+            if any(DesktopShellController._summary_has_value(value) for value in compact.values()):
+                return compact
+            return None
+
+        @staticmethod
         def _summarize_job(job: dict[str, Any] | None) -> dict[str, Any] | None:
             if not isinstance(job, dict):
                 return None
             result = job.get("result") if isinstance(job.get("result"), dict) else {}
-            execution_state = result.get("execution_state") if isinstance(result.get("execution_state"), dict) else {}
-            pending_decision = result.get("pending_decision") if isinstance(result, dict) else None
+            execution_state = _job_execution_state_from_result(result)
+            execution_context = (
+                execution_state.get("app_context") if isinstance(execution_state.get("app_context"), dict) else {}
+            )
+            plan_health = execution_state.get("plan_health") if isinstance(execution_state.get("plan_health"), dict) else {}
+            workspace_summary = (
+                result.get("workspace_summary")
+                if isinstance(result.get("workspace_summary"), dict)
+                else execution_state.get("workspace_summary")
+                if isinstance(execution_state.get("workspace_summary"), dict)
+                else None
+            )
+            repair_history = execution_state.get("repair_history") if isinstance(execution_state.get("repair_history"), list) else None
+            capability_failures = (
+                execution_state.get("capability_failures")
+                if isinstance(execution_state.get("capability_failures"), dict)
+                else None
+            )
+            step_proposal = (
+                result.get("step_proposal")
+                if isinstance(result.get("step_proposal"), dict)
+                else execution_state.get("step_proposal")
+                if isinstance(execution_state.get("step_proposal"), dict)
+                else execution_state.get("last_step")
+                if isinstance(execution_state.get("last_step"), dict)
+                else None
+            )
+            health_items = (
+                plan_health.get("items")
+                if isinstance(plan_health.get("items"), list)
+                else execution_state.get("subgoals")
+                if isinstance(execution_state.get("subgoals"), list)
+                else []
+            )
+            pending_decision = None if _job_is_terminal_result(job) else _pending_decision_from_job(job)
+            config_overrides = job.get("config_overrides") if isinstance(job.get("config_overrides"), dict) else {}
+            budget_summary = DesktopShellController._summarize_execution_budget(job)
+            environment_summary = DesktopShellController._summarize_execution_environment(job)
             return {
                 "id": job.get("id"),
                 "status": job.get("status"),
                 "task": job.get("task"),
+                "started_at": job.get("started_at"),
                 "updated_at": None if job.get("status") == "running" else job.get("updated_at"),
-                "cancel_requested": job.get("cancel_requested"),
-                "cancelled": job.get("cancelled"),
-                "requires_human": job.get("requires_human"),
-                "interruption_kind": job.get("interruption_kind"),
-                "interruption_reason": job.get("interruption_reason"),
+                "dry_run": _summary_bool(
+                    result.get("dry_run") if result.get("dry_run") is not None else job.get("dry_run")
+                ),
+                "max_steps": job.get("max_steps"),
+                "pause_after_action": job.get("pause_after_action"),
+                "max_run_seconds": (
+                    config_overrides.get("max_run_seconds")
+                    if config_overrides.get("max_run_seconds") is not None
+                    else job.get("max_run_seconds")
+                ),
+                "desktop_autonomy_mode": DesktopShellController._resolve_run_policy_value(job, "desktop_autonomy_mode"),
+                "complex_task_planning": DesktopShellController._resolve_run_policy_value(job, "complex_task_planning"),
+                "approval_policy": DesktopShellController._resolve_run_policy_value(job, "approval_policy"),
+                "plan_review_policy": DesktopShellController._resolve_run_policy_value(job, "plan_review_policy"),
+                "stage_review_policy": DesktopShellController._resolve_run_policy_value(job, "stage_review_policy"),
+                "replan_on_recoverable_error": DesktopShellController._resolve_run_policy_value(
+                    job, "replan_on_recoverable_error"
+                ),
+                "recoverable_error_retry_limit": DesktopShellController._resolve_run_policy_value(
+                    job, "recoverable_error_retry_limit"
+                ),
+                "execution_budget": budget_summary,
+                "execution_environment": environment_summary,
+                **budget_summary,
+                **environment_summary,
+                "cancel_requested": _summary_bool(job.get("cancel_requested")),
+                "cancelled": _bool_value(job.get("cancelled")) or _bool_value(result.get("cancelled")),
+                "completed": _bool_value(result.get("completed")) or _bool_value(job.get("completed")),
+                "error": result.get("error") if result.get("error") is not None else job.get("error"),
+                "cancel_reason": (
+                    result.get("cancel_reason") if result.get("cancel_reason") is not None else job.get("cancel_reason")
+                ),
+                "requires_human": (
+                    _bool_value(job.get("requires_human"))
+                    or _bool_value(result.get("requires_human"))
+                    or pending_decision is not None
+                ),
+                "interruption_kind": job.get("interruption_kind") or result.get("interruption_kind"),
+                "interruption_reason": job.get("interruption_reason") or result.get("interruption_reason"),
                 "run_id": result.get("run_id") if isinstance(result, dict) else None,
+                "result_started_at": result.get("started_at") if isinstance(result, dict) else None,
+                "steps": result.get("steps") if isinstance(result, dict) else None,
                 "run_finished_at": result.get("finished_at") if isinstance(result, dict) else None,
                 "latest_summary": result.get("latest_summary") if isinstance(result, dict) else None,
                 "current_goal": (
@@ -1231,43 +1656,565 @@ if QApplication is not None:
                     if isinstance(result, dict)
                     else None
                 ) or (execution_state.get("verification_status") if isinstance(execution_state, dict) else None),
+                "last_verification": DesktopShellController._summarize_verification(
+                    execution_state.get("last_verification") if isinstance(execution_state.get("last_verification"), dict) else None
+                ),
+                "evidence_ledger": [
+                    compact
+                    for compact in (
+                        DesktopShellController._summarize_evidence_item(item)
+                        for item in (execution_state.get("evidence_ledger") if isinstance(execution_state.get("evidence_ledger"), list) else [])[-6:]
+                    )
+                    if compact is not None
+                ],
+                "orchestration_phase": (
+                    result.get("orchestration_phase")
+                    if isinstance(result, dict)
+                    else None
+                ) or (execution_state.get("orchestration_phase") if isinstance(execution_state, dict) else None),
+                "active_specialist": (
+                    result.get("active_specialist")
+                    if isinstance(result, dict)
+                    else None
+                ) or (execution_state.get("active_specialist") if isinstance(execution_state, dict) else None),
+                "current_surface_kind": (
+                    result.get("current_surface_kind")
+                    if isinstance(result, dict)
+                    else None
+                ) or (execution_state.get("current_surface_kind") if isinstance(execution_state, dict) else None),
+                "last_progress_at": (
+                    result.get("last_progress_at")
+                    if isinstance(result, dict)
+                    else None
+                ) or (execution_state.get("last_progress_at") if isinstance(execution_state, dict) else None),
+                "plan_review_status": (
+                    result.get("plan_review_status")
+                    if isinstance(result, dict)
+                    else None
+                )
+                or (execution_state.get("plan_review_status") if isinstance(execution_state, dict) else None)
+                or (execution_context.get("plan_review_status") if isinstance(execution_context, dict) else None),
+                "stage_review_status": (
+                    result.get("stage_review_status")
+                    if isinstance(result, dict)
+                    else None
+                )
+                or (execution_state.get("stage_review_status") if isinstance(execution_state, dict) else None)
+                or (execution_context.get("stage_review_status") if isinstance(execution_context, dict) else None),
+                "last_replan_reason": (
+                    result.get("last_replan_reason")
+                    if isinstance(result, dict)
+                    else None
+                ) or (execution_state.get("last_replan_reason") if isinstance(execution_state, dict) else None),
                 "recovery_reason": (
                     result.get("recovery_reason")
                     if isinstance(result, dict)
                     else None
                 ) or (execution_state.get("recovery_reason") if isinstance(execution_state, dict) else None),
-                "latest_screenshot": result.get("latest_screenshot") if isinstance(result, dict) else None,
-                "pending_decision": (
-                    {
-                        "summary": pending_decision.get("summary"),
-                        "reason": pending_decision.get("reason"),
-                    }
-                    if isinstance(pending_decision, dict)
-                    else None
+                "handoff_state": DesktopShellController._summarize_handoff_state(execution_context),
+                "repair_history": DesktopShellController._summarize_repair_history(repair_history),
+                "capability_failures": DesktopShellController._summarize_capability_failures(capability_failures),
+                "workspace_summary": DesktopShellController._summarize_workspace_summary(workspace_summary),
+                "step_proposal": DesktopShellController._summarize_step_proposal(step_proposal),
+                "plan_health": DesktopShellController._summarize_plan_health(
+                    plan_health,
+                    health_items,
+                    include_remaining=True,
                 ),
+                "latest_screenshot": result.get("latest_screenshot") if isinstance(result, dict) else None,
+                "latest_timings": DesktopShellController._summarize_timings(
+                    result.get("latest_timings") if isinstance(result.get("latest_timings"), dict) else None
+                ),
+                "latest_actions": [
+                    compact
+                    for compact in (
+                        DesktopShellController._summarize_action(action)
+                        for action in (result.get("latest_actions") if isinstance(result.get("latest_actions"), list) else [])[:4]
+                    )
+                    if compact is not None
+                ],
+                "live_pointer": DesktopShellController._summarize_live_pointer(
+                    result.get("live_pointer") if isinstance(result.get("live_pointer"), dict) else None
+                ),
+                "live_pointer_trail": [
+                    compact
+                    for compact in (
+                        DesktopShellController._summarize_live_pointer(point)
+                        for point in (result.get("live_pointer_trail") if isinstance(result.get("live_pointer_trail"), list) else [])[-6:]
+                    )
+                    if compact is not None
+                ],
+                "live_action": DesktopShellController._summarize_action(
+                    result.get("live_action") if isinstance(result.get("live_action"), dict) else None
+                ),
+                "pending_decision": DesktopShellController._summarize_pending_decision(pending_decision),
             }
+
+        @staticmethod
+        def _summarize_workspace_summary(summary: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not isinstance(summary, dict):
+                return None
+
+            def _compact_items(value: Any) -> list[dict[str, Any]]:
+                if not isinstance(value, list):
+                    return []
+                compacted: list[dict[str, Any]] = []
+                for item in value[-4:]:
+                    if not isinstance(item, dict):
+                        continue
+                    compacted.append(
+                        {
+                            "key": item.get("key"),
+                            "title": item.get("title"),
+                            "value": item.get("value"),
+                            "url": item.get("url"),
+                            "status": item.get("status"),
+                            "specialist": item.get("specialist"),
+                        }
+                    )
+                return compacted
+
+            compact_summary = {
+                "facts": _compact_items(summary.get("facts")),
+                "sources": _compact_items(summary.get("sources")),
+                "evidence": _compact_items(summary.get("evidence")),
+                "notes": [
+                    str(item)
+                    for item in (summary.get("notes")[-4:] if isinstance(summary.get("notes"), list) else [])
+                    if str(item).strip()
+                ],
+            }
+            if not any(compact_summary.values()):
+                return None
+            return compact_summary
+
+        @staticmethod
+        def _summarize_action(action: Any) -> dict[str, Any] | None:
+            if not isinstance(action, dict):
+                return None
+            compact: dict[str, Any] = {
+                "type": action.get("type") or action.get("action"),
+                "label": action.get("label") or action.get("text") or action.get("selector") or action.get("title") or action.get("app") or action.get("url"),
+                "text": action.get("text"),
+                "selector": action.get("selector"),
+                "title": action.get("title"),
+                "app": action.get("app"),
+                "key": action.get("key"),
+                "keys": action.get("keys")[:6] if isinstance(action.get("keys"), list) else [],
+                "button": action.get("button"),
+                "status": action.get("status"),
+                "phase": action.get("phase"),
+                "risk_level": action.get("risk_level"),
+                "target_scope": action.get("target_scope"),
+                "recipe": action.get("recipe"),
+                "url": action.get("url"),
+            }
+            for key in ("x", "y", "width", "height", "end_x", "end_y", "relative_x", "relative_y", "clicks", "seconds", "amount"):
+                try:
+                    value = float(action.get(key))
+                except (TypeError, ValueError):
+                    continue
+                compact[key] = round(value, 4)
+            return compact
+
+        @staticmethod
+        def _summarize_timings(timings: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not isinstance(timings, dict):
+                return None
+            compact: dict[str, Any] = {}
+            for key in ("total", "capture_initial", "plan", "execute", "capture_after", "verify", "persist"):
+                try:
+                    value = float(timings.get(key))
+                except (TypeError, ValueError):
+                    continue
+                compact[key] = round(value, 3)
+            return compact or None
+
+        @staticmethod
+        def _summarize_live_pointer(point: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not isinstance(point, dict):
+                return None
+            compact: dict[str, Any] = {
+                "phase": point.get("phase"),
+                "status": point.get("status"),
+            }
+            for key in ("x", "y", "width", "height", "norm_x", "norm_y", "updated_at"):
+                try:
+                    value = float(point.get(key))
+                except (TypeError, ValueError):
+                    continue
+                compact[key] = round(value, 4)
+            return compact if any(value is not None for value in compact.values()) else None
+
+        @staticmethod
+        def _summarize_verification(verification: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not isinstance(verification, dict):
+                return None
+            evidence = verification.get("evidence") if isinstance(verification.get("evidence"), list) else []
+            compact = {
+                "success": _summary_bool(verification.get("success")),
+                "status": verification.get("status"),
+                "failure_kind": verification.get("failure_kind"),
+                "message": verification.get("message"),
+                "verified_at": verification.get("verified_at"),
+                "evidence": [
+                    item
+                    for item in (DesktopShellController._summarize_evidence_item(entry) for entry in evidence[:4])
+                    if item is not None
+                ],
+            }
+            return {key: value for key, value in compact.items() if value not in (None, "", [], {})} or None
+
+        @staticmethod
+        def _summarize_evidence_item(item: Any) -> dict[str, Any] | None:
+            if not isinstance(item, dict):
+                return None
+            compact = {
+                "subgoal_id": item.get("subgoal_id"),
+                "capability": item.get("capability"),
+                "kind": item.get("kind"),
+                "status": item.get("status"),
+                "scope": item.get("scope"),
+                "satisfied": _summary_bool(item.get("satisfied")),
+                "title": item.get("title"),
+                "value": item.get("value"),
+                "message": item.get("message"),
+                "detail": item.get("detail"),
+                "selector": item.get("selector"),
+                "url": item.get("url"),
+                "verified_at": item.get("verified_at"),
+            }
+            if isinstance(item.get("evidence"), list):
+                compact["evidence"] = [
+                    nested
+                    for nested in (
+                        DesktopShellController._summarize_evidence_item(entry) for entry in item.get("evidence", [])[:3]
+                    )
+                    if nested is not None
+                ]
+            return {key: value for key, value in compact.items() if value not in (None, "", [], {})} or None
+
+        @staticmethod
+        def _summarize_pending_decision(decision: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not isinstance(decision, dict):
+                return None
+            actions = decision.get("actions") if isinstance(decision.get("actions"), list) else []
+            return {
+                "id": decision.get("id"),
+                "decision_type": decision.get("decision_type"),
+                "summary": decision.get("summary"),
+                "reason": decision.get("reason"),
+                "risk_level": decision.get("risk_level"),
+                "actions": [
+                    compact
+                    for compact in (DesktopShellController._summarize_action(action) for action in actions[:4])
+                    if compact is not None
+                ],
+            }
+
+        @staticmethod
+        def _summarize_step_proposal(proposal: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not isinstance(proposal, dict):
+                return None
+            actions = proposal.get("actions") if isinstance(proposal.get("actions"), list) else []
+            return {
+                "intent": proposal.get("intent"),
+                "capability": proposal.get("capability"),
+                "risk_level": proposal.get("risk_level"),
+                "target_scope": proposal.get("target_scope"),
+                "surface_kind": proposal.get("surface_kind"),
+                "requires_approval": _summary_bool(proposal.get("requires_approval")),
+                "completes_subgoal": _summary_bool(proposal.get("completes_subgoal")),
+                "current_focus": proposal.get("current_focus"),
+                "progress_signals": proposal.get("progress_signals")[:4] if isinstance(proposal.get("progress_signals"), list) else [],
+                "repair_strategy": proposal.get("repair_strategy")[:4] if isinstance(proposal.get("repair_strategy"), list) else [],
+                "remaining_steps": proposal.get("remaining_steps")[:4] if isinstance(proposal.get("remaining_steps"), list) else [],
+                "actions": [
+                    compact
+                    for compact in (DesktopShellController._summarize_action(action) for action in actions[:4])
+                    if compact is not None
+                ],
+            }
+
+        @staticmethod
+        def _summarize_repair_history(history: list[Any] | None) -> list[dict[str, Any]]:
+            if not isinstance(history, list):
+                return []
+            compacted: list[dict[str, Any]] = []
+            for item in history[-6:]:
+                if not isinstance(item, dict):
+                    continue
+                compacted.append(
+                    {
+                        "mode": item.get("mode") or item.get("kind"),
+                        "subgoal_id": item.get("subgoal_id"),
+                        "failure_kind": item.get("failure_kind") or item.get("standard_failure_kind"),
+                        "capability": item.get("capability"),
+                        "message": item.get("message") or item.get("reason"),
+                        "step": item.get("step"),
+                    }
+                )
+            return compacted
+
+        @staticmethod
+        def _summarize_capability_failures(failures: dict[str, Any] | None) -> list[dict[str, Any]]:
+            if not isinstance(failures, dict):
+                return []
+            compacted: list[dict[str, Any]] = []
+            for target, values in sorted(failures.items())[:8]:
+                if not isinstance(values, list):
+                    continue
+                recent = [str(item) for item in values[-4:] if str(item).strip()]
+                if recent:
+                    compacted.append({"target": target, "failures": recent})
+            return compacted
+
+        @staticmethod
+        def _summarize_handoff_state(context: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not isinstance(context, dict):
+                return None
+            compact = {
+                key: context.get(key)
+                for key in (
+                    "human_handoff_kind",
+                    "human_handoff_summary",
+                    "human_handoff_reason",
+                    "manual_resume_status",
+                    "manual_resume_reason",
+                    "manual_resumed_at",
+                    "standard_recovery_kind",
+                    "recovery_reason",
+                )
+                if context.get(key) not in (None, "", [], {})
+            }
+            return compact or None
 
         @staticmethod
         def _summarize_run(run: dict[str, Any] | None) -> dict[str, Any] | None:
             if not isinstance(run, dict):
                 return None
+            state_payload = run.get("state") if isinstance(run.get("state"), dict) else {}
+            execution_state = run.get("execution_state") if isinstance(run.get("execution_state"), dict) else {}
+            state_context = (
+                state_payload.get("app_context")
+                if isinstance(state_payload.get("app_context"), dict)
+                else execution_state.get("app_context")
+                if isinstance(execution_state.get("app_context"), dict)
+                else {}
+            )
+            task_graph = (
+                state_payload.get("task_graph")
+                if isinstance(state_payload.get("task_graph"), dict)
+                else execution_state.get("task_graph")
+                if isinstance(execution_state.get("task_graph"), dict)
+                else run.get("task_graph")
+                if isinstance(run.get("task_graph"), dict)
+                else {}
+            )
+            plan_health = (
+                state_payload.get("plan_health")
+                if isinstance(state_payload.get("plan_health"), dict)
+                else execution_state.get("plan_health")
+                if isinstance(execution_state.get("plan_health"), dict)
+                else {}
+            )
+            health_items = plan_health.get("items") if isinstance(plan_health.get("items"), list) else None
+            state_subgoals = (
+                state_payload.get("subgoals")
+                if isinstance(state_payload.get("subgoals"), list)
+                else execution_state.get("subgoals")
+                if isinstance(execution_state.get("subgoals"), list)
+                else None
+            )
+            graph_subgoals = task_graph.get("subgoals") if isinstance(task_graph.get("subgoals"), list) else []
+            items = health_items if health_items is not None else state_subgoals if state_subgoals is not None else graph_subgoals
+            repair_history = (
+                state_payload.get("repair_history")
+                if isinstance(state_payload.get("repair_history"), list)
+                else execution_state.get("repair_history")
+                if isinstance(execution_state.get("repair_history"), list)
+                else None
+            )
+            capability_failures = (
+                state_payload.get("capability_failures")
+                if isinstance(state_payload.get("capability_failures"), dict)
+                else execution_state.get("capability_failures")
+                if isinstance(execution_state.get("capability_failures"), dict)
+                else None
+            )
+            terminal_result = DesktopShellController._run_is_terminal_result(run)
+            pending_decision = None if terminal_result else DesktopShellController._pending_decision_from_run(run)
+            budget_summary = DesktopShellController._summarize_execution_budget(run)
+            environment_summary = DesktopShellController._summarize_execution_environment(run)
+            step_proposal = (
+                run.get("step_proposal")
+                if isinstance(run.get("step_proposal"), dict)
+                else state_payload.get("step_proposal")
+                if isinstance(state_payload.get("step_proposal"), dict)
+                else execution_state.get("step_proposal")
+                if isinstance(execution_state.get("step_proposal"), dict)
+                else state_payload.get("last_step")
+                if isinstance(state_payload.get("last_step"), dict)
+                else execution_state.get("last_step")
+                if isinstance(execution_state.get("last_step"), dict)
+                else None
+            )
             return {
                 "id": run.get("id"),
                 "steps": run.get("steps"),
-                "completed": run.get("completed"),
-                "cancelled": run.get("cancelled"),
+                "dry_run": _summary_bool(run.get("dry_run")),
+                "max_steps": run.get("max_steps"),
+                "max_run_seconds": run.get("max_run_seconds"),
+                "pause_after_action": run.get("pause_after_action"),
+                "completed": _summary_bool(run.get("completed")),
+                "cancelled": _summary_bool(run.get("cancelled")),
                 "cancel_reason": run.get("cancel_reason"),
-                "requires_human": run.get("requires_human"),
+                "requires_human": False if terminal_result else _summary_bool(run.get("requires_human")),
+                "can_resume": _summary_bool(run.get("can_resume")),
+                "resume_mode": run.get("resume_mode"),
                 "interruption_kind": run.get("interruption_kind"),
                 "interruption_reason": run.get("interruption_reason"),
                 "error": run.get("error"),
+                "desktop_autonomy_mode": DesktopShellController._resolve_run_policy_value(run, "desktop_autonomy_mode"),
+                "complex_task_planning": DesktopShellController._resolve_run_policy_value(run, "complex_task_planning"),
+                "approval_policy": DesktopShellController._resolve_run_policy_value(run, "approval_policy"),
+                "plan_review_policy": DesktopShellController._resolve_run_policy_value(run, "plan_review_policy"),
+                "stage_review_policy": DesktopShellController._resolve_run_policy_value(run, "stage_review_policy"),
+                "replan_on_recoverable_error": DesktopShellController._resolve_run_policy_value(
+                    run, "replan_on_recoverable_error"
+                ),
+                "recoverable_error_retry_limit": DesktopShellController._resolve_run_policy_value(
+                    run, "recoverable_error_retry_limit"
+                ),
+                "execution_budget": budget_summary,
+                "execution_environment": environment_summary,
+                **budget_summary,
+                **environment_summary,
+                "current_goal": run.get("current_goal") or state_payload.get("current_goal") or execution_state.get("current_goal"),
+                "orchestration_phase": run.get("orchestration_phase") or state_payload.get("orchestration_phase") or execution_state.get("orchestration_phase"),
+                "active_specialist": run.get("active_specialist") or state_payload.get("active_specialist") or execution_state.get("active_specialist"),
+                "current_surface_kind": run.get("current_surface_kind") or state_payload.get("current_surface_kind") or execution_state.get("current_surface_kind"),
+                "last_progress_at": run.get("last_progress_at") or state_payload.get("last_progress_at") or execution_state.get("last_progress_at"),
+                "plan_review_status": run.get("plan_review_status") or state_payload.get("plan_review_status") or execution_state.get("plan_review_status") or state_context.get("plan_review_status"),
+                "stage_review_status": run.get("stage_review_status") or state_payload.get("stage_review_status") or execution_state.get("stage_review_status") or state_context.get("stage_review_status"),
+                "last_replan_reason": run.get("last_replan_reason") or state_payload.get("last_replan_reason") or execution_state.get("last_replan_reason"),
+                "verification_status": run.get("verification_status") or state_payload.get("verification_status") or execution_state.get("verification_status"),
+                "last_verification": DesktopShellController._summarize_verification(
+                    state_payload.get("last_verification")
+                    if isinstance(state_payload.get("last_verification"), dict)
+                    else execution_state.get("last_verification")
+                    if isinstance(execution_state.get("last_verification"), dict)
+                    else None
+                ),
+                "evidence_ledger": [
+                    compact
+                    for compact in (
+                        DesktopShellController._summarize_evidence_item(item)
+                        for item in (
+                            state_payload.get("evidence_ledger")
+                            if isinstance(state_payload.get("evidence_ledger"), list)
+                            else execution_state.get("evidence_ledger")
+                            if isinstance(execution_state.get("evidence_ledger"), list)
+                            else []
+                        )[-6:]
+                    )
+                    if compact is not None
+                ],
+                "recovery_reason": run.get("recovery_reason") or state_payload.get("recovery_reason") or execution_state.get("recovery_reason"),
+                "handoff_state": DesktopShellController._summarize_handoff_state(state_context),
+                "repair_history": DesktopShellController._summarize_repair_history(repair_history),
+                "capability_failures": DesktopShellController._summarize_capability_failures(capability_failures),
+                "workspace_summary": DesktopShellController._summarize_workspace_summary(
+                    run.get("workspace_summary")
+                    if isinstance(run.get("workspace_summary"), dict)
+                    else state_payload.get("workspace_summary")
+                    if isinstance(state_payload.get("workspace_summary"), dict)
+                    else execution_state.get("workspace_summary")
+                    if isinstance(execution_state.get("workspace_summary"), dict)
+                    else None
+                ),
+                "step_proposal": DesktopShellController._summarize_step_proposal(step_proposal),
+                "pending_decision": DesktopShellController._summarize_pending_decision(pending_decision),
+                "plan_health": DesktopShellController._summarize_plan_health(plan_health, items),
+                "task_graph": {
+                    "task": task_graph.get("task"),
+                    "subgoals": [
+                        {
+                            "id": item.get("id"),
+                            "title": item.get("title"),
+                            "status": item.get("status"),
+                            "ready": _summary_bool(item.get("ready")),
+                            "is_next": _summary_bool(item.get("is_next")),
+                        }
+                        for item in graph_subgoals[:8]
+                        if isinstance(item, dict)
+                    ],
+                },
                 "started_at": run.get("started_at"),
                 "finished_at": run.get("finished_at"),
+                "details_updated_at": run.get("details_updated_at"),
             }
+
+        @staticmethod
+        def _run_is_terminal_result(run: dict[str, Any] | None) -> bool:
+            if not isinstance(run, dict):
+                return False
+            status = str(run.get("status") or "").strip().lower()
+            return bool(
+                _bool_value(run.get("completed"))
+                or _bool_value(run.get("cancelled"))
+                or run.get("error")
+                or status in {"completed", "failed", "cancelled"}
+            )
+
+        @staticmethod
+        def _find_paused_resume_run(runs: object) -> dict[str, Any] | None:
+            if not isinstance(runs, list):
+                return None
+            for run in runs:
+                if not isinstance(run, dict):
+                    continue
+                if _optional_bool(run.get("can_resume")) is False:
+                    continue
+                terminal_result = DesktopShellController._run_is_terminal_result(run)
+                resume_mode = str(run.get("resume_mode") or "").strip().lower()
+                terminal_resumable = resume_mode in {"execution_state", "state", "plan"}
+                if terminal_result and not terminal_resumable:
+                    continue
+                pending_decision = DesktopShellController._pending_decision_from_run(run)
+                awaiting_approval = not terminal_result and _run_orchestration_phase(run) == "awaiting_approval"
+                has_handoff = bool(
+                    (pending_decision if not terminal_result else None)
+                    or awaiting_approval
+                    or _bool_value(run.get("requires_human"))
+                    or resume_mode == "manual"
+                    or terminal_resumable
+                    or str(run.get("interruption_kind") or "").strip()
+                    or str(run.get("interruption_reason") or "").strip()
+                )
+                if has_handoff:
+                    return run
+            return None
+
+        @staticmethod
+        def _pending_decision_from_run(run: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not isinstance(run, dict):
+                return None
+            pending_decision = run.get("pending_decision")
+            if isinstance(pending_decision, dict) and pending_decision:
+                return pending_decision
+            state_payload = run.get("state") if isinstance(run.get("state"), dict) else {}
+            pending_decision = state_payload.get("pending_decision") if isinstance(state_payload, dict) else None
+            if isinstance(pending_decision, dict) and pending_decision:
+                return pending_decision
+            execution_state = run.get("execution_state") if isinstance(run.get("execution_state"), dict) else {}
+            pending_decision = execution_state.get("pending_decision") if isinstance(execution_state, dict) else None
+            return pending_decision if isinstance(pending_decision, dict) and pending_decision else None
 
         def _apply_overview_payload(self, payload: dict[str, Any]) -> None:
             active_job = payload.get("active_job")
             jobs = payload.get("jobs") or []
+            runs = payload.get("runs") or []
 
             if active_job:
                 self._clear_paused_run()
@@ -1298,6 +2245,29 @@ if QApplication is not None:
                 else:
                     self._show_paused_run_prompt()
                 return
+
+            paused_run = DesktopShellController._find_paused_resume_run(runs)
+            if paused_run is not None:
+                pending_decision = DesktopShellController._pending_decision_from_run(paused_run)
+                waiting_for_approval = _run_orchestration_phase(paused_run) == "awaiting_approval"
+                self.paused_run_id = str(paused_run.get("id") or "") or None
+                self.paused_task = str(paused_run.get("task") or paused_run.get("current_goal") or "")
+                self.paused_reason = str(
+                    (pending_decision.get("summary") if isinstance(pending_decision, dict) else None)
+                    or (pending_decision.get("reason") if isinstance(pending_decision, dict) else None)
+                    or paused_run.get("interruption_reason")
+                    or paused_run.get("recovery_reason")
+                    or paused_run.get("cancel_reason")
+                    or paused_run.get("error")
+                    or ("Waiting for approval before continuing." if waiting_for_approval else "")
+                    or "Waiting for manual handling."
+                )
+                if self.paused_run_id:
+                    if self.main_window.isVisible():
+                        self._hide_main_window_for_floating()
+                    else:
+                        self._show_paused_run_prompt()
+                    return
 
             if self.follow_up_draft:
                 if self.main_window.isVisible():
@@ -1334,13 +2304,57 @@ if QApplication is not None:
             )
 
         def _handle_finished_job(self, job: dict[str, Any] | None) -> None:  # pragma: no cover - GUI runtime behavior
-            result = job.get("result") if isinstance(job, dict) else {}
+            result = job.get("result") if isinstance(job, dict) and isinstance(job.get("result"), dict) else {}
             run_id = result.get("run_id") if isinstance(result, dict) else None
-            if job and job.get("requires_human"):
+            terminal_job = _job_is_terminal_result(job) if isinstance(job, dict) else False
+            pending_decision = None if terminal_job else _pending_decision_from_job(job) if isinstance(job, dict) else None
+            resume_mode = str(
+                (
+                    result.get("resume_mode")
+                    if isinstance(result, dict) and result.get("resume_mode") is not None
+                    else job.get("resume_mode")
+                    if isinstance(job, dict)
+                    else ""
+                )
+                or ""
+            ).strip().lower()
+            can_resume = _optional_bool(
+                result.get("can_resume")
+                if isinstance(result, dict) and result.get("can_resume") is not None
+                else job.get("can_resume")
+                if isinstance(job, dict)
+                else None
+            )
+            terminal_resumable = terminal_job and resume_mode in {"execution_state", "state", "plan"} and can_resume is not False
+            requires_human = bool(
+                job
+                and (
+                    (
+                        not terminal_job
+                        and (
+                            _bool_value(job.get("requires_human"))
+                            or (isinstance(result, dict) and _bool_value(result.get("requires_human")))
+                        )
+                    )
+                    or pending_decision
+                    or terminal_resumable
+                )
+            )
+            if job and requires_human:
                 self.last_finished_run_id = str(run_id or "") or None
                 self.paused_run_id = self.last_finished_run_id
                 self.paused_task = str(job.get("task") or result.get("task") or "")
-                self.paused_reason = str(job.get("interruption_reason") or result.get("interruption_reason") or "")
+                self.paused_reason = str(
+                    (pending_decision.get("summary") if isinstance(pending_decision, dict) else None)
+                    or (pending_decision.get("reason") if isinstance(pending_decision, dict) else None)
+                    or job.get("interruption_reason")
+                    or result.get("interruption_reason")
+                    or result.get("recovery_reason")
+                    or result.get("cancel_reason")
+                    or job.get("cancel_reason")
+                    or result.get("error")
+                    or ""
+                )
                 if self.main_window.isVisible():
                     self._hide_main_window_for_floating()
                 else:
@@ -1357,9 +2371,9 @@ if QApplication is not None:
                 return
 
             if job and (
-                job.get("cancelled")
+                _bool_value(job.get("cancelled"))
                 or job.get("status") == "cancelled"
-                or (isinstance(result, dict) and result.get("cancelled"))
+                or (isinstance(result, dict) and _bool_value(result.get("cancelled")))
             ):
                 self._clear_paused_run()
                 self.last_finished_run_id = str(run_id or "") or self.last_finished_run_id

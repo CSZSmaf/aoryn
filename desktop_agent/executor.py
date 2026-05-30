@@ -713,9 +713,7 @@ class RealDesktopExecutor(ActionExecutor):
         self._click_at(action, x=click_x, y=click_y, clicks=clicks, button=button)
 
     def _dismiss_known_blockers(self) -> None:
-        mode = self.config.desktop_autonomy_mode.lower().strip()
-        if mode not in {"conservative", "balanced", "aggressive"}:
-            return
+        mode = _blocker_dismissal_mode(self.config.desktop_autonomy_mode)
         if self.current_environment is None:
             return
         for blocker in _find_known_blockers(self.current_environment, mode=mode):
@@ -1644,6 +1642,17 @@ def _find_known_blockers(
             # Reserved for future broader popup handling, but never class-only in conservative mode.
             continue
     return blockers
+
+
+def _blocker_dismissal_mode(mode: str | None) -> str:
+    normalized = (mode or "conservative").strip().lower().replace(" ", "_").replace("-", "_")
+    if normalized in {"autonomous", "high_autonomy", "aggressive", "auto"}:
+        return "aggressive"
+    if normalized in {"review_first", "supervised", "strict"}:
+        return "conservative"
+    if normalized == "balanced":
+        return "balanced"
+    return "conservative"
 
 
 def _resolve_relative_axis(ratio: float, span: int) -> int:

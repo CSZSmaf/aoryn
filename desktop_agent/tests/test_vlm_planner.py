@@ -82,6 +82,20 @@ def test_vlm_planner_caches_auto_discovered_model_name():
     assert requests.calls == 1
 
 
+def test_vlm_planner_parses_string_boolean_auto_discover_flag():
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def get(self, *args, **kwargs):
+            raise AssertionError("explicit model with auto_discover=false should not fetch /models")
+
+    planner = VLMPlanner(AgentConfig(model_name="qwen/qwen3-vl", model_auto_discover="false"))
+    api_base = _normalize_api_base_url("http://127.0.0.1:1234")
+
+    assert planner._resolve_model_name(_Requests(), api_base) == "qwen/qwen3-vl"
+
+
 def test_task_graph_timeout_honors_configurable_budget():
     config = AgentConfig(model_request_timeout=90, task_graph_request_timeout=12)
     # The budget is used as-is when it fits within the overall request timeout,

@@ -21,6 +21,7 @@ def _asset_version_source_paths() -> tuple[Path, ...]:
         assets_root / "app.js",
         assets_root / "vendor" / "desktop-markdown.js",
         assets_root / "icons" / "logo-mark.png",
+        assets_root / "icons" / "aoryn-mark.png",
     )
 
 

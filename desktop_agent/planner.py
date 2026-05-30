@@ -48,7 +48,7 @@ class TaskIntent:
             constraints=[str(item).strip() for item in payload.get("constraints", []) or [] if str(item).strip()],
             risk_level=_normalize_intent_risk(payload.get("risk_level")),
             ambiguity=_normalize_ambiguity(payload.get("ambiguity")),
-            requires_clarification=bool(payload.get("requires_clarification", False)),
+            requires_clarification=_optional_bool(payload.get("requires_clarification")) or False,
             clarification_prompt=_optional_str(payload.get("clarification_prompt")),
             preferred_capabilities=[
                 str(item).strip()
@@ -85,6 +85,33 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+        return None
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    return None
+
+
+def _bool_with_default(value: Any, default: bool) -> bool:
+    parsed = _optional_bool(value)
+    return default if parsed is None else parsed
 
 
 def _normalize_intent_risk(value: Any) -> str:
@@ -647,12 +674,13 @@ class VLMPlanner(BasePlanner):
 
     def _resolve_model_name(self, requests_module, api_base: str) -> str:
         configured_model = (self.config.model_name or "").strip()
-        if not _needs_model_discovery(configured_model) and not self.config.model_auto_discover:
+        auto_discover = _bool_with_default(self.config.model_auto_discover, False)
+        if not _needs_model_discovery(configured_model) and not auto_discover:
             return configured_model
         cache_key = (
             api_base.rstrip("/"),
             configured_model.lower(),
-            bool(self.config.model_auto_discover),
+            auto_discover,
             str(self.config.model_api_key or ""),
         )
         if cache_key in self._model_name_cache:
@@ -1064,15 +1092,7 @@ class TaskGraphPlanner:
         items = payload.get("subgoals")
         if not isinstance(items, list):
             return None
-        titles: list[str] = []
-        for item in items:
-            if isinstance(item, dict):
-                title = _optional_str(item.get("title") or item.get("goal"))
-            else:
-                title = _optional_str(item)
-            if title:
-                titles.append(title)
-        titles = _limit_subgoal_titles(titles, max_count=self.config.max_task_subgoals)
+        titles, model_items = _model_subgoal_titles_and_items(items, max_count=self.config.max_task_subgoals)
         if not titles:
             return None
         graph = self._build_graph_from_titles(
@@ -1081,15 +1101,16 @@ class TaskGraphPlanner:
             intent=intent,
             world_model=world_model,
         )
-        for subgoal, raw_item in zip(graph.subgoals, items):
+        for subgoal, raw_item in zip(graph.subgoals, model_items):
             if not isinstance(raw_item, dict):
                 continue
             subgoal.goal_type = _normalize_model_goal_type(raw_item.get("goal_type"), fallback=subgoal.goal_type)
             subgoal.success_condition = _optional_str(raw_item.get("success_condition")) or subgoal.success_condition
             subgoal.capability_preference = _optional_str(raw_item.get("capability_preference")) or subgoal.capability_preference
-            subgoal.risk_level = _normalize_model_risk(raw_item.get("risk_level"), fallback=subgoal.risk_level)
+            subgoal.risk_level = _model_subgoal_risk(raw_item, fallback=subgoal.risk_level)
             if isinstance(raw_item.get("completion_evidence"), dict):
                 subgoal.completion_evidence = dict(raw_item["completion_evidence"])
+        _apply_model_task_graph_dependencies(graph, payload=payload, raw_items=model_items)
         graph.constraints = _dedupe_strings(
             [
                 *graph.constraints,
@@ -1098,6 +1119,7 @@ class TaskGraphPlanner:
         )
         graph.risk_points = _dedupe_strings(
             [
+                *[item.title for item in graph.subgoals if item.risk_level in {"medium", "high", "critical"}],
                 *graph.risk_points,
                 *[str(item).strip() for item in payload.get("risk_points", []) or [] if str(item).strip()],
             ]
@@ -1105,6 +1127,152 @@ class TaskGraphPlanner:
         graph.completion_summary = _optional_str(payload.get("completion_summary")) or graph.completion_summary
         graph.intent = intent.to_dict()
         return graph
+
+
+def _model_subgoal_titles_and_items(items: list[Any], *, max_count: int) -> tuple[list[str], list[Any]]:
+    pairs: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        if isinstance(item, dict):
+            title = _optional_str(item.get("title") or item.get("goal"))
+        else:
+            title = _optional_str(item)
+        cleaned = _clean_sub_goal_part(title or "")
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        pairs.append((cleaned, item))
+
+    max_count = max(1, int(max_count or 1))
+    if len(pairs) <= max_count:
+        return [title for title, _item in pairs], [item for _title, item in pairs]
+    if max_count == 1:
+        return [f"Complete the staged workflow: {'; '.join(title for title, _item in pairs)}"], [None]
+
+    head = pairs[: max_count - 1]
+    tail_title = "; ".join(title for title, _item in pairs[max_count - 1 :])
+    return (
+        [*[title for title, _item in head], f"Complete remaining requested work: {tail_title}"],
+        [*[item for _title, item in head], None],
+    )
+
+
+def _apply_model_task_graph_dependencies(
+    graph: TaskGraph,
+    *,
+    payload: dict[str, Any],
+    raw_items: list[Any],
+) -> None:
+    """Preserve explicit model prerequisites without allowing bad refs to deadlock the graph."""
+
+    lookup = _build_model_dependency_lookup(graph.subgoals, raw_items)
+    payload_dependencies = payload.get("dependencies")
+    dependency_map = payload_dependencies if isinstance(payload_dependencies, dict) else {}
+
+    for index, subgoal in enumerate(graph.subgoals):
+        raw_item = raw_items[index] if index < len(raw_items) else None
+        has_inline_refs = False
+        inline_refs: list[str] = []
+        if isinstance(raw_item, dict):
+            has_inline_refs, inline_refs = _model_inline_dependency_refs(raw_item)
+
+        external_refs = _model_external_dependency_refs(
+            subgoal=subgoal,
+            raw_item=raw_item,
+            dependency_map=dependency_map,
+            lookup=lookup,
+        )
+        if not has_inline_refs and not external_refs:
+            continue
+
+        allowed_dependency_ids = {item.id for item in graph.subgoals[:index]}
+        resolved = _resolve_model_dependency_refs(
+            [*inline_refs, *external_refs],
+            lookup=lookup,
+            allowed_dependency_ids=allowed_dependency_ids,
+            subgoal_id=subgoal.id,
+        )
+        subgoal.prerequisites = resolved
+        graph.dependencies[subgoal.id] = list(resolved)
+
+
+def _build_model_dependency_lookup(subgoals: list[Subgoal], raw_items: list[Any]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for index, subgoal in enumerate(subgoals):
+        raw_item = raw_items[index] if index < len(raw_items) else None
+        candidates = [subgoal.id, str(index + 1), f"subgoal_{index + 1:02d}", subgoal.title, subgoal.goal]
+        if isinstance(raw_item, dict):
+            candidates.extend([raw_item.get("id"), raw_item.get("title"), raw_item.get("goal")])
+        for candidate in candidates:
+            key = _normalize_model_dependency_ref(candidate)
+            if key and key not in lookup:
+                lookup[key] = subgoal.id
+    return lookup
+
+
+def _model_inline_dependency_refs(raw_item: dict[str, Any]) -> tuple[bool, list[str]]:
+    for key in ("prerequisites", "depends_on", "dependencies", "requires"):
+        if key in raw_item:
+            return True, _coerce_model_ref_list(raw_item.get(key))
+    return False, []
+
+
+def _model_external_dependency_refs(
+    *,
+    subgoal: Subgoal,
+    raw_item: Any,
+    dependency_map: dict[Any, Any],
+    lookup: dict[str, str],
+) -> list[str]:
+    refs: list[str] = []
+    target_candidates = [subgoal.id, subgoal.title, subgoal.goal]
+    if isinstance(raw_item, dict):
+        target_candidates.extend([raw_item.get("id"), raw_item.get("title"), raw_item.get("goal")])
+    target_ids = {
+        lookup.get(_normalize_model_dependency_ref(candidate))
+        for candidate in target_candidates
+        if _normalize_model_dependency_ref(candidate)
+    }
+    target_ids.discard(None)
+    for raw_target, raw_refs in dependency_map.items():
+        resolved_target = lookup.get(_normalize_model_dependency_ref(raw_target))
+        if resolved_target in target_ids:
+            refs.extend(_coerce_model_ref_list(raw_refs))
+    return refs
+
+
+def _resolve_model_dependency_refs(
+    refs: list[str],
+    *,
+    lookup: dict[str, str],
+    allowed_dependency_ids: set[str],
+    subgoal_id: str,
+) -> list[str]:
+    resolved: list[str] = []
+    for raw_ref in refs:
+        dependency_id = lookup.get(_normalize_model_dependency_ref(raw_ref))
+        if not dependency_id or dependency_id == subgoal_id or dependency_id not in allowed_dependency_ids:
+            continue
+        if dependency_id not in resolved:
+            resolved.append(dependency_id)
+    return resolved
+
+
+def _coerce_model_ref_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _normalize_model_dependency_ref(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text.startswith("#"):
+        text = text[1:].strip()
+    return re.sub(r"\s+", " ", text)
 
 
 class SubgoalPlanner:
@@ -1399,6 +1567,18 @@ def _normalize_model_risk(value: Any, *, fallback: str) -> str:
     return normalized if normalized in {"low", "medium", "high", "critical"} else fallback
 
 
+def _model_subgoal_risk(raw_item: dict[str, Any], *, fallback: str) -> str:
+    model_risk = _normalize_model_risk(raw_item.get("risk_level"), fallback="low")
+    text_risk = _infer_subgoal_risk(
+        " ".join(
+            str(raw_item.get(key) or "").strip()
+            for key in ("title", "goal", "success_condition")
+            if str(raw_item.get(key) or "").strip()
+        )
+    )
+    return _max_risk(_max_risk(fallback, model_risk), text_risk)
+
+
 def _resolve_text_model_name(config: AgentConfig, requests_module, api_base: str) -> str:
     configured_model = (config.model_name or "").strip()
     if not _needs_model_discovery(configured_model):
@@ -1461,7 +1641,8 @@ def _build_task_graph_payload(
                 "content": (
                     "You design task graphs for a local desktop agent. Return only JSON with keys: "
                     "subgoals, success_criteria, constraints, risk_points, completion_summary. "
-                    "Each subgoal includes title, goal_type, success_condition, capability_preference, risk_level, completion_evidence."
+                    "Each subgoal includes id, title, goal_type, success_condition, capability_preference, "
+                    "risk_level, prerequisites, completion_evidence."
                 ),
             },
             {"role": "user", "content": user_text},
@@ -1513,11 +1694,14 @@ def _task_graph_json_schema() -> dict[str, Any]:
                 "items": {
                     "type": "object",
                     "properties": {
+                        "id": {"type": "string"},
                         "title": {"type": "string"},
+                        "goal": {"type": "string"},
                         "goal_type": {"type": "string"},
                         "success_condition": {"type": "string"},
                         "capability_preference": {"type": "string"},
                         "risk_level": {"type": "string"},
+                        "prerequisites": {"type": "array", "items": {"type": "string"}},
                         "completion_evidence": {
                             "type": "object",
                             "additionalProperties": True,
@@ -1528,6 +1712,10 @@ def _task_graph_json_schema() -> dict[str, Any]:
                 },
             },
             "success_criteria": {"type": "array", "items": {"type": "string"}},
+            "dependencies": {
+                "type": "object",
+                "additionalProperties": {"type": "array", "items": {"type": "string"}},
+            },
             "constraints": {"type": "array", "items": {"type": "string"}},
             "risk_points": {"type": "array", "items": {"type": "string"}},
             "completion_summary": {"type": "string"},
@@ -2007,14 +2195,30 @@ def _infer_intent_risk(task: str) -> str:
         "terminal",
         "shell",
         "\u767b\u5f55",
+        "\u767b\u9646",
+        "\u9a8c\u8bc1\u7801",
         "\u5bc6\u7801",
         "\u652f\u4ed8",
+        "\u4ed8\u6b3e",
+        "\u8d2d\u4e70",
+        "\u4e70",
+        "\u8d2d\u7269\u8f66",
+        "\u7ed3\u8d26",
         "\u4e0b\u5355",
         "\u63d0\u4ea4",
+        "\u53d1\u9001",
         "\u5220\u9664",
+        "\u79fb\u9664",
+        "\u8986\u76d6",
         "\u5b89\u88c5",
+        "\u5378\u8f7d",
+        "\u6388\u6743",
+        "\u6743\u9650",
+        "\u9690\u79c1",
         "\u7ec8\u7aef",
+        "\u547d\u4ee4",
         "\u547d\u4ee4\u884c",
+        "\u6ce8\u518c\u8868",
     )
     medium_terms = (
         "save",
@@ -2025,10 +2229,7 @@ def _infer_intent_risk(task: str) -> str:
         "\u4fdd\u5b58",
         "\u4e0b\u8f7d",
         "\u4e0a\u4f20",
-        "\u53d1\u9001",
         "\u6536\u85cf",
-        "\u8d2d\u4e70",
-        "\u4e70",
     )
     if any(term in lowered for term in high_terms):
         return "high"
@@ -2605,14 +2806,30 @@ def _infer_subgoal_risk(title: str) -> str:
         token in lowered
         for token in (
             "\u767b\u5f55",
+            "\u767b\u9646",
+            "\u9a8c\u8bc1\u7801",
             "\u5bc6\u7801",
             "\u8d2d\u7269\u8f66",
+            "\u7ed3\u8d26",
             "\u4e0b\u5355",
             "\u652f\u4ed8",
+            "\u4ed8\u6b3e",
+            "\u8d2d\u4e70",
+            "\u4e70",
             "\u63d0\u4ea4",
             "\u53d1\u9001",
             "\u5220\u9664",
+            "\u79fb\u9664",
+            "\u8986\u76d6",
             "\u5b89\u88c5",
+            "\u5378\u8f7d",
+            "\u6388\u6743",
+            "\u6743\u9650",
+            "\u9690\u79c1",
+            "\u7ec8\u7aef",
+            "\u547d\u4ee4",
+            "\u547d\u4ee4\u884c",
+            "\u6ce8\u518c\u8868",
         )
     ):
         return "high"

@@ -1,4 +1,5 @@
 import shutil
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -51,6 +52,22 @@ class _ExecutorStub:
         }
 
 
+class _InitialChallengeExecutor:
+    def __init__(self) -> None:
+        self.has_executed = False
+
+    def execute_many(self, actions, pause_after_action, stop_requested=None):
+        self.has_executed = True
+        raise AssertionError("Initial human verification must pause before executing actions.")
+
+    def browser_snapshot(self):
+        return {
+            "url": "https://www.google.com/sorry/index?continue=/search",
+            "title": "Google Search",
+            "text": "Our systems have detected unusual traffic from your computer network.",
+        }
+
+
 class _PerceptionStub:
     def capture(self, output_path: Path) -> ScreenInfo:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,5 +104,49 @@ def test_desktop_agent_pauses_for_human_verification():
         assert details["interruption_kind"] == "google_unusual_traffic"
         assert details["timeline"][0]["challenge"]["kind"] == "google_unusual_traffic"
         assert details["timeline"][0]["executed_actions"][0]["type"] == "browser_search"
+        state_payload = json.loads((result.run_dir / "state.json").read_text(encoding="utf-8"))
+        assert state_payload["orchestration_phase"] == "awaiting_user"
+        assert state_payload["verification_status"] == "failed"
+        assert state_payload["recovery_reason"] == details["interruption_reason"]
+        full_state = json.loads((result.run_dir / "execution_state.json").read_text(encoding="utf-8"))
+        assert full_state["app_context"]["human_handoff_kind"] == "google_unusual_traffic"
+        assert full_state["app_context"]["standard_recovery_kind"] == "requires_user"
+        assert full_state["last_verification"]["failure_kind"] == "requires_human"
+        assert full_state["task_graph"]["subgoals"][0]["status"] == "pending"
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
+def test_desktop_agent_persists_state_when_human_verification_is_initial():
+    scratch_root = Path("test_artifacts") / f"human_verification_initial_{uuid4().hex}"
+    run_root = scratch_root / "runs"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        executor = _InitialChallengeExecutor()
+        config = AgentConfig(dry_run=False, run_root=run_root)
+        agent = DesktopAgent(
+            config=config,
+            planner=_PlannerStub(),
+            executor=executor,
+            perception=_PerceptionStub(),
+            logger=RunLogger(run_root),
+            guard=ActionGuard(config),
+        )
+
+        result = agent.run("search for OpenAI desktop agent")
+
+        assert result.completed is False
+        assert result.requires_human is True
+        assert result.interruption_kind == "google_unusual_traffic"
+        assert executor.has_executed is False
+        step_payload = json.loads((result.run_dir / "step_01.json").read_text(encoding="utf-8"))
+        assert step_payload["state"]["orchestration_phase"] == "awaiting_user"
+        assert step_payload["executed_actions"] == []
+        full_state = json.loads((result.run_dir / "execution_state.json").read_text(encoding="utf-8"))
+        assert full_state["orchestration_phase"] == "awaiting_user"
+        assert full_state["app_context"]["human_handoff_kind"] == "google_unusual_traffic"
+        assert full_state["last_verification"]["failure_kind"] == "requires_human"
+        assert full_state["task_graph"]["subgoals"][0]["status"] == "pending"
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)

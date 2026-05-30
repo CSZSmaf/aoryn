@@ -984,10 +984,10 @@ def _build_ai_setup_page(assistant_setup: dict[str, Any] | None) -> str:
     base_url = html.escape(_optional_str(payload.get("base_url")) or "Not set")
     browser_channel = html.escape(_optional_str(payload.get("browser_channel_label")) or "System default")
     browser_path = html.escape(_optional_str(payload.get("browser_executable_path")) or "System default")
-    headless_label = "On" if bool(payload.get("browser_headless")) else "Off"
+    headless_label = "On" if _optional_bool(payload.get("browser_headless")) is True else "Off"
     runtime_preferences_path = html.escape(_optional_str(payload.get("runtime_preferences_path")) or "Unavailable")
     config_path = html.escape(_optional_str(payload.get("config_path")) or "Using defaults")
-    api_key_state = "Configured" if bool(payload.get("api_key_configured")) else "Not configured"
+    api_key_state = "Configured" if _optional_bool(payload.get("api_key_configured")) is True else "Not configured"
     return f"""
         <section class="tblr-hero">
           <h2>Configure browser AI and the execution browser in one place.</h2>
@@ -1075,6 +1075,28 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+        return None
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    return None
 
 
 def _format_timestamp(value: Any) -> str:

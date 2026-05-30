@@ -1,6 +1,26 @@
 import pytest
 
-from desktop_agent.planner import PlannerError, RulePlanner
+from desktop_agent.planner import PlannerError, RulePlanner, TaskIntent
+
+
+def test_task_intent_from_dict_parses_string_boolean_requires_clarification():
+    intent = TaskIntent.from_dict(
+        {
+            "task_type": "browser",
+            "primary_goal": "open the dashboard",
+            "requires_clarification": "false",
+        }
+    )
+    clarification_intent = TaskIntent.from_dict(
+        {
+            "task_type": "browser",
+            "primary_goal": "choose a destination",
+            "requires_clarification": "true",
+        }
+    )
+
+    assert intent.requires_clarification is False
+    assert clarification_intent.requires_clarification is True
 
 
 def test_open_notepad_and_type():
