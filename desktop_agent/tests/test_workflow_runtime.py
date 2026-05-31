@@ -415,6 +415,71 @@ def test_task_graph_planner_contextualizes_calculator_expression_follow_up():
     }
 
 
+def test_task_graph_planner_preserves_shopping_initial_step_for_follow_ups():
+    planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
+
+    graph = planner.plan(
+        "shop for high-value men's pants on amazon and sort by customer review and filter by price range"
+    )
+
+    assert [subgoal.title for subgoal in graph.subgoals] == [
+        "shop for high-value men's pants on amazon",
+        "sort by customer review",
+        "filter by price range",
+    ]
+    assert all(subgoal.capability_preference == "browser_dom" for subgoal in graph.subgoals)
+    assert graph.subgoals[1].completion_evidence == {
+        "kind": "action_executed",
+        "detail": "The browser follow-up action was submitted for: sort by customer review",
+    }
+    assert graph.subgoals[2].completion_evidence == {
+        "kind": "action_executed",
+        "detail": "The browser follow-up action was submitted for: filter by price range",
+    }
+
+
+def test_browser_capability_uses_overall_task_to_advance_shopping_follow_up():
+    task = "shop for high-value men's pants on amazon and sort by customer review and filter by price range"
+    config = AgentConfig(complex_task_planning="heuristic")
+    graph = TaskGraphPlanner(config).plan(task)
+    graph.subgoals[0].status = "completed"
+    state = ExecutionState(task=task, run_id="demo", task_graph=graph)
+    state.memory.append(
+        "Open shopping results for high-value men's pants on amazon. Then continue with: "
+        "sort by customer review. Remaining: filter by price range."
+    )
+    world_model = WorldModel(
+        browser_snapshot={"url": "https://www.amazon.com/s?k=high-value+men%27s+pants", "title": "Amazon"},
+        active_app="browser",
+        active_window_title="Aoryn Browser",
+    )
+    executor = CapabilityExecutor(
+        config=config,
+        planner=_PlannerStub(),
+        registry=build_capability_registry(),
+        driver_registry=build_driver_registry(),
+    )
+
+    step = executor.propose_step(execution_state=state, world_model=world_model)
+
+    assert step.capability == "browser_dom"
+    assert step.actions[0].type == "browser_dom_click"
+    assert step.actions[0].text == "customer review"
+    assert "follow-up step 1/2" in step.intent
+
+
+def test_task_graph_planner_routes_open_word_write_essay_to_authoring():
+    planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
+
+    graph = planner.plan("\u6253\u5f00Word\u5199\u4e00\u7bc7\u4f5c\u6587")
+
+    assert graph.intent["task_type"] == "document_authoring"
+    assert len(graph.subgoals) == 1
+    assert graph.subgoals[0].title == "\u64b0\u5199\u4f5c\u6587\u5230 Word"
+    assert graph.subgoals[0].goal_type == "fill"
+    assert graph.subgoals[0].capability_preference == "document_authoring"
+
+
 def test_task_graph_planner_contextualizes_save_follow_up_for_notepad():
     planner = TaskGraphPlanner(AgentConfig(complex_task_planning="heuristic"))
 

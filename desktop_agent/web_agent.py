@@ -145,6 +145,20 @@ class WebAgent:
             remaining_steps=list(remaining_steps),
         )
 
+    def build_dom_action_plan(self, task: str) -> PlanResult | None:
+        follow_up_action = _parse_follow_up_dom_action(task, allow_open=False)
+        if follow_up_action is None:
+            return None
+        current_step = _clean_target(task)
+        return PlanResult(
+            status_summary=f"Complete the browser task step: {current_step}.",
+            done=True,
+            actions=[follow_up_action],
+            current_focus=current_step,
+            reasoning="Execute the standalone browser DOM follow-up step against the current page.",
+            remaining_steps=[],
+        )
+
     def parse(self, task: str) -> WebCommand | None:
         stripped = task.strip()
         if not stripped:
@@ -510,6 +524,10 @@ def _parse_shopping_command(task: str) -> WebCommand | None:
             r"^(?:shop|buy|find|browse|look\s+for)\s+(?:for\s+)?(?P<product>.+?)(?:\s+on\s+(?P<site>amazon|ebay|walmart|target|jd|taobao|tmall|temu|aliexpress))?$",
             re.I,
         ),
+        re.compile(
+            r"^(?:open|search)\s+shopping\s+results\s+for\s+(?P<product>.+?)(?:\s+on\s+(?P<site>amazon|ebay|walmart|target|jd|taobao|tmall|temu|aliexpress))?$",
+            re.I,
+        ),
     )
     chinese_patterns = (
         re.compile(
@@ -671,14 +689,21 @@ def _history_mentions_popup_resolution(history: list[str]) -> bool:
     return any(marker in joined for marker in markers)
 
 
-def _parse_follow_up_dom_action(follow_up: str) -> Action | None:
+def _parse_follow_up_dom_action(follow_up: str, *, allow_open: bool = True) -> Action | None:
     stripped = _normalize_text(follow_up)
-    patterns = (
-        r"^(?:click|open|select|tap)\s+(?P<label>.+)$",
+    patterns = [
+        r"^(?:click|select|tap)\s+(?P<label>.+)$",
         r"^(?:sort\s+by|filter\s+by|choose|pick)\s+(?P<label>.+)$",
-        r"^(?:\u70b9\u51fb|\u6253\u5f00|\u9009\u62e9)\s*(?P<label>.+)$",
+        r"^(?:\u70b9\u51fb|\u9009\u62e9)\s*(?P<label>.+)$",
         r"^(?:\u6309|\u7b5b\u9009|\u9009)\s*(?P<label>.+?)(?:\u6392\u5e8f|\u7b5b\u9009)?$",
-    )
+    ]
+    if allow_open:
+        patterns.extend(
+            [
+                r"^open\s+(?P<label>.+)$",
+                r"^\u6253\u5f00\s*(?P<label>.+)$",
+            ]
+        )
     for pattern in patterns:
         match = re.match(pattern, stripped, re.I)
         if not match:

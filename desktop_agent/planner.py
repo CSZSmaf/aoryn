@@ -2074,6 +2074,15 @@ def classify_task_intent(
         )
         confidence = 0.84
         planning_strategy = "model_assisted"
+    elif _extract_editor_authoring_plan(stripped):
+        task_type = "document_authoring"
+        domain = "desktop"
+        preferred = _merge_preferred_capabilities(
+            ["document_authoring", "office_com", "windows_uia"], preferred
+        )
+        success_hints.append("A composed document is written into the requested editor.")
+        confidence = 0.84
+        planning_strategy = "model_assisted"
     elif _extract_deliverable_plan(stripped, browser_command, None):
         task_type = "research_summary"
         domain = "web"
@@ -2208,6 +2217,10 @@ def _extract_semantic_sub_goals(
     if research_query:
         follow_up = research_follow_up or "summarize the findings"
         return [f"search for {research_query}", follow_up]
+
+    editor_authoring_plan = _extract_editor_authoring_plan(task)
+    if editor_authoring_plan:
+        return editor_authoring_plan
 
     deliverable_plan = _extract_deliverable_plan(task, browser_command, intent)
     if deliverable_plan:
@@ -2707,6 +2720,107 @@ _DELIVERABLE_NOUN_TOKENS_EN = (
 )
 
 
+_EDITOR_TARGET_ALIASES = {
+    "word": ("word", "winword", "\u6587\u6863", "\u6587\u4ef6"),
+    "notepad": ("notepad", "\u8bb0\u4e8b\u672c"),
+    "wps": ("wps", "wps office"),
+}
+
+
+def _extract_editor_authoring_plan(task: str) -> list[str] | None:
+    text = task.strip()
+    if not text or _extract_research_goal(text)[0] or _looks_like_web_research(text):
+        return None
+    editor = _extract_editor_target(text)
+    if not editor or not _contains_authoring_intent(text):
+        return None
+    goal = _clean_editor_authoring_goal(text, editor=editor)
+    if not goal:
+        goal = "\u6587\u6863" if _contains_cjk(text) else "document"
+    display = _editor_display_name(editor)
+    if _contains_cjk(text):
+        return [f"\u64b0\u5199{goal}\u5230 {display}"]
+    return [f"write {goal} in {display}"]
+
+
+def _extract_editor_target(text: str) -> str | None:
+    lowered = text.lower()
+    for editor, aliases in _EDITOR_TARGET_ALIASES.items():
+        if any(alias in lowered or alias in text for alias in aliases):
+            return editor
+    return None
+
+
+def _editor_display_name(editor: str) -> str:
+    return {
+        "word": "Word",
+        "notepad": "notepad",
+        "wps": "WPS",
+    }.get(editor, editor)
+
+
+def _contains_authoring_intent(text: str) -> bool:
+    lowered = text.lower()
+    if any(re.search(rf"\b{re.escape(token)}\b", lowered) for token in _DELIVERABLE_PRODUCE_TOKENS_EN):
+        return True
+    authoring_tokens = (
+        "\u64b0\u5199",
+        "\u7f16\u5199",
+        "\u8d77\u8349",
+        "\u5199\u5165",
+        "\u5199\u5230",
+        "\u5199\u8fdb",
+        "\u5199",
+        "\u751f\u6210",
+        "\u603b\u7ed3",
+        "\u6574\u7406",
+    )
+    return any(token in text for token in authoring_tokens)
+
+
+def _clean_editor_authoring_goal(text: str, *, editor: str) -> str:
+    cleaned = text.strip().strip(" .,!?\u3002\uff01\uff1f")
+    editor_aliases = _EDITOR_TARGET_ALIASES.get(editor, (editor,))
+    editor_re = "|".join(re.escape(alias) for alias in sorted(editor_aliases, key=len, reverse=True))
+    cleaned = re.sub(
+        rf"^(?:\u8bf7|please\s+)?(?:\u6253\u5f00|\u542f\u52a8|open|launch)\s*"
+        rf"(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?(?:{editor_re})\s*"
+        rf"(?:(?:\u5e76\u4e14|\u5e76|\u7136\u540e|\u518d)|and(?:\s+then)?|then)?\s*",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
+    cleaned = re.sub(
+        rf"(?:\u5199\u5165|\u5199\u5230|\u5199\u8fdb|\u5230|\u5728|in|into)\s*(?:{editor_re})\s*$",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
+    cleaned = re.sub(r"^(?:\u5e76\u4e14|\u5e76|\u7136\u540e|\u518d|and(?:\s+then)?|then)\s*", "", cleaned, flags=re.I)
+    cleaned = re.sub(
+        r"^(?:\u64b0\u5199|\u7f16\u5199|\u8d77\u8349|\u5199\u5165|\u5199\u5230|\u5199\u8fdb|\u5199|write|compose|draft|create|make|generate)\s*",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
+    cleaned = re.sub(r"^(?:\u4e00\u7bc7|\u4e00\u4efd|\u4e00\u4e2a|an?|the)\s*", "", cleaned, flags=re.I).strip()
+    noun = _best_deliverable_noun(cleaned)
+    if cleaned and cleaned.lower() != noun.lower():
+        cleaned = _strip_deliverable_tail(cleaned, noun)
+    return cleaned[:80]
+
+
+def _best_deliverable_noun(text: str) -> str:
+    lowered = text.lower()
+    for noun in _DELIVERABLE_NOUN_TOKENS_ZH:
+        if noun in text:
+            return noun
+    for noun in _DELIVERABLE_NOUN_TOKENS_EN:
+        if re.search(rf"\b{re.escape(noun)}\b", lowered):
+            return noun
+    return "\u6587\u6863" if _contains_cjk(text) else "document"
+
+
 def _extract_deliverable_plan(
     task: str,
     browser_command: WebCommand | None = None,
@@ -3029,7 +3143,9 @@ def _describe_browser_initial_step(command: WebCommand) -> str | None:
     if command.intent == "search" and command.target:
         return f"search for {command.target}"
     if command.intent == "shopping_search" and command.shopping_query:
-        return f"open shopping results for {command.shopping_query}"
+        if command.marketplace:
+            return f"shop for {command.shopping_query} on {command.marketplace}"
+        return f"shop for {command.shopping_query}"
     return command.follow_up or command.target
 
 
@@ -3136,6 +3252,8 @@ def _infer_completion_evidence(
         return {"kind": "action_executed", "detail": f"The wait action finished for: {title}"}
     if _safe_calculator_expression_from_title(title):
         return {"kind": "action_executed", "detail": f"The calculator expression was submitted for: {title}"}
+    if _browser_dom_follow_up_action_from_title(title):
+        return {"kind": "action_executed", "detail": f"The browser follow-up action was submitted for: {title}"}
     if goal_type == "navigate":
         if app_name := _extract_target_app_name(title):
             return {"kind": "active_app_is", "value": app_name, "detail": f"The target application becomes active for: {title}"}
@@ -3180,6 +3298,23 @@ def _safe_calculator_expression_from_title(title: str) -> str | None:
         expression = _normalize_calculator_expression(match.group("expr"))
         if expression:
             return expression
+    return None
+
+
+def _browser_dom_follow_up_action_from_title(title: str) -> str | None:
+    stripped = _clean_sub_goal_part(title)
+    if not stripped:
+        return None
+    patterns = (
+        r"^(?:sort\s+by|filter\s+by|choose|pick|select)\s+(?P<label>.+)$",
+        r"^(?:\u6392\u5e8f|\u7b5b\u9009|\u9009\u62e9)\s*(?P<label>.+)$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, stripped, re.I)
+        if match:
+            label = _clean_sub_goal_part(match.group("label"))
+            if label:
+                return label
     return None
 
 
@@ -3277,6 +3412,8 @@ def _looks_like_authoring_title(lowered: str) -> bool:
 
     if any(token in lowered for token in ("search", "搜索", "查找", "查询", "visit", "访问", "browse", "上网", "click", "点击")):
         return False
+    if _looks_like_unicode_authoring_title(lowered):
+        return True
     author_verb = any(
         token in lowered
         for token in (
@@ -3285,6 +3422,14 @@ def _looks_like_authoring_title(lowered: str) -> bool:
             "draft",
             "summarize",
             "summarise",
+            "\u64b0\u5199",
+            "\u7f16\u5199",
+            "\u8d77\u8349",
+            "\u5199",
+            "\u5199\u5165",
+            "\u5199\u5230",
+            "\u5199\u8fdb",
+            "\u603b\u7ed3",
             "撰写",
             "起草",
             "整理到",
@@ -3361,6 +3506,40 @@ def _looks_like_authoring_title(lowered: str) -> bool:
         )
     )
     return strong_author and doc_noun
+
+
+def _looks_like_unicode_authoring_title(lowered: str) -> bool:
+    author_tokens = (
+        "\u64b0\u5199",
+        "\u7f16\u5199",
+        "\u8d77\u8349",
+        "\u5199",
+        "\u5199\u5165",
+        "\u5199\u5230",
+        "\u5199\u8fdb",
+        "\u603b\u7ed3",
+        "\u6574\u7406",
+        "\u751f\u6210",
+    )
+    editor_tokens = ("word", "notepad", "wps", "docx", "\u8bb0\u4e8b\u672c", "\u6587\u6863")
+    doc_tokens = (
+        "\u62a5\u544a",
+        "\u65b9\u6848",
+        "\u653b\u7565",
+        "\u8ba1\u5212",
+        "\u7eaa\u8981",
+        "\u4f5c\u6587",
+        "\u6587\u7ae0",
+        "\u603b\u7ed3",
+        "\u884c\u7a0b",
+        "\u6307\u5357",
+        "\u63d0\u7eb2",
+        "\u5927\u7eb2",
+    )
+    has_author = any(token in lowered for token in author_tokens)
+    if not has_author:
+        return False
+    return any(token in lowered for token in editor_tokens) or any(token in lowered for token in doc_tokens)
 
 
 def _infer_capability_preference(title: str, *, world_model: WorldModel | None = None) -> str | None:

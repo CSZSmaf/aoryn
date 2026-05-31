@@ -439,6 +439,19 @@ class BrowserDOMCapability(CapabilityAdapter):
     def __init__(self) -> None:
         self.web_agent = WebAgent()
 
+    def _web_agent_for(self, planner) -> WebAgent:
+        owners = [
+            planner,
+            getattr(planner, "base_planner", None),
+            getattr(planner, "vlm", None),
+            getattr(getattr(planner, "base_planner", None), "vlm", None),
+        ]
+        for owner in owners:
+            candidate = getattr(owner, "web_agent", None)
+            if isinstance(candidate, WebAgent):
+                return candidate
+        return self.web_agent
+
     def observe(self, world_model: WorldModel) -> list[ObservedFact]:
         browser_snapshot = world_model.browser_snapshot or {}
         facts: list[ObservedFact] = []
@@ -508,39 +521,40 @@ class BrowserDOMCapability(CapabilityAdapter):
         )
         if research_step is not None:
             return research_step
-        if navigation_plan := self.web_agent.build_navigation_plan(subgoal.title):
+
+        def proposal_from_plan(plan: PlanResult) -> StepProposal:
             return StepProposal.from_plan_result(
-                navigation_plan,
+                plan,
                 capability=self.name,
-                risk_level=infer_step_risk_level(subgoal.title, navigation_plan.actions),
+                risk_level=infer_step_risk_level(subgoal.title, plan.actions),
                 expected_evidence=self.build_expected_evidence(
                     subgoal=subgoal,
                     world_model=world_model,
-                    actions=navigation_plan.actions,
+                    actions=plan.actions,
                 ),
             )
-        if direct_plan := self.web_agent.try_plan(subgoal.title):
-            return StepProposal.from_plan_result(
-                direct_plan,
-                capability=self.name,
-                risk_level=infer_step_risk_level(subgoal.title, direct_plan.actions),
-                expected_evidence=self.build_expected_evidence(
-                    subgoal=subgoal,
-                    world_model=world_model,
-                    actions=direct_plan.actions,
-                ),
-            )
-        if follow_up_plan := self.web_agent.build_dom_follow_up_plan(subgoal.title, execution_state.memory):
-            return StepProposal.from_plan_result(
-                follow_up_plan,
-                capability=self.name,
-                risk_level=infer_step_risk_level(subgoal.title, follow_up_plan.actions),
-                expected_evidence=self.build_expected_evidence(
-                    subgoal=subgoal,
-                    world_model=world_model,
-                    actions=follow_up_plan.actions,
-                ),
-            )
+
+        web_agent = self._web_agent_for(planner)
+
+        if navigation_plan := web_agent.build_navigation_plan(subgoal.title):
+            return proposal_from_plan(navigation_plan)
+        if direct_plan := web_agent.try_plan(subgoal.title):
+            return proposal_from_plan(direct_plan)
+
+        overall_task = (execution_state.task or "").strip()
+        if overall_task and overall_task != subgoal.title:
+            if subgoal.goal_type == "navigate" or "shopping results" in _normalize_text(subgoal.title):
+                if overall_navigation_plan := web_agent.build_navigation_plan(overall_task):
+                    return proposal_from_plan(overall_navigation_plan)
+                if overall_direct_plan := web_agent.try_plan(overall_task):
+                    return proposal_from_plan(overall_direct_plan)
+            if follow_up_plan := web_agent.build_dom_follow_up_plan(overall_task, execution_state.memory):
+                return proposal_from_plan(follow_up_plan)
+
+        if follow_up_plan := web_agent.build_dom_follow_up_plan(subgoal.title, execution_state.memory):
+            return proposal_from_plan(follow_up_plan)
+        if standalone_dom_plan := web_agent.build_dom_action_plan(subgoal.title):
+            return proposal_from_plan(standalone_dom_plan)
         return None
 
     def _maybe_research_extraction(
@@ -738,6 +752,15 @@ class DocumentAuthoringCapability(CapabilityAdapter):
         "draft",
         "summarize",
         "summarise",
+        "\u64b0\u5199",
+        "\u7f16\u5199",
+        "\u8d77\u8349",
+        "\u5199",
+        "\u5199\u5165",
+        "\u5199\u5230",
+        "\u5199\u8fdb",
+        "\u603b\u7ed3",
+        "\u6574\u7406",
         "撰写",
         "起草",
         "整理到",
@@ -916,6 +939,10 @@ class DocumentAuthoringCapability(CapabilityAdapter):
 
     def _target_app(self, subgoal: Subgoal, config: AgentConfig) -> str:
         lowered = _normalize_text(f"{subgoal.title} {subgoal.goal or ''}")
+        if any(token in lowered for token in ("\u8bb0\u4e8b\u672c", "\u6587\u672c\u7f16\u8f91\u5668")):
+            return "notepad"
+        if any(token in lowered for token in ("\u6587\u6863", "\u62a5\u544a")):
+            return "word"
         if any(token in lowered for token in ("notepad", "记事本")):
             return "notepad"
         if "wps" in lowered:
@@ -928,14 +955,20 @@ class DocumentAuthoringCapability(CapabilityAdapter):
         lowered = _normalize_text(f"{subgoal.title} {subgoal.goal or ''}")
         for token, label in (
             ("itinerary", "travel itinerary"),
+            ("\u884c\u7a0b", "travel itinerary"),
+            ("\u65c5\u6e38", "travel itinerary"),
             ("攻略", "travel itinerary"),
             ("旅游", "travel itinerary"),
             ("report", "report"),
+            ("\u62a5\u544a", "report"),
             ("报告", "report"),
             ("plan", "plan"),
+            ("\u8ba1\u5212", "plan"),
+            ("\u65b9\u6848", "plan"),
             ("计划", "plan"),
             ("方案", "plan"),
             ("summary", "summary"),
+            ("\u603b\u7ed3", "summary"),
             ("总结", "summary"),
         ):
             if token in lowered:
@@ -1829,13 +1862,13 @@ def _estimate_cost_hint(actions: list[Action]) -> str:
 
 def _capability_supports_evidence(capability_name: str, evidence_kind: str) -> bool:
     mapping = {
-        "browser_dom": {"browser_url_contains", "browser_title_contains", "browser_text_contains", "browser_available"},
+        "browser_dom": {"browser_url_contains", "browser_title_contains", "browser_text_contains", "browser_available", "action_executed"},
         "filesystem": {"file_observation"},
         "clipboard": {"clipboard_or_input_changed"},
         "windows_uia": {"window_contains", "state_change"},
         "desktop_gui": {"window_contains", "state_change"},
         "office_com": {"fact_contains", "window_contains", "state_change"},
-        "document_authoring": {"state_change", "window_contains", "clipboard_or_input_changed", "fact_contains"},
+        "document_authoring": {"state_change", "window_contains", "clipboard_or_input_changed", "fact_contains", "action_executed"},
         "guarded_shell_recipe": {"file_observation", "state_change"},
     }
     supported = mapping.get(capability_name, set())
