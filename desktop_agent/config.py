@@ -247,6 +247,8 @@ class AgentConfig:
         return cls(**payload)
 
     def normalize(self) -> None:
+        if not isinstance(self.run_root, Path):
+            self.run_root = Path(self.run_root) if self.run_root else default_run_root()
         self.dry_run = _normalized_bool(self.dry_run, default=True)
         self.cursor_motion_enabled = _normalized_bool(self.cursor_motion_enabled, default=False)
         self.model_auto_discover = _normalized_bool(self.model_auto_discover, default=True)

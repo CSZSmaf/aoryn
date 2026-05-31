@@ -3134,6 +3134,8 @@ def _infer_completion_evidence(
     lowered = title.strip().lower()
     if re.match(r"^(?:\u7b49\u5f85|\u7b49|wait)\s*[0-9]+(?:\.[0-9]+)?\s*(?:\u79d2|seconds?|s)?\s*$", lowered, re.I):
         return {"kind": "action_executed", "detail": f"The wait action finished for: {title}"}
+    if _safe_calculator_expression_from_title(title):
+        return {"kind": "action_executed", "detail": f"The calculator expression was submitted for: {title}"}
     if goal_type == "navigate":
         if app_name := _extract_target_app_name(title):
             return {"kind": "active_app_is", "value": app_name, "detail": f"The target application becomes active for: {title}"}
@@ -3160,6 +3162,25 @@ def _infer_completion_evidence(
     if world_model is not None and world_model.active_window_title:
         return {"kind": "window_contains", "value": world_model.active_window_title, "detail": f"Visible progress persists in {world_model.active_window_title}."}
     return {"kind": "state_change", "detail": f"Visible state changes confirm: {title}"}
+
+
+def _safe_calculator_expression_from_title(title: str) -> str | None:
+    stripped = title.strip()
+    patterns = (
+        r"^(?:\u6253\u5f00|open)\s*(?:\u4e00\u4e2a\s*|(?:an?|the)\s+)?(?:\u8ba1\u7b97\u5668|calculator|calc)\s*"
+        r"(?:(?:\u5e76|\u7136\u540e)|and(?:\s+then)?)?\s*(?:\u8ba1\u7b97|calculate|compute|evaluate)\s*(?P<expr>.+)$",
+        r"^(?:\u7528|\u4f7f\u7528|with|use)\s*(?:\u8ba1\u7b97\u5668|calculator|calc)\s*"
+        r"(?:\u8ba1\u7b97|calculate|compute|evaluate)\s*(?P<expr>.+)$",
+        r"^(?:calculate|compute|evaluate|\u8ba1\u7b97)\s+(?P<expr>.+)$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, stripped, re.I)
+        if not match:
+            continue
+        expression = _normalize_calculator_expression(match.group("expr"))
+        if expression:
+            return expression
+    return None
 
 
 def _build_completion_summary(task: str, subgoals: list[Subgoal]) -> str:

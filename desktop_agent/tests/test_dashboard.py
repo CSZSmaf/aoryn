@@ -549,6 +549,17 @@ def test_load_agent_config_allows_dashboard_to_disable_dry_run():
         temp_root.rmdir()
 
 
+def test_load_agent_config_normalizes_run_root_from_config_overrides(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("dry_run: true\n", encoding="utf-8")
+    run_root = tmp_path / "runtime-runs"
+
+    config = load_agent_config(config_path, config_overrides={"run_root": str(run_root)})
+
+    assert isinstance(config.run_root, Path)
+    assert config.run_root == run_root
+
+
 def test_load_agent_config_run_budget_arguments_override_config_overrides():
     temp_root = Path("test_artifacts") / f"dashboard_run_budget_{uuid4().hex}"
     temp_root.mkdir(parents=True, exist_ok=True)

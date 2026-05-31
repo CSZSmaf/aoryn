@@ -409,6 +409,10 @@ def test_task_graph_planner_contextualizes_calculator_expression_follow_up():
         "close calculator",
     ]
     assert graph.subgoals[1].capability_preference == "windows_uia"
+    assert graph.subgoals[1].completion_evidence == {
+        "kind": "action_executed",
+        "detail": "The calculator expression was submitted for: open calculator and calculate 2+3",
+    }
 
 
 def test_task_graph_planner_contextualizes_save_follow_up_for_notepad():
