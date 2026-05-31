@@ -20,8 +20,9 @@ model_api_key:
 model_request_timeout: 90
 # Time budget (seconds) for the structured task-graph decomposition call used on
 # complex tasks. Higher values let the model return a real plan instead of falling
-# back to heuristics; capped by model_request_timeout. Range 0.5-60.
-task_graph_request_timeout: 12
+# back to heuristics; capped by model_request_timeout. Range 0.5-60. Cloud/hosted
+# models often need 30-60s under load; too low silently degrades to heuristic plans.
+task_graph_request_timeout: 30
 model_auto_discover: true
 model_structured_output: auto
 model_provider: lmstudio_local

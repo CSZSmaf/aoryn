@@ -84,7 +84,7 @@ class AgentConfig:
     model_name: str = "auto"
     model_api_key: str | None = None
     model_request_timeout: float = 90.0
-    task_graph_request_timeout: float = 12.0
+    task_graph_request_timeout: float = 30.0
     model_auto_discover: bool = True
     model_structured_output: str = "auto"
     default_surface_policy: str = "current_user_desktop"
@@ -293,7 +293,7 @@ class AgentConfig:
         )
         self.task_graph_request_timeout = _clamped_float(
             self.task_graph_request_timeout,
-            default=12.0,
+            default=30.0,
             minimum=0.5,
             maximum=60.0,
         )

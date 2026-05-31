@@ -15,7 +15,7 @@ def test_config_example_loads_and_matches_complex_task_defaults():
     assert config.max_task_subgoals == defaults.max_task_subgoals == 12
     assert config.max_replans_per_run == defaults.max_replans_per_run == 3
     assert config.approval_policy == defaults.approval_policy == "tiered"
-    assert config.task_graph_request_timeout == defaults.task_graph_request_timeout == 12.0
+    assert config.task_graph_request_timeout == defaults.task_graph_request_timeout == 30.0
     assert config.replan_on_recoverable_error is defaults.replan_on_recoverable_error is True
     assert config.recoverable_error_retry_limit == defaults.recoverable_error_retry_limit == 2
     assert config.app_launch_map["settings"] == "ms-settings:"
