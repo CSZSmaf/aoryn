@@ -2714,17 +2714,58 @@ def _extract_deliverable_plan(
     return [f"search for {topic}", _clean_sub_goal_part(f"write the {topic} {matched_noun}")]
 
 
+_DELIVERABLE_ADJECTIVES = (
+    "简短",
+    "简要",
+    "简单",
+    "详细",
+    "完整",
+    "初步",
+    "基本",
+    "大致",
+    "粗略",
+    "全面",
+    "short",
+    "brief",
+    "detailed",
+    "quick",
+    "simple",
+    "comprehensive",
+    "full",
+)
+
+
+def _strip_deliverable_tail(topic: str, noun: str) -> str:
+    """Trim a trailing '<adjective> <noun>' / 'about-suffix' so the topic is clean,
+    e.g. '电动汽车未来发展趋势的简短报告' -> '电动汽车未来发展趋势'."""
+
+    topic = topic.strip()
+    adjectives = "|".join(re.escape(adj) for adj in _DELIVERABLE_ADJECTIVES)
+    # leading adjective that describes the deliverable, e.g. "详细的人工智能行业"
+    # -> "人工智能行业", "detailed AI industry" -> "AI industry".
+    topic = re.sub(rf"^(?:{adjectives})(?:的|\s+)\s*", "", topic, flags=re.I).strip()
+    # trailing "<adjective> <noun>", e.g. "...的简短报告" -> "..."
+    topic = re.sub(
+        rf"(?:的)?\s*(?:{adjectives})?\s*(?:的)?{re.escape(noun)}\s*$",
+        "",
+        topic,
+        flags=re.I,
+    ).strip()
+    topic = re.sub(r"(?:的)?(?:相关)?(?:资料|信息|内容)$", "", topic).strip()
+    return topic.strip(" :：的").strip()
+
+
 def _extract_deliverable_topic(text: str, *, noun: str, zh: bool) -> str:
     cleaned = text.strip().strip(" .,!?。！？")
     english_about = re.search(r"(?:about|on|regarding|for|of)\s+(?P<topic>.+)$", cleaned, re.I)
     if english_about and not zh:
         topic = re.sub(r"^(?:the|a|an)\s+", "", english_about.group("topic").strip(), flags=re.I).strip()
+        topic = _strip_deliverable_tail(topic, noun)
         if topic:
             return topic[:80]
     chinese_about = re.search(r"(?:关于|有关)\s*(?P<topic>.+)$", cleaned)
     if chinese_about:
-        topic = chinese_about.group("topic").strip()
-        topic = re.sub(rf"的?{re.escape(noun)}.*$", "", topic).strip().rstrip("的")
+        topic = _strip_deliverable_tail(chinese_about.group("topic").strip(), noun)
         if topic:
             return topic[:80]
     stripped = re.sub(
@@ -2736,8 +2777,7 @@ def _extract_deliverable_topic(text: str, *, noun: str, zh: bool) -> str:
         flags=re.I,
     ).strip()
     stripped = re.sub(r"^(?:一个|一份|一篇|一张|个|份|篇|a|an|the)\s*", "", stripped, flags=re.I).strip()
-    stripped = re.sub(rf"的?{re.escape(noun)}\s*$", "", stripped, flags=re.I).strip()
-    return stripped.strip(" :：的")[:80]
+    return _strip_deliverable_tail(stripped, noun)[:80]
 
 
 def _looks_like_shopping_task(task: str) -> bool:

@@ -365,10 +365,23 @@ def _clean_notes(notes: list[str] | None) -> list[str]:
 
 def _notes_to_bullets(notes: list[str]) -> str:
     bullets: list[str] = []
-    for note in notes[:10]:
+    seen: set[str] = set()
+    for note in notes:
         cleaned = re.sub(r"^\[[a-z]+\]\s*", "", note).strip()
-        if cleaned:
-            bullets.append(f"- {cleaned}")
+        # Drop URL-only / search-engine breadcrumbs and inline URLs — they belong
+        # in Sources, not in the key-points body.
+        if not cleaned or re.fullmatch(r"https?://\S+", cleaned):
+            continue
+        cleaned = re.sub(r"https?://\S+", "", cleaned).strip(" -–·•|")
+        if len(cleaned) < 4:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        bullets.append(f"- {cleaned}")
+        if len(bullets) >= 10:
+            break
     return "\n".join(bullets)
 
 

@@ -70,3 +70,15 @@ def test_parse_document_text_handles_plain_body_without_headings():
 def test_parse_document_text_returns_none_for_empty():
     assert parse_document_text("", goal="x") is None
     assert parse_document_text("   \n  ", goal="x") is None
+
+
+def test_compose_fallback_keeps_urls_out_of_key_points():
+    artifact = DocumentComposer(_offline_config()).compose(
+        goal="写一份关于电动汽车的报告",
+        notes=["[web] 电动汽车 - https://www.google.com/search?q=ev", "[extract] 续航提升与充电网络扩张推动增长", "[web] https://example.com/ev"],
+    )
+    key_points = next((s.body for s in artifact.sections if "要点" in s.heading or "Key" in s.heading), "")
+    assert "http" not in key_points
+    assert "续航提升" in key_points
+    sources = next((s.body for s in artifact.sections if "来源" in s.heading or "Sources" in s.heading), "")
+    assert "https://example.com/ev" in sources

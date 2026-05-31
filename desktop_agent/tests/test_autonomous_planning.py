@@ -292,3 +292,11 @@ def test_accumulate_research_notes_captures_extracted_page_text():
     wm = WorldModel(browser_snapshot={"url": "https://x.test", "text": "snippet", "extracted_text": "full article body about electric vehicles"})
     _accumulate_research_notes(state, wm)
     assert any(n.startswith("[extract]") and "full article body" in n for n in state.workspace.notes)
+
+
+def test_deliverable_topic_strips_descriptive_words():
+    # adjectives describing the deliverable ("简短/详细/简单") and the noun must not
+    # leak into the research query.
+    assert _extract_deliverable_plan("帮我写一份关于电动汽车未来发展趋势的简短报告")[0] == "搜索电动汽车未来发展趋势"
+    assert _extract_deliverable_plan("写一份详细的人工智能行业报告")[0] == "搜索人工智能行业"
+    assert _extract_deliverable_plan("write a detailed AI industry report")[0] == "search for AI industry"
