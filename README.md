@@ -218,6 +218,17 @@ Aoryn 把“像人一样坐在电脑前完成复杂任务”拆成三段能力�
 所以"点击登录"即使真实标签是"登 录 (Login)"也能命中正确元素。逻辑抽成 `_resolve_uia_element_in_window`
 便于单测（`test_executor.py` 用假窗口覆盖精确失败→包含命中、全失败→模糊后代扫描、无匹配则报错）。
 
+**坐标兜底（再加一层保险）。** 元素找到后，点击本身也分级回退，单步只有在所有手段都失败时才报错：
+
+1. `element.invoke()`（程序化调用，最稳）
+2. 控件不支持 invoke → `element.click_input()`
+3. invoke / click_input 都失败（控件被遮挡、不在前台）→ 取元素**矩形中心**，用 pyautogui 按**像素坐标**点击
+4. 元素**完全找不到** → 若动作带有模型给的 `(x, y)`，退回到该坐标点击
+
+第 3、4 层就是"截图/坐标兜底"：UIA 定位或点击失效时，仍能用坐标把这一步点下去。坐标兜底会发
+`coordinate_fallback` 进度事件，便于在 Dashboard 观察何时降级。相关单测覆盖 invoke→click_input→矩形
+中心三级回退、解析失败时用模型坐标、无坐标则报错，以及 `_uia_element_center` 的矩形/`mid_point` 读取。
+
 ## 5. 关键配置
 
 `desktop_agent/config.py` 中的 `AgentConfig` 仍然是统一配置来源。

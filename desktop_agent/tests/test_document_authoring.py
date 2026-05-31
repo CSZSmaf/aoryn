@@ -45,6 +45,27 @@ def test_propose_step_opens_editor_when_not_active():
     assert proposal.completes_subgoal is False
 
 
+def test_propose_step_does_not_write_when_editor_is_only_visible():
+    capability = DocumentAuthoringCapability()
+    subgoal = Subgoal(id="s1", title="write a report in word", goal="write a report in word", goal_type="fill")
+    state = _state("write a report in word", subgoal, notes=["[web] source material"])
+    proposal = capability.propose_step(
+        subgoal=subgoal,
+        world_model=WorldModel(
+            active_app="browser",
+            active_window_title="Microsoft Edge",
+            visible_windows=[{"title": "Document1 - Word", "process_name": "WINWORD.EXE"}],
+        ),
+        execution_state=state,
+        config=_offline_config(),
+        planner=None,
+    )
+    assert proposal is not None
+    assert proposal.actions[0].type == "open_app_if_needed"
+    assert proposal.actions[0].app == "word"
+    assert proposal.completes_subgoal is False
+
+
 def test_propose_step_writes_composed_document_when_editor_active():
     capability = DocumentAuthoringCapability()
     config = _offline_config()

@@ -2752,7 +2752,7 @@ def test_dashboard_previews_task_plan_without_queueing(tmp_path):
     assert len(payload["task_graph"]["subgoals"]) >= 1
     assert payload["plan_health"]["counts"]["total"] == len(payload["task_graph"]["subgoals"])
     assert payload["execution_budget"] == {
-        "task_graph_request_timeout": 12.0,
+        "task_graph_request_timeout": 30.0,
         "max_steps": 6,
         "max_run_seconds": 120.0,
         "pause_after_action": 0.25,

@@ -898,3 +898,130 @@ def test_best_uia_descendant_prefers_best_match():
 def test_resolve_uia_element_raises_when_nothing_matches():
     with pytest.raises(_ExecutionError):
         _resolve_uia_element_in_window(_FakeWindow([_FakeUiaElement("取消")], lambda kwargs: None), selector=None, text="登录")
+
+
+# ----- coordinate safety-net for UIA clicking -----
+
+
+class _Rect:
+    def __init__(self, left, top, right, bottom):
+        self.left, self.top, self.right, self.bottom = left, top, right, bottom
+
+
+class _ClickableElement:
+    """Fake resolved UIA control that records which click mechanism fired and
+    can be configured to fail invoke()/click_input() to exercise the fallback
+    chain (invoke -> click_input -> rectangle-centre pixel click)."""
+
+    def __init__(self, *, has_invoke=True, invoke_ok=True, click_ok=True, rect=None):
+        self._invoke_ok = invoke_ok
+        self._click_ok = click_ok
+        self._rect = rect
+        self.calls = []
+        if has_invoke:
+            self.invoke = self._invoke  # only expose when configured
+
+    def _invoke(self):
+        self.calls.append("invoke")
+        if not self._invoke_ok:
+            raise RuntimeError("cannot invoke")
+
+    def click_input(self):
+        self.calls.append("click_input")
+        if not self._click_ok:
+            raise RuntimeError("cannot click_input")
+
+    def rectangle(self):
+        if self._rect is None:
+            raise RuntimeError("no rectangle")
+        return self._rect
+
+
+class _RecordingGui:
+    def __init__(self):
+        self.clicks = []
+
+    def click(self, x=None, y=None, clicks=1, button="left"):
+        self.clicks.append((x, y))
+
+
+def _patch_uia(monkeypatch, *, element=None, raises=False):
+    if raises:
+        def _resolve(**kwargs):
+            raise _ExecutionError("not found")
+    else:
+        def _resolve(**kwargs):
+            return element
+    monkeypatch.setattr("desktop_agent.executor._resolve_uia_element", _resolve)
+    gui = _RecordingGui()
+    monkeypatch.setattr("desktop_agent.executor._load_pyautogui", lambda: gui)
+    return gui
+
+
+def test_uia_click_prefers_invoke(monkeypatch):
+    el = _ClickableElement(invoke_ok=True)
+    gui = _patch_uia(monkeypatch, element=el)
+    RealDesktopExecutor(AgentConfig(dry_run=False))._uia_invoke(title=None, selector=None, text="登录")
+    assert el.calls == ["invoke"]
+    assert gui.clicks == []  # element invoked directly; no coordinate fallback
+
+
+def test_uia_click_falls_back_to_click_input_when_invoke_fails(monkeypatch):
+    el = _ClickableElement(invoke_ok=False, click_ok=True)
+    gui = _patch_uia(monkeypatch, element=el)
+    RealDesktopExecutor(AgentConfig(dry_run=False))._uia_invoke(title=None, selector=None, text="登录")
+    assert el.calls == ["invoke", "click_input"]
+    assert gui.clicks == []
+
+
+def test_uia_click_falls_back_to_rectangle_centre_coordinate(monkeypatch):
+    el = _ClickableElement(invoke_ok=False, click_ok=False, rect=_Rect(10, 20, 110, 60))
+    gui = _patch_uia(monkeypatch, element=el)
+    RealDesktopExecutor(AgentConfig(dry_run=False))._uia_invoke(title=None, selector=None, text="登录")
+    assert el.calls == ["invoke", "click_input"]
+    assert gui.clicks == [(60, 40)]  # centre of the element rectangle
+
+
+def test_uia_click_uses_model_coordinate_when_resolution_fails(monkeypatch):
+    gui = _patch_uia(monkeypatch, raises=True)
+    RealDesktopExecutor(AgentConfig(dry_run=False))._uia_invoke(
+        title=None, selector=None, text="登录", x=300, y=400
+    )
+    assert gui.clicks == [(300, 400)]
+
+
+def test_uia_click_rejects_negative_model_coordinate(monkeypatch):
+    gui = _patch_uia(monkeypatch, raises=True)
+    with pytest.raises(_ExecutionError):
+        RealDesktopExecutor(AgentConfig(dry_run=False))._uia_invoke(
+            title=None, selector=None, text="登录", x=-1, y=400
+        )
+    assert gui.clicks == []
+
+
+def test_uia_click_raises_when_resolution_fails_and_no_coordinate(monkeypatch):
+    gui = _patch_uia(monkeypatch, raises=True)
+    with pytest.raises(_ExecutionError):
+        RealDesktopExecutor(AgentConfig(dry_run=False))._uia_invoke(title=None, selector=None, text="登录")
+    assert gui.clicks == []
+
+
+def test_uia_element_center_reads_rectangle_and_mid_point():
+    from desktop_agent.executor import _uia_element_center
+
+    assert _uia_element_center(_ClickableElement(rect=_Rect(0, 0, 100, 50))) == (50, 25)
+    assert _uia_element_center(_ClickableElement(rect=_Rect(5, 5, 5, 5))) is None  # degenerate
+    assert _uia_element_center(object()) is None  # no rectangle()
+
+    class _Mid:
+        def mid_point(self):
+            class _P:
+                x, y = 7, 9
+
+            return _P()
+
+    class _El:
+        def rectangle(self):
+            return _Mid()
+
+    assert _uia_element_center(_El()) == (7, 9)

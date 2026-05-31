@@ -561,15 +561,16 @@ class BrowserDOMCapability(CapabilityAdapter):
         if not _research_feeds_downstream_synthesis(execution_state, subgoal):
             return None
         browser = world_model.browser_snapshot or {}
-        has_results = bool(str(browser.get("url") or "").strip() or str(browser.get("text") or "").strip())
         context = execution_state.app_context
         extracted_key = f"research_extracted:{subgoal.id}"
+        query = _research_query(subgoal.title)
 
-        if not has_results:
-            query = _research_query(subgoal.title)
-            if not query:
-                return None
+        if not query:
+            return None
+        if not _browser_snapshot_matches_query(browser, query):
             # Search first, but defer completion so the page can be read afterwards.
+            # A browser can already have an unrelated page open; do not treat that
+            # stale content as research for this subgoal.
             subgoal.completion_evidence = None
             return StepProposal(
                 intent=f"Search the web to research: {query}",
@@ -1564,12 +1565,30 @@ def _document_app_is_active(world_model: WorldModel, app: str) -> bool:
     active_title = _normalize_text(world_model.active_window_title)
     if any(alias in active_title for alias in aliases):
         return True
-    for item in world_model.visible_windows:
-        title = _normalize_text(item.get("title"))
-        process_name = _normalize_text(item.get("process_name"))
-        if any(alias in title or alias in process_name for alias in aliases):
-            return True
     return False
+
+
+def _browser_snapshot_matches_query(browser: dict[str, Any], query: str) -> bool:
+    text = _normalize_text(
+        " ".join(
+            str(browser.get(key) or "")
+            for key in ("url", "title", "text", "extracted_text")
+        )
+    )
+    if not text:
+        return False
+    query_text = _normalize_text(query)
+    if query_text and query_text in text:
+        return True
+    tokens = [
+        token
+        for token in re.findall(r"[0-9a-zA-Z]+|[\u4e00-\u9fff]+", query_text)
+        if len(token) >= 2
+    ]
+    if not tokens:
+        return False
+    required = 1 if len(tokens) <= 2 else 2
+    return sum(1 for token in tokens if token in text) >= required
 
 
 def _failure_key(subgoal_id: str, capability_name: str) -> str:

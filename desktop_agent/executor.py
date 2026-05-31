@@ -212,7 +212,13 @@ class RealDesktopExecutor(ActionExecutor):
             elif action.type == "browser_dom_extract":
                 self._dom_extract(text=action.text, selector=action.selector, target_scope=action.target_scope)
             elif action.type == "uia_invoke":
-                self._uia_invoke(title=action.title, selector=action.selector, text=action.text)
+                self._uia_invoke(
+                    title=action.title,
+                    selector=action.selector,
+                    text=action.text,
+                    x=action.x,
+                    y=action.y,
+                )
             elif action.type == "uia_set_value":
                 self._uia_set_value(title=action.title, selector=action.selector, text=action.text or "")
             elif action.type == "uia_select":
@@ -566,12 +572,91 @@ class RealDesktopExecutor(ActionExecutor):
         extracted = session.extract(text=text, selector=selector)
         self._last_dom_extract = extracted
 
-    def _uia_invoke(self, *, title: str | None, selector: str | None, text: str | None) -> None:
-        element = _resolve_uia_element(title=title, selector=selector, text=text)
-        if hasattr(element, "invoke"):
-            element.invoke()
+    def _uia_invoke(
+        self,
+        *,
+        title: str | None,
+        selector: str | None,
+        text: str | None,
+        x: int | None = None,
+        y: int | None = None,
+    ) -> None:
+        """Click a control by accessibility label, with a coordinate safety net.
+
+        Attempts, each more forgiving than the last, so a single step keeps
+        working when the easy path is unavailable:
+          1. resolve the element (robust label matching) and ``invoke()`` it;
+          2. if that control can't be programmatically invoked, ``click_input()``;
+          3. if the click itself fails (occluded / out-of-tree control), click
+             the centre of the element's on-screen rectangle by pixel coordinate;
+          4. if the element can't be resolved at all, fall back to the model-
+             provided ``(x, y)`` coordinate when one was supplied.
+        The whole step only fails once every layer is exhausted."""
+
+        try:
+            element = _resolve_uia_element(title=title, selector=selector, text=text)
+        except ExecutionError:
+            if self._coordinate_click_fallback(
+                x, y, reason=f"UIA could not locate {text or selector!r}; clicking model coordinate"
+            ):
+                return
+            raise
+        if self._click_resolved_uia_element(element):
             return
-        element.click_input()
+        if self._coordinate_click_fallback(
+            x, y, reason=f"UIA found {text or selector!r} but could not click it; using model coordinate"
+        ):
+            return
+        raise ExecutionError(
+            f"Resolved a UI Automation element for selector={selector!r} text={text!r} but could not click it."
+        )
+
+    def _click_resolved_uia_element(self, element) -> bool:
+        """Try the element's own ``invoke()``/``click_input()``, then a pixel
+        click at the centre of its rectangle. Returns True on the first that
+        succeeds, False if none did (so the caller can try coordinates)."""
+        if hasattr(element, "invoke"):
+            try:
+                element.invoke()
+                return True
+            except Exception:
+                pass
+        try:
+            element.click_input()
+            return True
+        except Exception:
+            pass
+        center = _uia_element_center(element)
+        if center is not None:
+            return self._coordinate_click_fallback(
+                center[0],
+                center[1],
+                reason="invoke/click_input failed; clicking element rectangle centre",
+            )
+        return False
+
+    def _coordinate_click_fallback(self, x: int | None, y: int | None, *, reason: str) -> bool:
+        """Last-resort pixel click. Returns False (no-op) when coordinates are
+        missing or invalid, so callers can decide whether to raise."""
+        try:
+            cx = int(x)  # type: ignore[arg-type]
+            cy = int(y)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return False
+        if cx < 0 or cy < 0:
+            return False
+        gui = _load_pyautogui()
+        self._emit_action_progress(
+            {
+                "event": "coordinate_fallback",
+                "x": cx,
+                "y": cy,
+                "reason": str(reason),
+                "updated_at": time.time(),
+            }
+        )
+        gui.click(cx, cy)
+        return True
 
     def _uia_set_value(self, *, title: str | None, selector: str | None, text: str) -> None:
         element = _resolve_uia_element(title=title, selector=selector, text=None)
@@ -1517,6 +1602,37 @@ def _best_uia_descendant(window, target: str):
         return best.wrapper_object() if hasattr(best, "wrapper_object") else best
     except Exception:
         return best
+
+
+def _uia_element_center(element) -> tuple[int, int] | None:
+    """Best-effort centre point of a resolved UIA element's bounding rectangle,
+    so a click can fall back to pixel coordinates when ``invoke()`` /
+    ``click_input()`` are unavailable. Returns None when no usable rectangle
+    can be read."""
+    rect_getter = getattr(element, "rectangle", None)
+    if not callable(rect_getter):
+        return None
+    try:
+        rect = rect_getter()
+    except Exception:
+        return None
+    mid = getattr(rect, "mid_point", None)
+    if callable(mid):
+        try:
+            point = mid()
+            return int(point.x), int(point.y)
+        except Exception:
+            pass
+    try:
+        left = int(rect.left)
+        top = int(rect.top)
+        right = int(rect.right)
+        bottom = int(rect.bottom)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if right <= left or bottom <= top:
+        return None
+    return (left + right) // 2, (top + bottom) // 2
 
 
 def _normalize_uia_label(value: str) -> str:

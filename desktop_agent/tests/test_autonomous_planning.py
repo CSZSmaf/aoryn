@@ -269,6 +269,43 @@ def test_browser_research_searches_then_extracts_when_feeding_author():
     assert step2.completes_subgoal is True
 
 
+def test_browser_research_ignores_unrelated_existing_page():
+    cap = BrowserDOMCapability()
+    config = AgentConfig()
+    research = Subgoal(
+        id="subgoal_01",
+        title="search electric vehicles",
+        goal_type="navigate",
+        status="in_progress",
+        capability_preference="browser_dom",
+    )
+    author = Subgoal(
+        id="subgoal_02",
+        title="write electric vehicles report",
+        goal_type="fill",
+        status="pending",
+        capability_preference="document_authoring",
+        prerequisites=["subgoal_01"],
+    )
+    graph = TaskGraph(
+        task="write an electric vehicles report",
+        subgoals=[research, author],
+        dependencies={"subgoal_01": [], "subgoal_02": ["subgoal_01"]},
+    )
+    state = ExecutionState(task=graph.task, run_id="r", task_graph=graph)
+    old_page = WorldModel(
+        browser_snapshot={
+            "url": "https://example.com/recipes",
+            "title": "Dinner recipes",
+            "text": "Pasta and soup ideas",
+        }
+    )
+    step = cap.propose_step(subgoal=research, world_model=old_page, execution_state=state, config=config, planner=None)
+    assert step is not None
+    assert step.actions[0].type == "browser_search"
+    assert step.completes_subgoal is False
+
+
 def test_browser_research_skips_deep_extract_for_standalone_search():
     cap = BrowserDOMCapability()
     config = AgentConfig()
