@@ -204,6 +204,20 @@ Aoryn 把“像人一样坐在电脑前完成复杂任务”拆成三段能力�
 - `document_default_app`：未点名编辑器时的默认目标（默认 `word`）。
 - `max_document_length`：单次写入的最大字符数。
 
+### 4.7 执行层：稳健的按步骤点击（手）
+
+桌面应用的点击优先走 UI Automation（`uia_invoke`/`uia_set_value` 等，按可见标签定位），比 VLM 猜坐标
+准得多。`executor._resolve_uia_element` 不再只做**精确标签匹配**——以前标签差一点（`登 录` vs `登录`、
+`OK (确定)`、中英混排、部分文字）就解析失败、整步报错。现在按一组策略**依次回退**：
+
+1. 显式 selector（`auto_id`/`control_type`/`class_name` 等）
+2. 精确标签 → 不区分大小写的**包含匹配** → pywinauto `best_match` 模糊
+3. 按控件类型（Button/MenuItem/Hyperlink/ListItem/TabItem/CheckBox…）+ 包含匹配
+4. 兜底：遍历后代控件，按归一化标签（去空格、去符号）做**模糊评分**挑最佳
+
+所以"点击登录"即使真实标签是"登 录 (Login)"也能命中正确元素。逻辑抽成 `_resolve_uia_element_in_window`
+便于单测（`test_executor.py` 用假窗口覆盖精确失败→包含命中、全失败→模糊后代扫描、无匹配则报错）。
+
 ## 5. 关键配置
 
 `desktop_agent/config.py` 中的 `AgentConfig` 仍然是统一配置来源。

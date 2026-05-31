@@ -796,3 +796,105 @@ def test_find_known_blockers_matches_explicit_cookie_and_password_titles():
     blockers = _find_known_blockers(environment)
 
     assert [item.title for item in blockers] == ["Cookie consent", "Save your password"]
+
+
+# ----- robust UIA element resolution for step-by-step clicking -----
+
+from desktop_agent.executor import (  # noqa: E402
+    ExecutionError as _ExecutionError,
+    _best_uia_descendant,
+    _resolve_uia_element_in_window,
+    _uia_label_score,
+    _uia_resolution_strategies,
+)
+
+
+class _FakeUiaElement:
+    def __init__(self, name):
+        self._name = name
+
+    def window_text(self):
+        return self._name
+
+    def wrapper_object(self):
+        return self
+
+    def __repr__(self):
+        return f"El({self._name!r})"
+
+
+class _FakeSpec:
+    def __init__(self, element):
+        self._element = element
+
+    def wrapper_object(self):
+        if self._element is None:
+            raise RuntimeError("element not found")
+        return self._element
+
+
+class _FakeWindow:
+    def __init__(self, controls, rule):
+        self._controls = controls
+        self._rule = rule
+
+    def child_window(self, **kwargs):
+        return _FakeSpec(self._rule(kwargs))
+
+    def descendants(self):
+        return self._controls
+
+    def wrapper_object(self):
+        return self
+
+
+def test_uia_resolution_strategies_order_and_dedup():
+    strategies = _uia_resolution_strategies({}, "登录")
+    # exact label first, then a case-insensitive contains, then fuzzy best_match
+    assert strategies[0] == {"title": "登录"}
+    assert strategies[1] == {"title_re": "(?i).*登录.*"}
+    assert {"best_match": "登录"} in strategies
+    assert any(s.get("control_type") == "Button" for s in strategies)
+    # an explicit selector query is tried first
+    assert _uia_resolution_strategies({"auto_id": "loginBtn"}, "登录")[0] == {"auto_id": "loginBtn"}
+
+
+def test_uia_label_score_handles_spacing_and_mixed_language():
+    from desktop_agent.executor import _normalize_uia_label
+    assert _normalize_uia_label("登 录 (Login)") == "登录login"
+    assert _uia_label_score("登录", "登录login") == 70  # target contained in candidate
+    assert _uia_label_score("登录", "取消") == 0
+
+
+def test_resolve_uia_element_falls_back_from_exact_to_contains():
+    login = _FakeUiaElement("登 录 (Login)")
+    cancel = _FakeUiaElement("取消")
+
+    def rule(kwargs):
+        if kwargs.get("title") == "登录":  # exact match fails (real label has spaces)
+            return None
+        if "title_re" in kwargs and "登录" in kwargs["title_re"]:
+            return login
+        return None
+
+    resolved = _resolve_uia_element_in_window(_FakeWindow([cancel, login], rule), selector=None, text="登录")
+    assert resolved is login
+
+
+def test_resolve_uia_element_uses_fuzzy_descendant_scan_as_last_resort():
+    login = _FakeUiaElement("登 录 (Login)")
+    cancel = _FakeUiaElement("取消")
+    # every child_window strategy fails -> scan descendants and fuzzy-match
+    resolved = _resolve_uia_element_in_window(_FakeWindow([cancel, login], lambda kwargs: None), selector=None, text="登录")
+    assert resolved is login
+
+
+def test_best_uia_descendant_prefers_best_match():
+    target = _FakeUiaElement("提交订单")
+    other = _FakeUiaElement("返回")
+    assert _best_uia_descendant(_FakeWindow([other, target], lambda kwargs: None), "提交") is target
+
+
+def test_resolve_uia_element_raises_when_nothing_matches():
+    with pytest.raises(_ExecutionError):
+        _resolve_uia_element_in_window(_FakeWindow([_FakeUiaElement("取消")], lambda kwargs: None), selector=None, text="登录")

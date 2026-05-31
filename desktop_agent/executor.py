@@ -1417,7 +1417,6 @@ def _resolve_uia_element(*, title: str | None, selector: str | None, text: str |
         raise ExecutionError("pywinauto is required for Windows UI Automation actions.") from exc
 
     desktop = Desktop(backend="uia")
-    window = None
     if (title or "").strip():
         window = desktop.window(title_re=re.escape(str(title).strip()))
     else:
@@ -1426,17 +1425,116 @@ def _resolve_uia_element(*, title: str | None, selector: str | None, text: str |
         except Exception as exc:  # pragma: no cover - runtime dependent
             raise ExecutionError("Could not resolve the active desktop window for UI Automation.") from exc
 
+    return _resolve_uia_element_in_window(window, selector=selector, text=text)
+
+
+def _resolve_uia_element_in_window(window, *, selector: str | None, text: str | None):
+    """Resolve a control by trying several matching strategies in order, so a
+    slightly-off label (extra spaces, mixed CN/EN, partial text) still clicks the
+    right element instead of failing the whole step. Pure of the Desktop lookup so
+    it can be unit-tested with a fake window."""
+
     query = _parse_uia_selector(selector)
-    if text and "title_re" not in query and "best_match" not in query and "name" not in query:
-        query["title_re"] = re.escape(text.strip())
-    try:
-        if query:
-            return window.child_window(**query).wrapper_object()
+    target = str(text or "").strip()
+    strategies = _uia_resolution_strategies(query, target)
+    if not strategies:
         return window.wrapper_object()
-    except Exception as exc:  # pragma: no cover - runtime dependent
-        raise ExecutionError(
-            f"Could not resolve a UI Automation element for selector={selector!r} text={text!r}."
-        ) from exc
+
+    for strategy in strategies:
+        try:
+            element = window.child_window(**strategy).wrapper_object()
+        except Exception:
+            continue
+        if element is not None:
+            return element
+
+    if target:
+        fuzzy = _best_uia_descendant(window, target)
+        if fuzzy is not None:
+            return fuzzy
+
+    raise ExecutionError(
+        f"Could not resolve a UI Automation element for selector={selector!r} text={text!r}."
+    )
+
+
+def _uia_resolution_strategies(query: dict[str, str], target: str) -> list[dict[str, str]]:
+    strategies: list[dict[str, str]] = []
+    if query:
+        strategies.append(dict(query))
+    if target:
+        escaped = re.escape(target)
+        contains = f"(?i).*{escaped}.*"
+        strategies.append({"title": target})  # exact label
+        strategies.append({"title_re": contains})  # case-insensitive contains
+        strategies.append({"best_match": target})  # pywinauto fuzzy match
+        for control_type in (
+            "Button",
+            "MenuItem",
+            "Hyperlink",
+            "ListItem",
+            "TabItem",
+            "CheckBox",
+            "RadioButton",
+            "SplitButton",
+            "Text",
+        ):
+            strategies.append({"control_type": control_type, "title_re": contains})
+    # de-duplicate while keeping order
+    seen: set[tuple] = set()
+    ordered: list[dict[str, str]] = []
+    for strategy in strategies:
+        key = tuple(sorted(strategy.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(strategy)
+    return ordered
+
+
+def _best_uia_descendant(window, target: str):
+    try:
+        descendants = list(window.descendants())
+    except Exception:
+        return None
+    normalized_target = _normalize_uia_label(target)
+    if not normalized_target:
+        return None
+    best = None
+    best_score = 0
+    for element in descendants:
+        try:
+            name = str(element.window_text() or "").strip()
+        except Exception:
+            continue
+        score = _uia_label_score(normalized_target, _normalize_uia_label(name))
+        if score > best_score:
+            best_score = score
+            best = element
+    if best is None or best_score <= 0:
+        return None
+    try:
+        return best.wrapper_object() if hasattr(best, "wrapper_object") else best
+    except Exception:
+        return best
+
+
+def _normalize_uia_label(value: str) -> str:
+    lowered = str(value or "").lower()
+    return re.sub(r"[^0-9a-z一-鿿]+", "", lowered)
+
+
+def _uia_label_score(target: str, candidate: str) -> int:
+    if not target or not candidate:
+        return 0
+    if target == candidate:
+        return 100
+    if target in candidate:
+        return 70
+    if candidate in target:
+        return 40
+    shared = set(target) & set(candidate)
+    return len(shared) if len(shared) >= max(2, len(target) // 2) else 0
 
 
 def _parse_uia_selector(selector: str | None) -> dict[str, str]:
