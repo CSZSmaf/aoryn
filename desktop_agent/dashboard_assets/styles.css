@@ -7996,3 +7996,313 @@ body[data-sidebar-collapsed="true"] .app-shell {
     linear-gradient(currentColor, currentColor) left center / 15px 1.5px no-repeat,
     linear-gradient(currentColor, currentColor) left bottom / 15px 1.5px no-repeat;
 }
+
+/* ============================================================
+   claudedesign refresh — "Atelier" skin (authoritative final layer)
+   Ports the claudedesign reference look (warm paper, terracotta
+   accent, Geist typography, hairline borders, segmented controls,
+   flat editorial surfaces) onto the live dashboard DOM. Appended
+   last so it wins the cascade over the earlier stacked refreshes.
+   ============================================================ */
+:root {
+  color-scheme: light;
+
+  /* layout contract (kept on the authoritative :root) */
+  --sidebar-open: 260px;
+  --sidebar-collapsed: 84px;
+  --content-max: 1400px;
+  --composer-max: 1240px;
+  --reading-max: 860px;
+
+  /* core palette */
+  --paper: oklch(0.986 0.003 75);
+  --paper-2: oklch(0.972 0.004 75);
+  --paper-3: oklch(0.951 0.005 72);
+  --ink: oklch(0.23 0.012 60);
+  --ink-soft: oklch(0.42 0.01 60);
+  --ink-muted: oklch(0.56 0.008 62);
+  --ink-faint: oklch(0.72 0.006 66);
+  --hair: oklch(0.905 0.005 72);
+  --hair-2: oklch(0.93 0.004 74);
+  --accent: oklch(0.605 0.12 47);
+  --accent-strong: oklch(0.53 0.13 45);
+  --accent-soft: oklch(0.95 0.03 62);
+  --good: oklch(0.6 0.1 150);
+  --warn: oklch(0.66 0.13 82);
+  --danger: oklch(0.57 0.175 25);
+
+  /* aliases onto the names existing components already consume */
+  --bg: oklch(0.935 0.004 75);
+  --bg-soft: var(--paper-2);
+  --bg-muted: var(--paper-3);
+  --surface: var(--paper);
+  --surface-soft: var(--paper-2);
+  --surface-strong: var(--paper);
+  --line: var(--hair);
+  --line-strong: oklch(0.85 0.006 70);
+  --warn-soft: oklch(0.95 0.05 82);
+  --danger-soft: oklch(0.95 0.05 25);
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-soft);
+  --glass-blur: none;
+
+  --shadow-1: 0 1px 0 oklch(0.2 0.01 60 / 0.04), 0 0 0 0.5px oklch(0.2 0.01 60 / 0.06);
+  --shadow-2: 0 10px 30px -12px oklch(0.2 0.01 60 / 0.18), 0 1px 2px oklch(0.2 0.01 60 / 0.06);
+  --shadow-soft: var(--shadow-1);
+  --shadow: var(--shadow-2);
+
+  --font-ui: "Geist", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-display: var(--font-ui);
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  letter-spacing: -0.005em;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---- shell ---- */
+.app-shell { background: var(--bg); color: var(--ink); }
+.main-shell, .surface, .chat-surface, .developer-surface { background: var(--paper); }
+
+/* ---- sidebar ---- */
+.history-sidebar { background: var(--paper-2); border-right: 1px solid var(--hair); }
+.sidebar-brand { border-radius: 9px; gap: 10px; }
+.sidebar-brand:hover { background: var(--paper-3); }
+.brand-mark { width: 26px; height: 26px; border-radius: 7px; overflow: hidden; }
+.brand-wordmark { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.sidebar-brand__copy span { color: var(--ink-faint); font-size: 11px; }
+.new-task-button {
+  height: 36px;
+  border-radius: 9px;
+  border: 1px solid var(--hair);
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 500;
+  font-size: 13px;
+  box-shadow: var(--shadow-1);
+}
+.new-task-button:hover { background: var(--paper-3); border-color: var(--ink-faint); }
+.sidebar-section-head p {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+.sidebar-clear, .sidebar-refresh { color: var(--ink-muted); border-radius: 7px; border: 1px solid transparent; background: transparent; }
+.sidebar-clear:hover, .sidebar-refresh:hover { background: var(--paper-3); color: var(--ink); }
+.history-item { border-radius: 8px; border: 1px solid transparent; background: transparent; padding: 9px 11px; }
+.history-item:hover { background: var(--paper-3); }
+.history-item.active { background: var(--paper); box-shadow: var(--shadow-1); border-color: transparent; }
+.history-item__title { font-size: 12.5px; color: var(--ink); font-weight: 500; line-height: 1.35; letter-spacing: -0.005em; }
+.history-item__badge {
+  border-radius: 999px;
+  background: var(--paper-3);
+  color: var(--ink-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+}
+.history-item__badge--agent { background: var(--accent-soft); color: var(--accent); }
+.history-item__badge--chat { background: var(--paper-3); color: var(--ink-muted); }
+.sidebar-skeleton { background: var(--paper-3); border-radius: 8px; opacity: 0.7; }
+
+/* ---- topbar ---- */
+.topbar { border-bottom: 1px solid var(--hair); background: var(--paper); }
+.topbar-title h1 { font-family: var(--font-display); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.topbar-title p { font-size: 11.5px; color: var(--ink-muted); }
+.mode-switch { background: var(--paper-2); border: 1px solid var(--hair); border-radius: 9px; padding: 2px; gap: 1px; box-shadow: none; }
+.mode-switch__button { border: none; background: transparent; color: var(--ink-muted); border-radius: 7px; }
+.mode-switch__button:hover { color: var(--ink); background: transparent; }
+.mode-switch__button.active { background: var(--paper); color: var(--ink); box-shadow: var(--shadow-1); }
+.settings-button, .mobile-menu-button, .topbar-actions .icon-action-button {
+  color: var(--ink-muted);
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+}
+.settings-button:hover, .mobile-menu-button:hover, .topbar-actions .icon-action-button:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+  border-color: var(--hair);
+}
+.connection-chip {
+  border: 1px solid var(--hair);
+  background: var(--paper-2);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.connection-chip__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
+.connection-chip--ok { color: var(--good); border-color: color-mix(in oklab, var(--good) 35%, var(--hair)); }
+.connection-chip--ok .connection-chip__dot { background: var(--good); box-shadow: 0 0 0 3px color-mix(in oklab, var(--good) 22%, transparent); }
+.connection-chip--warn { color: var(--warn); }
+.connection-chip--warn .connection-chip__dot { background: var(--warn); }
+
+/* ---- composer ---- */
+.composer-wrap { background: linear-gradient(to top, var(--paper) 72%, transparent); }
+.composer {
+  border: 1px solid var(--hair);
+  border-radius: 14px;
+  background: var(--paper-2);
+  box-shadow: var(--shadow-1);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.composer:focus-within { border-color: var(--ink-faint); box-shadow: var(--shadow-2); }
+.composer-field textarea, .composer textarea {
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+}
+.composer-field textarea::placeholder, .composer textarea::placeholder { color: var(--ink-faint); }
+.composer-hint { color: var(--ink-faint); font-size: 11px; }
+
+/* ---- buttons ---- */
+.primary-button {
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  font-weight: 500;
+  box-shadow: none;
+}
+.primary-button:hover:not(:disabled) { opacity: 0.9; background: var(--ink); }
+.secondary-button {
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  font-weight: 500;
+  box-shadow: none;
+}
+.secondary-button:hover:not(:disabled) { background: var(--paper-3); border-color: var(--ink-faint); color: var(--ink); }
+.composer-icon-button { width: 32px; height: 32px; min-width: 32px; padding: 0; border-radius: 9px; }
+.composer-suggestions .suggestion, .composer-suggestion {
+  border: 1px solid var(--hair);
+  background: var(--paper);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+.composer-suggestions .suggestion:hover, .composer-suggestion:hover { background: var(--paper-2); border-color: var(--ink-faint); color: var(--ink); }
+
+/* ---- welcome ---- */
+.chat-welcome .brand-wordmark { color: var(--accent); font-family: var(--font-display); letter-spacing: 0.04em; text-transform: none; font-weight: 600; }
+.chat-welcome h2 { font-family: var(--font-display); font-size: 28px; font-weight: 500; letter-spacing: -0.025em; color: var(--ink); }
+.chat-welcome > p { color: var(--ink-muted); }
+.welcome-card { border: 1px solid var(--hair); background: var(--paper); border-radius: 14px; box-shadow: var(--shadow-1); }
+.welcome-card__eyebrow { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); font-weight: 500; }
+.welcome-card__badge { background: var(--accent-soft); color: var(--accent); border-radius: 999px; font-family: var(--font-mono); font-size: 10.5px; }
+.welcome-card__item { border-top: 1px solid var(--hair-2); color: var(--ink-soft); }
+
+/* ---- chat messages ---- */
+.message-bubble--user { background: var(--ink); color: var(--paper); border-radius: 14px; }
+.message--assistant .message-bubble { background: transparent; }
+.message-bubble__label { color: var(--ink-faint); }
+.message-meta, .message-actions__meta { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.message-action-icon-button { color: var(--ink-muted); border-radius: 7px; }
+.message-action-icon-button:hover { background: var(--paper-2); color: var(--ink); }
+
+/* ---- developer surface ---- */
+.developer-header h2 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+.developer-header p { color: var(--ink-muted); }
+.developer-panel { border: 1px solid var(--hair); background: var(--paper); border-radius: 14px; box-shadow: var(--shadow-1); }
+.panel-head h3 { font-family: var(--font-display); font-weight: 600; color: var(--ink); }
+.panel-head p { color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.08em; font-size: 10.5px; font-weight: 500; }
+.developer-note { color: var(--ink-muted); }
+.payload-view {
+  font-family: var(--font-mono);
+  background: var(--paper-2);
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.timeline-item { border: 1px solid var(--hair); border-radius: 10px; background: var(--paper); }
+.timeline-item--live { border-color: var(--accent); }
+
+/* ---- modals & drawers ---- */
+.modal-backdrop, .drawer-backdrop, .lightbox-backdrop { background: oklch(0.18 0.01 60 / 0.3); backdrop-filter: blur(3px); }
+.settings-modal, .side-drawer, .help-modal, .about-modal, .inspector-drawer {
+  background: var(--paper);
+  border-left: 1px solid var(--hair);
+  box-shadow: var(--shadow-2);
+}
+.drawer-head { border-bottom: 1px solid var(--hair); }
+.drawer-head h2 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.drawer-description { color: var(--ink-muted); }
+.drawer-close { color: var(--ink-muted); border-radius: 7px; background: transparent; border: 1px solid transparent; }
+.drawer-close:hover { background: var(--paper-2); color: var(--ink); border-color: var(--hair); }
+.settings-section { border-top: 1px solid var(--hair-2); }
+.section-head h3 { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); font-weight: 500; }
+.settings-avatar { background: var(--accent-soft); color: var(--accent); }
+.settings-version { color: var(--ink-faint); font-family: var(--font-mono); }
+
+/* fields */
+.field > span, .field-head span, .toggle-field > span strong { color: var(--ink); }
+.field > span { font-size: 12px; color: var(--ink-soft); font-weight: 500; }
+.field input, .field select, .field textarea, .settings-modal input, .settings-modal select {
+  border: 1px solid var(--hair);
+  background: var(--paper-2);
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 13px;
+}
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--ink-faint); outline: none; box-shadow: none; }
+.field-note { color: var(--ink-faint); }
+.toggle-field strong { color: var(--ink); font-weight: 500; }
+.toggle-field small { color: var(--ink-faint); }
+
+/* switch — flat Atelier pill */
+.toggle-field .switch i {
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--hair);
+  border: none;
+  box-shadow: none;
+  transition: background 0.15s;
+}
+.toggle-field .switch i::before { display: none; }
+.toggle-field .switch i::after {
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: var(--paper);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.3);
+}
+.toggle-field .switch input:checked + i { background: var(--accent); }
+.toggle-field .switch input:checked + i::after { transform: translateX(16px); }
+
+/* ---- inspector tabs ---- */
+.detail-tabs { border-bottom: 1px solid var(--hair); }
+.detail-tab { color: var(--ink-muted); border-radius: 7px; border: none; background: transparent; font-weight: 500; }
+.detail-tab:hover { color: var(--ink); }
+.detail-tab.active { background: var(--paper-2); color: var(--ink); box-shadow: var(--shadow-1); }
+.empty-state { color: var(--ink-faint); }
+
+/* ---- scrollbars ---- */
+.sidebar-run-list::-webkit-scrollbar, .chat-scroll::-webkit-scrollbar, .settings-modal__content::-webkit-scrollbar,
+.help-modal__content::-webkit-scrollbar, .detail-shell::-webkit-scrollbar, .developer-surface::-webkit-scrollbar {
+  width: 11px;
+}
+.sidebar-run-list::-webkit-scrollbar-thumb, .chat-scroll::-webkit-scrollbar-thumb, .settings-modal__content::-webkit-scrollbar-thumb,
+.help-modal__content::-webkit-scrollbar-thumb, .detail-shell::-webkit-scrollbar-thumb, .developer-surface::-webkit-scrollbar-thumb {
+  background: var(--hair);
+  border: 3px solid var(--paper);
+  border-radius: 999px;
+}
