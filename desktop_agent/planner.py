@@ -987,7 +987,7 @@ class TaskGraphPlanner:
             subgoal.goal_type = _normalize_model_goal_type(raw_item.get("goal_type"), fallback=subgoal.goal_type)
             subgoal.success_condition = _optional_str(raw_item.get("success_condition")) or subgoal.success_condition
             subgoal.capability_preference = (
-                _optional_str(raw_item.get("capability_preference")) or subgoal.capability_preference
+                _coerce_model_capability_preference(raw_item.get("capability_preference")) or subgoal.capability_preference
             )
             subgoal.risk_level = _model_subgoal_risk(raw_item, fallback=subgoal.risk_level)
             if isinstance(raw_item.get("completion_evidence"), dict):
@@ -1239,7 +1239,7 @@ class TaskGraphPlanner:
                 continue
             subgoal.goal_type = _normalize_model_goal_type(raw_item.get("goal_type"), fallback=subgoal.goal_type)
             subgoal.success_condition = _optional_str(raw_item.get("success_condition")) or subgoal.success_condition
-            subgoal.capability_preference = _optional_str(raw_item.get("capability_preference")) or subgoal.capability_preference
+            subgoal.capability_preference = _coerce_model_capability_preference(raw_item.get("capability_preference")) or subgoal.capability_preference
             subgoal.risk_level = _model_subgoal_risk(raw_item, fallback=subgoal.risk_level)
             if isinstance(raw_item.get("completion_evidence"), dict):
                 subgoal.completion_evidence = dict(raw_item["completion_evidence"])
@@ -1707,6 +1707,18 @@ def _max_risk(left: str, right: str) -> str:
     left_normalized = _normalize_model_risk(left, fallback="low")
     right_normalized = _normalize_model_risk(right, fallback="low")
     return left_normalized if order[left_normalized] >= order[right_normalized] else right_normalized
+
+
+def _coerce_model_capability_preference(value: Any) -> str | None:
+    # Models sometimes return capability_preference as a list (e.g. ["browser_dom",
+    # "clipboard"]); take the first concrete name instead of stringifying the list.
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            text = _optional_str(item)
+            if text:
+                return text
+        return None
+    return _optional_str(value)
 
 
 def _normalize_model_goal_type(value: Any, *, fallback: str) -> str:

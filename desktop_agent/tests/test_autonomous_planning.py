@@ -300,3 +300,12 @@ def test_deliverable_topic_strips_descriptive_words():
     assert _extract_deliverable_plan("帮我写一份关于电动汽车未来发展趋势的简短报告")[0] == "搜索电动汽车未来发展趋势"
     assert _extract_deliverable_plan("写一份详细的人工智能行业报告")[0] == "搜索人工智能行业"
     assert _extract_deliverable_plan("write a detailed AI industry report")[0] == "search for AI industry"
+
+
+def test_model_capability_preference_list_is_normalized():
+    from desktop_agent.planner import _coerce_model_capability_preference
+    # models sometimes return a list; take the first concrete capability name
+    assert _coerce_model_capability_preference(["browser_dom", "clipboard"]) == "browser_dom"
+    assert _coerce_model_capability_preference("document_authoring") == "document_authoring"
+    assert _coerce_model_capability_preference([]) is None
+    assert _coerce_model_capability_preference(None) is None
