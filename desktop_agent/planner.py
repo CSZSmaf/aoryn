@@ -1630,13 +1630,44 @@ def _should_use_structured_task_graph(
         return False
     if mode == "model":
         return True
+    # hybrid: the model is the primary planner. Use it for any task that is not a
+    # trivial, deterministic single action — the model (not keyword heuristics)
+    # decides the plan. Heuristic decomposition remains only as the offline fallback.
     sub_goals = _extract_semantic_sub_goals(task, browser_command, intent) or _extract_task_sub_goals(task, browser_command)
-    return (
-        _intent_requires_model_reasoning(intent)
-        or intent.confidence < 0.72
-        or len(sub_goals) >= 3
-        or intent.task_type in {"cross_app_workflow", "multi_step_workflow", "research_summary"}
+    return not _is_trivial_single_action_task(
+        task=task,
+        browser_command=browser_command,
+        intent=intent,
+        sub_goals=sub_goals,
     )
+
+
+def _is_trivial_single_action_task(
+    *,
+    task: str,
+    browser_command: WebCommand | None,
+    intent: TaskIntent,
+    sub_goals: list[str],
+) -> bool:
+    """A deterministic single action the rule/heuristic path already handles well
+    (open an app, one search, one navigation, a calculation). These skip model
+    planning for speed; everything else is planned by the model."""
+
+    if intent.requires_clarification:
+        return False
+    if browser_command is not None:
+        # A plain search/open/launch/shopping command is deterministic; a browser
+        # command that carries follow-up steps is a small workflow worth model help.
+        return not browser_command.follow_up_steps
+    if _contains_multi_step_markers(task):
+        return False
+    if len(sub_goals) > 1:
+        return False
+    try:
+        RulePlanner().plan(task, screenshot_path=None, history=[])
+        return True
+    except PlannerError:
+        return False
 
 
 def _task_graph_model_endpoint_available(config: AgentConfig) -> bool:

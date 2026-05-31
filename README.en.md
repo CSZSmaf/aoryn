@@ -238,11 +238,20 @@ is only marked complete once the write action actually executes into the editor 
 does not count), which prevents "opened Word, therefore done" false completions. For fully hands-off runs
 that also skip confirmation on medium/high-risk steps, set `desktop_autonomy_mode` to `autonomous`.
 
-### 4.6 Autonomous planning, part two: model-driven adaptive re-planning
+### 4.6 Autonomous planning, part two: model-first initial planning + adaptive re-planning
 
-The decomposition above is still heuristic (it reads intent from the wording). True "guide the agent to
-plan" means letting the **model reflect on and revise the plan during execution**: once the agent has
-gathered new information, `orchestrator.reflect_on_plan` -> `planner.reflect_on_plan` hands the model the
+**Model-first initial planning.** The hybrid router in `_should_use_structured_task_graph` no longer gates
+on keyword-derived `task_type`/confidence — it now sends **every non-trivial task to the model**. Only
+deterministic single actions (open an app, one search/visit, a calculation, or a browser command) take the
+fast rule/heuristic path; everything else — multi-step tasks, deliverables, and **novel tasks with no
+keyword match at all** (e.g. "compare three note apps and recommend one") — is planned by the model. The
+keyword heuristics (`_extract_deliverable_plan`, etc.) are therefore demoted to an offline fallback plus
+capability hints; they no longer decide whether the model is used. With no model endpoint it falls back to
+heuristics (deterministic degradation).
+
+On top of that, true "guide the agent to plan" means letting the **model reflect on and revise the plan
+during execution**: once the agent has gathered new information, `orchestrator.reflect_on_plan` ->
+`planner.reflect_on_plan` hands the model the
 **goal + completed steps + remaining steps + what has been learned** (research notes / facts / world model)
 and asks whether the remaining plan still reaches the goal, then **inserts/adjusts the remaining subgoals**
 accordingly (e.g. gather a missing detail before writing).

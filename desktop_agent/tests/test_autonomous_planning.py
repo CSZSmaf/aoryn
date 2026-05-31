@@ -198,3 +198,42 @@ def test_controller_reflection_trigger_gating():
     # not a research_summary goal -> no reflection
     state.task_graph.intent = {"task_type": "information_search"}
     assert agent._should_reflect_after_subgoal(execution_state=state, subgoal=research, step_proposal=browser_step) is False
+
+
+# ----- model-first initial planning routing -----
+
+from desktop_agent.planner import _should_use_structured_task_graph  # noqa: E402
+from desktop_agent.web_agent import WebAgent  # noqa: E402
+
+
+def _routes_to_model(task, config):
+    bc = WebAgent().parse(task)
+    intent = classify_task_intent(task, browser_command=bc)
+    return _should_use_structured_task_graph(config=config, task=task, intent=intent, browser_command=bc)
+
+
+def test_model_first_routes_nontrivial_tasks_to_model(monkeypatch):
+    monkeypatch.setattr(planner_module, "_task_graph_model_endpoint_available", lambda config: True)
+    config = AgentConfig()  # hybrid
+    # trivial, deterministic single actions stay on the fast heuristic path
+    for task in ["open notepad", "calculate 2+2", "search for OpenAI", "visit openai.com", "shop for pants on amazon"]:
+        assert _routes_to_model(task, config) is False, task
+    # non-trivial tasks go to the model — including novel ones with no keyword match
+    for task in [
+        "open notepad and type demo",
+        "search openai.com and click login",
+        "写一份关于电动汽车的报告",
+        "帮我对比三款笔记软件并给出建议",
+        "总结今天的科技新闻",
+    ]:
+        assert _routes_to_model(task, config) is True, task
+
+
+def test_model_first_routing_falls_back_to_heuristic_offline(monkeypatch):
+    monkeypatch.setattr(planner_module, "_task_graph_model_endpoint_available", lambda config: False)
+    assert _routes_to_model("帮我对比三款笔记软件并给出建议", AgentConfig()) is False
+
+
+def test_heuristic_mode_never_uses_model(monkeypatch):
+    monkeypatch.setattr(planner_module, "_task_graph_model_endpoint_available", lambda config: True)
+    assert _routes_to_model("帮我对比三款笔记软件并给出建议", AgentConfig(complex_task_planning="heuristic")) is False
