@@ -1223,6 +1223,20 @@ class TaskGraphPlanner:
         world_model: WorldModel | None,
     ) -> TaskGraph | None:
         items = payload.get("subgoals")
+        # The model can decide the request is too vague to act on and ask one focused
+        # question instead of guessing (via a top-level "clarification" or a clarify subgoal).
+        clarification = _optional_str(payload.get("clarification")) or _optional_str(payload.get("clarification_question"))
+        if not clarification and isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict) and _normalize_model_goal_type(item.get("goal_type"), fallback="handoff") == "clarify":
+                    clarification = _optional_str(item.get("title")) or _optional_str(item.get("goal"))
+                    if clarification:
+                        break
+        if clarification:
+            clarify_intent = TaskIntent.from_dict(
+                {**intent.to_dict(), "requires_clarification": True, "clarification_prompt": clarification}
+            )
+            return self._build_clarification_graph(task, clarify_intent)
         if not isinstance(items, list):
             return None
         titles, model_items = _model_subgoal_titles_and_items(items, max_count=self.config.max_task_subgoals)
@@ -1803,6 +1817,12 @@ def _build_task_graph_payload(
         f"Intent: {json.dumps(intent.to_dict(), ensure_ascii=False, sort_keys=True)}\n"
         f"Recent execution memory:\n{_format_history_for_prompt(history)}\n"
         f"Current world model:\n{_task_graph_world_model_context(world_model)}\n"
+        "First understand the user's underlying intent and interpret the request generously, making "
+        "reasonable assumptions for minor unspecified details instead of asking about them. "
+        "If and ONLY IF the request is genuinely too vague or missing information that is critical to act "
+        "correctly (for example a request like 'help me handle this' with no object, or a target that could "
+        "mean very different things), do not guess: set a top-level field \"clarification\" to ONE short, "
+        "specific question for the user and leave \"subgoals\" empty. Otherwise do not ask — just plan. "
         f"Create a commercial-grade task graph with at most {max_subgoals} subgoals. "
         "Each subgoal must be verifiable, ordered by prerequisites, and scoped to a meaningful work objective rather than one raw click. "
         "Capability vocabulary for capability_preference: browser_dom (web search and reading page content), "
@@ -1822,9 +1842,10 @@ def _build_task_graph_payload(
                 "role": "system",
                 "content": (
                     "You design task graphs for a local desktop agent. Return only JSON with keys: "
-                    "subgoals, success_criteria, constraints, risk_points, completion_summary. "
-                    "Each subgoal includes id, title, goal_type, success_condition, capability_preference, "
-                    "risk_level, prerequisites, completion_evidence."
+                    "subgoals, success_criteria, constraints, risk_points, completion_summary, and an "
+                    "optional clarification (a single question string, used only when the request is too "
+                    "vague to plan). Each subgoal includes id, title, goal_type, success_condition, "
+                    "capability_preference, risk_level, prerequisites, completion_evidence."
                 ),
             },
             {"role": "user", "content": user_text},
@@ -1979,6 +2000,7 @@ def _task_graph_json_schema() -> dict[str, Any]:
             "constraints": {"type": "array", "items": {"type": "string"}},
             "risk_points": {"type": "array", "items": {"type": "string"}},
             "completion_summary": {"type": "string"},
+            "clarification": {"type": "string"},
         },
         "required": ["subgoals"],
         "additionalProperties": True,

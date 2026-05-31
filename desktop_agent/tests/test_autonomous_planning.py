@@ -309,3 +309,33 @@ def test_model_capability_preference_list_is_normalized():
     assert _coerce_model_capability_preference("document_authoring") == "document_authoring"
     assert _coerce_model_capability_preference([]) is None
     assert _coerce_model_capability_preference(None) is None
+
+
+# ----- model-driven clarification for genuinely vague requests -----
+
+def _payload_to_graph(task, payload):
+    planner = TaskGraphPlanner(AgentConfig())
+    return planner._task_graph_from_model_payload(
+        task=task, intent=classify_task_intent(task), payload=payload, world_model=None
+    )
+
+
+def test_model_clarification_field_produces_clarification_graph():
+    g = _payload_to_graph("帮我处理一下", {"clarification": "你想让我处理什么？", "subgoals": []})
+    assert g is not None and len(g.subgoals) == 1
+    assert g.subgoals[0].goal_type == "clarify"
+    assert g.subgoals[0].title == "你想让我处理什么？"
+
+
+def test_model_clarify_subgoal_produces_clarification_graph():
+    g = _payload_to_graph("帮我弄个东西", {"subgoals": [{"goal_type": "clarify", "title": "你想做什么东西？"}]})
+    assert g is not None and len(g.subgoals) == 1 and g.subgoals[0].goal_type == "clarify"
+
+
+def test_model_normal_plan_is_not_treated_as_clarification():
+    g = _payload_to_graph("写一份关于AI的报告", {"subgoals": [
+        {"goal_type": "navigate", "title": "搜索AI", "capability_preference": "browser_dom", "risk_level": "low"},
+        {"goal_type": "fill", "title": "撰写AI报告", "capability_preference": "document_authoring", "risk_level": "low"},
+    ]})
+    assert g is not None and len(g.subgoals) == 2
+    assert all(s.goal_type != "clarify" for s in g.subgoals)

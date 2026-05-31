@@ -252,6 +252,14 @@ keyword heuristics (`_extract_deliverable_plan`, etc.) are therefore demoted to 
 capability hints; they no longer decide whether the model is used. With no model endpoint it falls back to
 heuristics (deterministic degradation).
 
+**Intelligent clarification (the model decides when to ask).** The model first *understands the user's
+intent* — when it understands, it just plans and makes reasonable assumptions for minor details instead of
+nagging. Only when the request is genuinely too vague / missing critical info (e.g. "help me handle this"
+with no object) does it return a `clarification` field (one specific question) or a `goal_type=clarify`
+subgoal, so the system asks instead of guessing. e.g. "帮我处理一下" -> asks "what do you want me to
+handle?", while "plan a Shanghai weekend trip" -> an 8-step plan straight away. The keyword heuristic only
+backstops truly empty commands.
+
 On top of that, true "guide the agent to plan" means letting the **model reflect on and revise the plan
 during execution**: once the agent has gathered new information, `orchestrator.reflect_on_plan` ->
 `planner.reflect_on_plan` hands the model the
