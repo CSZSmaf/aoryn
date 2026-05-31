@@ -170,14 +170,20 @@ class DocumentComposer:
                     {"role": "user", "content": _build_compose_prompt(goal, notes, doc_type)},
                 ],
                 "temperature": 0.4,
+                "max_tokens": 1600,
+                # Ask "thinking" models to skip internal reasoning so they spend the
+                # budget on the document itself (otherwise they time out / return empty).
+                "chat_template_kwargs": {"enable_thinking": False},
                 "stream": False,
             }
-            response = requests.post(
-                f"{api_base}/chat/completions",
-                headers=_build_request_headers(self.config.model_api_key),
-                json=payload,
-                timeout=self.config.model_request_timeout,
-            )
+            url = f"{api_base}/chat/completions"
+            headers = _build_request_headers(self.config.model_api_key)
+            response = requests.post(url, headers=headers, json=payload, timeout=self.config.model_request_timeout)
+            if response.status_code >= 400 and "chat_template_kwargs" in payload:
+                # The thinking-off hint is an LM Studio/vLLM extension; strict
+                # OpenAI-compatible endpoints reject unknown fields, so retry without it.
+                payload.pop("chat_template_kwargs", None)
+                response = requests.post(url, headers=headers, json=payload, timeout=self.config.model_request_timeout)
             if response.status_code >= 400:
                 return None
             content = _extract_message_content(response.json())
@@ -251,7 +257,10 @@ def parse_document_text(content: str | None, *, goal: str = "") -> DocumentArtif
     text = str(content or "").strip()
     if not text:
         return None
+    text = _strip_think_blocks(text)
     text = _strip_code_fences(text)
+    if not text.strip():
+        return None
     lines = text.splitlines()
 
     title = ""
@@ -302,6 +311,12 @@ def parse_document_text(content: str | None, *, goal: str = "") -> DocumentArtif
     if preamble:
         intro_heading = "## 概述" if _contains_cjk(goal or title) else "## Overview"
         sections.insert(0, DocumentSection(heading=intro_heading, body="\n".join(preamble).strip()))
+
+    # Drop heading-only fragments (no body). Small models often degrade near the end
+    # of generation into a run of empty "## ..." lines; keep only real sections.
+    substantive = [section for section in sections if section.body.strip()]
+    if substantive:
+        sections = substantive
 
     if not sections:
         body = "\n".join(line for line in lines if line.strip() and not line.strip().startswith("#")).strip()
@@ -416,6 +431,14 @@ def _derive_title(goal: str, zh: bool) -> str:
         flags=re.I,
     )[0].strip()
     return (cleaned or goal)[:80]
+
+
+def _strip_think_blocks(text: str) -> str:
+    # Remove <think>...</think> reasoning that "thinking" models emit before the answer.
+    stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.S | re.I).strip()
+    # If a think block was opened but never closed (truncated), drop everything after it.
+    stripped = re.sub(r"<think>.*$", "", stripped, flags=re.S | re.I).strip()
+    return stripped or text
 
 
 def _strip_code_fences(text: str) -> str:
