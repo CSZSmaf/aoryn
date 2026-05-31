@@ -857,6 +857,14 @@ class RealDesktopExecutor(ActionExecutor):
                 pass
         self.dom_session = None
 
+    def _with_extracted_text(self, snapshot: dict[str, str | None] | None) -> dict[str, str | None] | None:
+        # Surface the most recent browser_dom_extract result so research can use it
+        # (otherwise the extracted page content is gathered and then thrown away).
+        if isinstance(snapshot, dict) and self._last_dom_extract:
+            snapshot = dict(snapshot)
+            snapshot.setdefault("extracted_text", self._last_dom_extract)
+        return snapshot
+
     def browser_snapshot(self) -> dict[str, str | None] | None:
         self._ensure_not_stopped()
         if self.managed_browser is not None:
@@ -866,7 +874,7 @@ class RealDesktopExecutor(ActionExecutor):
                 snapshot = None
             self._ensure_not_stopped()
             if isinstance(snapshot, dict) and any(str(snapshot.get(key) or "").strip() for key in ("url", "title", "text")):
-                return snapshot
+                return self._with_extracted_text(snapshot)
         if self.dom_session is None:
             return None
         snapshot = getattr(self.dom_session, "snapshot", None)
@@ -876,7 +884,7 @@ class RealDesktopExecutor(ActionExecutor):
             self._ensure_not_stopped()
             payload = snapshot()
             self._ensure_not_stopped()
-            return payload
+            return self._with_extracted_text(payload)
         except BrowserDOMCancelled as exc:
             raise ExecutionCancelled(str(exc)) from exc
         except ExecutionCancelled:
@@ -1210,6 +1218,7 @@ class MockExecutor(ActionExecutor):
             "url": self.state.current_url,
             "title": None,
             "text": self.state.text_buffers.get("browser"),
+            "extracted_text": self.state.last_extracted_text,
         }
 
 

@@ -508,11 +508,15 @@ def _accumulate_research_notes(state: ExecutionState, world_model: WorldModel) -
     title = str(browser.get("title") or "").strip()
     url = str(browser.get("url") or "").strip()
     text = str(browser.get("text") or "").strip()
+    extracted = str(browser.get("extracted_text") or "").strip()
     header = " - ".join(part for part in (title, url) if part)
     if header:
         state.workspace.add_note(f"[web] {header}")
-    if text:
+    if extracted:
+        # Content explicitly read off the page is the richest research material.
+        state.workspace.add_note(f"[extract] {extracted[:1200]}")
+    if text and text != extracted:
         state.workspace.add_note(f"[web] {text[:600]}")
     selection = str(world_model.selection_text or "").strip()
-    if selection and selection != text:
+    if selection and selection not in (text, extracted):
         state.workspace.add_note(f"[selection] {selection[:600]}")

@@ -31,6 +31,10 @@ complex_task_planning: hybrid
 # Let the document-authoring "think" step call the model to synthesize gathered
 # research into a document. When false, a deterministic outline is used instead.
 composition_enabled: true
+# When a research step feeds a downstream synthesis/authoring step, read the page
+# content (browser_dom_extract) into research notes instead of stopping at the
+# search results. Plain search tasks are unaffected.
+research_extract_enabled: true
 # Default editor for authoring subgoals that do not name one (word/notepad/wps).
 document_default_app: word
 # Model-driven adaptive re-planning: after the agent gathers information, let the

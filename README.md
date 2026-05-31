@@ -131,8 +131,11 @@ Agent 模式复用现有执行核心：
 
 Aoryn 把“像人一样坐在电脑前完成复杂任务”拆成三段能力，分别对应大脑、眼、手：
 
-1. 研究（眼 + 手）：浏览器检索、打开页面、`browser_dom_extract` 抽取正文。每一轮观测时，
-   可见的网页标题、URL、正文会沉淀进 `ExecutionState.workspace` 的研究笔记，而不是用完即弃。
+1. 研究（眼 + 手）：当一个检索子目标下游接着综合/撰写步骤时，`browser_dom` 不再"搜完就停"，
+   而是**先搜索、再用 `browser_dom_extract` 读取结果页正文**，把抽取到的内容（`extracted_text`）连同
+   标题/URL 一起沉淀进 `ExecutionState.workspace` 研究笔记（`[extract]` 优先于 `[web]`）。撰写时综合的是
+   **真实页面内容**而非仅搜索摘要，文档更有据可依。纯搜索任务（无下游消费者）保持单步行为不变；
+   可用 `research_extract_enabled` 关闭。
 2. 综合（大脑）：`desktop_agent/composer.py` 的 `DocumentComposer` 复用当前配置的模型端点
    （LM Studio / OpenAI 兼容），把研究笔记 + 任务目标“想成”一篇结构化长文（标题 + `##` 分节）。
    模型不可用或离线时，回退到确定性大纲，保证 dry-run、基准测试与离线场景仍产出可读文档。

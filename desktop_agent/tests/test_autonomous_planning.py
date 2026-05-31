@@ -237,3 +237,58 @@ def test_model_first_routing_falls_back_to_heuristic_offline(monkeypatch):
 def test_heuristic_mode_never_uses_model(monkeypatch):
     monkeypatch.setattr(planner_module, "_task_graph_model_endpoint_available", lambda config: True)
     assert _routes_to_model("帮我对比三款笔记软件并给出建议", AgentConfig(complex_task_planning="heuristic")) is False
+
+
+# ----- deeper research: search -> extract page content -> grounded notes -----
+
+from desktop_agent.capabilities import BrowserDOMCapability  # noqa: E402
+from desktop_agent.orchestrator import _accumulate_research_notes  # noqa: E402
+
+
+def _deliverable_research_state():
+    research = Subgoal(id="subgoal_01", title="搜索电动汽车", goal_type="navigate", status="in_progress", capability_preference="browser_dom")
+    author = Subgoal(id="subgoal_02", title="撰写电动汽车报告", goal_type="fill", status="pending", capability_preference="document_authoring", prerequisites=["subgoal_01"])
+    graph = TaskGraph(task="写一份关于电动汽车的报告", subgoals=[research, author], dependencies={"subgoal_01": [], "subgoal_02": ["subgoal_01"]})
+    return ExecutionState(task=graph.task, run_id="r", task_graph=graph), research
+
+
+_RESULTS_WM = WorldModel(browser_snapshot={"url": "https://www.google.com/search?q=ev", "text": "电动汽车 结果"})
+
+
+def test_browser_research_searches_then_extracts_when_feeding_author():
+    cap = BrowserDOMCapability()
+    config = AgentConfig()
+    state, research = _deliverable_research_state()
+    # no results yet -> search, but DON'T complete the subgoal (we still want to read)
+    step1 = cap.propose_step(subgoal=research, world_model=WorldModel(), execution_state=state, config=config, planner=None)
+    assert step1 is not None and step1.actions[0].type == "browser_search"
+    assert step1.completes_subgoal is False
+    # results visible -> read the page content, completing the research
+    step2 = cap.propose_step(subgoal=research, world_model=_RESULTS_WM, execution_state=state, config=config, planner=None)
+    assert step2 is not None and step2.actions[0].type == "browser_dom_extract"
+    assert step2.completes_subgoal is True
+
+
+def test_browser_research_skips_deep_extract_for_standalone_search():
+    cap = BrowserDOMCapability()
+    config = AgentConfig()
+    research = Subgoal(id="subgoal_01", title="搜索电动汽车", goal_type="navigate", status="in_progress", capability_preference="browser_dom")
+    state = ExecutionState(task="搜索电动汽车", run_id="r", task_graph=TaskGraph(task="搜索电动汽车", subgoals=[research]))
+    step = cap.propose_step(subgoal=research, world_model=_RESULTS_WM, execution_state=state, config=config, planner=None)
+    # no downstream consumer -> normal web flow, never a deep extract
+    assert step is None or step.actions[0].type != "browser_dom_extract"
+
+
+def test_research_extract_disabled_skips_extraction():
+    cap = BrowserDOMCapability()
+    config = AgentConfig(research_extract_enabled=False)
+    state, research = _deliverable_research_state()
+    step = cap.propose_step(subgoal=research, world_model=_RESULTS_WM, execution_state=state, config=config, planner=None)
+    assert step is None or step.actions[0].type != "browser_dom_extract"
+
+
+def test_accumulate_research_notes_captures_extracted_page_text():
+    state = ExecutionState(task="t", run_id="r", task_graph=TaskGraph(task="t", subgoals=[Subgoal(id="s", title="t")]))
+    wm = WorldModel(browser_snapshot={"url": "https://x.test", "text": "snippet", "extracted_text": "full article body about electric vehicles"})
+    _accumulate_research_notes(state, wm)
+    assert any(n.startswith("[extract]") and "full article body" in n for n in state.workspace.notes)

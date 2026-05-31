@@ -111,6 +111,7 @@ class AgentConfig:
     approval_policy: str = "tiered"
     complex_task_planning: str = "hybrid"
     composition_enabled: bool = True
+    research_extract_enabled: bool = True
     document_default_app: str = "word"
     plan_reflection_enabled: bool = True
     max_plan_reflections: int = 2
@@ -256,6 +257,7 @@ class AgentConfig:
         self.display_override_enabled = _normalized_bool(self.display_override_enabled, default=False)
         self.generic_app_launch_enabled = _normalized_bool(self.generic_app_launch_enabled, default=True)
         self.composition_enabled = _normalized_bool(self.composition_enabled, default=True)
+        self.research_extract_enabled = _normalized_bool(self.research_extract_enabled, default=True)
         self.plan_reflection_enabled = _normalized_bool(self.plan_reflection_enabled, default=True)
         try:
             max_plan_reflections = int(self.max_plan_reflections)

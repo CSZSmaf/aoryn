@@ -500,6 +500,14 @@ class BrowserDOMCapability(CapabilityAdapter):
         config: AgentConfig,
         planner,
     ) -> StepProposal | None:
+        research_step = self._maybe_research_extraction(
+            subgoal=subgoal,
+            world_model=world_model,
+            execution_state=execution_state,
+            config=config,
+        )
+        if research_step is not None:
+            return research_step
         if navigation_plan := self.web_agent.build_navigation_plan(subgoal.title):
             return StepProposal.from_plan_result(
                 navigation_plan,
@@ -532,6 +540,67 @@ class BrowserDOMCapability(CapabilityAdapter):
                     world_model=world_model,
                     actions=follow_up_plan.actions,
                 ),
+            )
+        return None
+
+    def _maybe_research_extraction(
+        self,
+        *,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        execution_state: ExecutionState,
+        config: AgentConfig,
+    ) -> StepProposal | None:
+        """When a research/gather subgoal feeds a downstream synthesis or authoring
+        step, search and then *read the results page content* into research notes,
+        instead of stopping at the search results page. Plain search tasks (no
+        downstream consumer) keep the simple one-step behaviour."""
+
+        if not getattr(config, "research_extract_enabled", True):
+            return None
+        if not _research_feeds_downstream_synthesis(execution_state, subgoal):
+            return None
+        browser = world_model.browser_snapshot or {}
+        has_results = bool(str(browser.get("url") or "").strip() or str(browser.get("text") or "").strip())
+        context = execution_state.app_context
+        extracted_key = f"research_extracted:{subgoal.id}"
+
+        if not has_results:
+            query = _research_query(subgoal.title)
+            if not query:
+                return None
+            # Search first, but defer completion so the page can be read afterwards.
+            subgoal.completion_evidence = None
+            return StepProposal(
+                intent=f"Search the web to research: {query}",
+                actions=[Action.from_dict({"type": "browser_search", "text": query})],
+                capability=self.name,
+                expected_evidence=[
+                    EvidenceRequirement(kind="browser_available", detail="Search results should be visible.")
+                ],
+                progress_signals=[query, subgoal.title],
+                risk_level="low",
+                current_focus=f"search {query}",
+                completes_subgoal=False,
+            )
+
+        if not context.get(extracted_key):
+            context[extracted_key] = True
+            subgoal.completion_evidence = {
+                "kind": "action_executed",
+                "detail": f"Web research material gathered for: {subgoal.title}",
+            }
+            return StepProposal(
+                intent="Read the search results to gather research material.",
+                actions=[Action.from_dict({"type": "browser_dom_extract", "selector": "body"})],
+                capability=self.name,
+                expected_evidence=[
+                    EvidenceRequirement(kind="browser_available", detail="A live page should remain available.")
+                ],
+                progress_signals=[subgoal.title],
+                risk_level="low",
+                current_focus="gather research content",
+                completes_subgoal=True,
             )
         return None
 
@@ -812,7 +881,7 @@ class DocumentAuthoringCapability(CapabilityAdapter):
         research_notes = [
             note
             for note in workspace.notes
-            if isinstance(note, str) and (note.startswith("[web]") or note.startswith("[selection]"))
+            if isinstance(note, str) and note.startswith(("[extract]", "[web]", "[selection]"))
         ]
         if not research_notes:
             research_notes = [
@@ -1452,6 +1521,37 @@ def build_capability_registry() -> CapabilityRegistry:
     registry.register(DocumentAuthoringCapability())
     registry.register(GuardedShellRecipeCapability())
     return registry
+
+
+def _research_feeds_downstream_synthesis(execution_state: ExecutionState, subgoal: Subgoal) -> bool:
+    """True when a later, still-pending subgoal will consume the gathered research
+    (a synthesis/authoring step), so it is worth reading page content, not just
+    opening the results."""
+
+    for item in execution_state.task_graph.subgoals:
+        if item.id == subgoal.id or item.status == "completed":
+            continue
+        if _normalize_text(item.capability_preference) in {"document_authoring", "office_com"}:
+            return True
+        title = _normalize_text(f"{item.title} {item.goal or ''}")
+        if item.goal_type in {"fill", "transform", "extract"} and any(
+            marker in title for marker in ("撰写", "总结", "summary", "报告", "report", "compose", "write")
+        ):
+            return True
+    return False
+
+
+def _research_query(title: str) -> str:
+    cleaned = _normalize_text(title)
+    match = re.match(
+        r"^(?:搜索|搜一下|查找|查询|调研|了解|research|search(?:\s+for)?|look\s+up|find(?:\s+out)?|gather|investigate)"
+        r"\s*[:：]?\s*(?P<query>.+)$",
+        cleaned,
+        re.I,
+    )
+    query = match.group("query") if match else cleaned
+    query = re.sub(r"(?:的)?(?:相关)?(?:资料|信息|内容)$", "", query).strip()
+    return query or cleaned
 
 
 def _document_app_is_active(world_model: WorldModel, app: str) -> bool:

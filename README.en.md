@@ -197,9 +197,12 @@ The recommended entry point is the advanced area inside settings.
 Aoryn splits "sit at the computer and finish a complex task like a person" into three layers,
 mapping to brain, eyes, and hands:
 
-1. Research (eyes + hands): browser search, opening pages, and `browser_dom_extract`. On every
-   observation, the visible page title, URL, and body text are accumulated into the research notes
-   on `ExecutionState.workspace` instead of being discarded each step.
+1. Research (eyes + hands): when a research subgoal feeds a downstream synthesis/authoring step,
+   `browser_dom` no longer stops at the results page — it **searches and then reads the results page
+   with `browser_dom_extract`**, accumulating the extracted content (`extracted_text`) plus the title/URL
+   into the `ExecutionState.workspace` research notes (`[extract]` ranks above `[web]`). The author then
+   synthesizes from **real page content**, not just a search snippet. Plain search tasks (no downstream
+   consumer) keep their single-step behaviour; toggle with `research_extract_enabled`.
 2. Synthesize (brain): `DocumentComposer` in `desktop_agent/composer.py` reuses the configured model
    endpoint (LM Studio / OpenAI-compatible) to "think" the research notes plus the goal into a
    structured long-form document (a title plus `##` sections). When the model is unavailable or

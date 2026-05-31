@@ -1846,7 +1846,7 @@ def _summarize_workspace_for_reflection(execution_state, world_model: WorldModel
     workspace = getattr(execution_state, "workspace", None)
     notes = list(getattr(workspace, "notes", []) or []) if workspace is not None else []
     research_notes = [
-        note for note in notes if isinstance(note, str) and (note.startswith("[web]") or note.startswith("[selection]"))
+        note for note in notes if isinstance(note, str) and note.startswith(("[extract]", "[web]", "[selection]"))
     ]
     if not research_notes:
         research_notes = [
