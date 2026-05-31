@@ -160,6 +160,7 @@ class TaskOrchestrator:
         if self.config.task_workspace_enabled:
             state.workspace.add_world_model(world_model)
             state.workspace.add_facts(facts)
+            _accumulate_research_notes(state, world_model)
         state.updated_at = time.time()
         return facts
 
@@ -308,6 +309,52 @@ class TaskOrchestrator:
         state.updated_at = time.time()
         return True
 
+    def reflect_on_plan(self, *, state: ExecutionState, world_model: WorldModel | None) -> bool:
+        """Model-driven adaptive re-planning: revise the remaining plan after the
+        agent has learned something (e.g. finished researching). Returns True if the
+        plan changed. Self-limited by a reflection budget."""
+
+        if not getattr(self.config, "plan_reflection_enabled", True):
+            return False
+        reflection_count = int(state.app_context.get("reflection_count", 0) or 0)
+        if reflection_count >= max(0, int(getattr(self.config, "max_plan_reflections", 0))):
+            return False
+        try:
+            new_graph = self.task_graph_planner.reflect_on_plan(state, world_model)
+        except Exception:
+            return False
+        if new_graph is None:
+            return False
+        old_risk = task_graph_risk_level(state.task_graph)
+        state.task_graph = new_graph
+        try:
+            self.recipe_memory.apply_hints(state.task_graph)
+        except Exception:
+            pass
+        refreshed_budget = max(1, int(self.config.max_failures_per_subgoal))
+        for subgoal in state.task_graph.subgoals:
+            if subgoal.status == "completed":
+                state.failure_budget.setdefault(subgoal.id, refreshed_budget)
+                continue
+            subgoal.attempts = 0
+            state.failure_budget[subgoal.id] = refreshed_budget
+        new_risk = task_graph_risk_level(state.task_graph)
+        reason = "Adapted the remaining plan after reflecting on gathered information."
+        state.last_replan_reason = reason
+        state.app_context["reflection_count"] = reflection_count + 1
+        state.app_context["last_reflection_at"] = time.time()
+        state.app_context["last_replan_reason"] = reason
+        if self._stage_review_required_after_replan(old_risk=old_risk, new_risk=new_risk):
+            state.app_context["stage_review_status"] = "pending"
+            state.app_context["stage_review_reason"] = (
+                f"Reflection changed plan risk from {old_risk} to {new_risk}."
+            )
+            state.orchestration_phase = "stage_review"
+        else:
+            state.orchestration_phase = "stage_ready"
+        state.updated_at = time.time()
+        return True
+
     def decrement_failure_budget(self, *, state: ExecutionState, subgoal: Subgoal | None) -> None:
         if subgoal is None:
             return
@@ -447,3 +494,25 @@ def standardize_failure_kind(value: str | None) -> str | None:
     if normalized in _STANDARD_FAILURE_KINDS:
         return normalized
     return _FAILURE_ALIASES.get(normalized, "verification_failed")
+
+
+def _accumulate_research_notes(state: ExecutionState, world_model: WorldModel) -> None:
+    """Record web/page content into the workspace so it can be synthesized later.
+
+    This is what makes "research" real: as the agent browses and extracts text,
+    the visible page content becomes durable notes the document composer can
+    reason over, instead of being thrown away each step.
+    """
+
+    browser = world_model.browser_snapshot or {}
+    title = str(browser.get("title") or "").strip()
+    url = str(browser.get("url") or "").strip()
+    text = str(browser.get("text") or "").strip()
+    header = " - ".join(part for part in (title, url) if part)
+    if header:
+        state.workspace.add_note(f"[web] {header}")
+    if text:
+        state.workspace.add_note(f"[web] {text[:600]}")
+    selection = str(world_model.selection_text or "").strip()
+    if selection and selection != text:
+        state.workspace.add_note(f"[selection] {selection[:600]}")

@@ -97,6 +97,15 @@ class ActionGuard:
                 raise SafetyError("Text contains risky command-like content.")
             if _looks_like_action_literal(action.text):
                 raise SafetyError("Text looks like an action literal instead of user content.")
+        elif action.type == "insert_text":
+            if action.text is None:
+                raise SafetyError("Missing text payload.")
+            if len(action.text) > self.config.max_document_length:
+                raise SafetyError("Inserted document exceeds max_document_length.")
+            lowered = action.text.lower()
+            risky_keywords = ["format c:", "powershell", "cmd /c", "del /f", "rm -rf"]
+            if any(keyword in lowered for keyword in risky_keywords):
+                raise SafetyError("Text contains risky command-like content.")
         elif action.type == "browser_search":
             query = (action.text or "").strip()
             if not query:

@@ -880,6 +880,139 @@ class TaskGraphPlanner:
             recipes=list(current.recipes),
         )
 
+    def reflect_on_plan(self, execution_state, world_model: WorldModel | None) -> TaskGraph | None:
+        """Let the model revise the REMAINING plan given what has been learned.
+
+        This is model-driven planning, not keyword matching: the model receives the
+        goal, the completed/remaining steps, and the knowledge gathered so far, and
+        decides whether the rest of the plan should change (e.g. gather a missing
+        detail before writing). Returns a revised TaskGraph (completed subgoals
+        preserved) or None to keep the current plan. Returns None offline so the
+        behaviour degrades gracefully and deterministically.
+        """
+
+        current = execution_state.task_graph
+        completed = [item for item in current.subgoals if item.status == "completed"]
+        remaining = [item for item in current.subgoals if item.status != "completed"]
+        if not remaining or not _task_graph_model_endpoint_available(self.config):
+            return None
+        try:
+            requests = _import_requests()
+            api_base = _normalize_api_base_url(self.config.model_base_url)
+            model_name = self._resolve_text_model_name(requests, api_base)
+            response_format_mode = _normalize_structured_output_mode(self.config.model_structured_output)
+            if response_format_mode in self._structured_output_unsupported_modes:
+                response_format_mode = "off"
+            payload = _build_plan_reflection_payload(
+                model_name=model_name,
+                execution_state=execution_state,
+                completed=completed,
+                remaining=remaining,
+                world_model=world_model,
+                max_subgoals=self.config.max_task_subgoals,
+                response_format_mode=response_format_mode,
+            )
+            try:
+                content = _request_task_graph_text(
+                    config=self.config,
+                    requests=requests,
+                    api_base=api_base,
+                    payload=payload,
+                    response_format_mode=response_format_mode,
+                )
+            except StructuredOutputUnsupportedError:
+                self._structured_output_unsupported_modes.add(response_format_mode)
+                fallback_payload = _build_plan_reflection_payload(
+                    model_name=model_name,
+                    execution_state=execution_state,
+                    completed=completed,
+                    remaining=remaining,
+                    world_model=world_model,
+                    max_subgoals=self.config.max_task_subgoals,
+                    response_format_mode="off",
+                )
+                content = _request_task_graph_text(
+                    config=self.config,
+                    requests=requests,
+                    api_base=api_base,
+                    payload=fallback_payload,
+                    response_format_mode="off",
+                )
+            graph_payload = _extract_json(content)
+            return self._reflected_graph_from_payload(
+                execution_state=execution_state,
+                completed=completed,
+                remaining=remaining,
+                payload=graph_payload,
+                world_model=world_model,
+            )
+        except Exception:
+            return None
+
+    def _reflected_graph_from_payload(
+        self,
+        *,
+        execution_state,
+        completed: list[Subgoal],
+        remaining: list[Subgoal],
+        payload: dict[str, Any],
+        world_model: WorldModel | None,
+    ) -> TaskGraph | None:
+        items = payload.get("subgoals")
+        if not isinstance(items, list):
+            return None
+        budget = max(1, int(self.config.max_task_subgoals) - len(completed))
+        titles, model_items = _model_subgoal_titles_and_items(items, max_count=budget)
+        if not titles:
+            return None
+        # No meaningful change -> keep the current plan (avoid churn).
+        if [_clean_sub_goal_part(item) for item in titles] == [
+            _clean_sub_goal_part(item.title) for item in remaining
+        ]:
+            return None
+
+        current = execution_state.task_graph
+        intent = TaskIntent.from_dict(current.intent or {})
+        rebuilt = self._build_graph_from_titles(
+            task=current.task,
+            titles=titles,
+            intent=intent,
+            world_model=world_model,
+            start_index=len(completed) + 1,
+            first_prerequisite=completed[-1].id if completed else None,
+        )
+        for subgoal, raw_item in zip(rebuilt.subgoals, model_items):
+            if not isinstance(raw_item, dict):
+                continue
+            subgoal.goal_type = _normalize_model_goal_type(raw_item.get("goal_type"), fallback=subgoal.goal_type)
+            subgoal.success_condition = _optional_str(raw_item.get("success_condition")) or subgoal.success_condition
+            subgoal.capability_preference = (
+                _optional_str(raw_item.get("capability_preference")) or subgoal.capability_preference
+            )
+            subgoal.risk_level = _model_subgoal_risk(raw_item, fallback=subgoal.risk_level)
+            if isinstance(raw_item.get("completion_evidence"), dict):
+                subgoal.completion_evidence = dict(raw_item["completion_evidence"])
+
+        completed_ids = {item.id for item in completed}
+        dependencies = {
+            key: list(value) for key, value in current.dependencies.items() if key in completed_ids
+        }
+        dependencies.update(rebuilt.dependencies)
+        subgoals = [*completed, *rebuilt.subgoals]
+        return TaskGraph(
+            task=current.task,
+            subgoals=subgoals,
+            dependencies=dependencies,
+            success_criteria=[item.success_condition for item in subgoals],
+            constraints=_dedupe_strings(
+                [*current.constraints, "Adapted the remaining plan after reflecting on gathered information."]
+            ),
+            risk_points=[item.title for item in subgoals if item.risk_level in {"medium", "high", "critical"}],
+            completion_summary=_build_completion_summary(current.task, subgoals),
+            intent=dict(current.intent) if isinstance(current.intent, dict) else None,
+            recipes=list(current.recipes),
+        )
+
     def _build_clarification_graph(self, task: str, intent: TaskIntent) -> TaskGraph:
         clarification_title = intent.clarification_prompt or "Clarify the requested task before acting."
         subgoal = Subgoal(
@@ -1629,7 +1762,13 @@ def _build_task_graph_payload(
         f"Current world model:\n{_task_graph_world_model_context(world_model)}\n"
         f"Create a commercial-grade task graph with at most {max_subgoals} subgoals. "
         "Each subgoal must be verifiable, ordered by prerequisites, and scoped to a meaningful work objective rather than one raw click. "
-        "Use low risk only for read-only/navigation work. Mark login, purchase, submit, delete, install, or shell work as high risk. "
+        "Capability vocabulary for capability_preference: browser_dom (web search and reading page content), "
+        "document_authoring (synthesize gathered notes into a written document inside an editor such as Word or Notepad), "
+        "windows_uia, clipboard, filesystem, office_com, guarded_shell_recipe. "
+        "When the goal is to produce a researched deliverable (a plan, report, summary, itinerary, guide, or article), "
+        "plan it autonomously: first gather information with browser_dom subgoals, then write it up with a document_authoring subgoal that depends on the research. "
+        "Do not stop at merely opening a search page. "
+        "Use low risk only for read-only/navigation/writing-local-content work. Mark login, purchase, submit, delete, install, or shell work as high risk. "
         "Return JSON only."
     )
     payload: dict[str, Any] = {
@@ -1669,6 +1808,84 @@ def _task_graph_world_model_context(world_model: WorldModel | None) -> str:
     if world_model.anchor_candidates:
         lines.append("anchors=" + " | ".join(world_model.anchor_candidates[:6]))
     return "\n".join(lines)
+
+
+def _summarize_workspace_for_reflection(execution_state, world_model: WorldModel | None) -> str:
+    lines: list[str] = []
+    workspace = getattr(execution_state, "workspace", None)
+    notes = list(getattr(workspace, "notes", []) or []) if workspace is not None else []
+    research_notes = [
+        note for note in notes if isinstance(note, str) and (note.startswith("[web]") or note.startswith("[selection]"))
+    ]
+    if not research_notes:
+        research_notes = [
+            note
+            for note in notes
+            if isinstance(note, str) and "proposed:" not in note and not note.startswith("[composed]")
+        ]
+    if research_notes:
+        lines.append("Gathered notes:")
+        lines.extend(f"- {note[:200]}" for note in research_notes[-8:])
+    fact_lines: list[str] = []
+    for fact in list(getattr(execution_state, "facts", []) or [])[-8:]:
+        value = str(getattr(fact, "value", "") or "").strip()
+        key = str(getattr(fact, "key", "") or "").strip()
+        if value:
+            fact_lines.append(f"- {key}: {value[:160]}")
+    if fact_lines:
+        lines.append("Observed facts:")
+        lines.extend(fact_lines)
+    lines.append(f"World: {_task_graph_world_model_context(world_model)}")
+    return "\n".join(lines) if lines else "No structured knowledge gathered yet."
+
+
+def _build_plan_reflection_payload(
+    *,
+    model_name: str,
+    execution_state,
+    completed: list,
+    remaining: list,
+    world_model: WorldModel | None,
+    max_subgoals: int,
+    response_format_mode: str,
+) -> dict[str, Any]:
+    goal = (getattr(execution_state, "task", "") or "").strip()
+    completed_lines = "\n".join(f"- {item.title}" for item in completed) or "- (nothing completed yet)"
+    remaining_lines = "\n".join(f"- {item.title}" for item in remaining)
+    knowledge = _summarize_workspace_for_reflection(execution_state, world_model)
+    budget = max(1, int(max_subgoals) - len(completed))
+    user_text = (
+        f"Overall goal: {goal}\n\n"
+        f"Steps already completed:\n{completed_lines}\n\n"
+        f"Currently-planned remaining steps:\n{remaining_lines}\n\n"
+        f"What the agent has learned so far:\n{knowledge}\n\n"
+        "Reflect like a planner: given what is now known, do the REMAINING steps still lead to the goal? "
+        "If the gathered information shows extra steps are needed (for example, collect a missing detail before "
+        "writing) or a planned step is now unnecessary, return a revised ordered list of the remaining subgoals. "
+        "If the current remaining plan is already correct, return it unchanged. Keep the overall goal; never add "
+        "logins, purchases, payments, deletions, installs, or shell commands. "
+        f"Return at most {budget} remaining subgoals as JSON only with the schema "
+        "(subgoals: [{title, goal_type, success_condition, capability_preference, risk_level, prerequisites, completion_evidence}])."
+    )
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "temperature": 0.1,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You revise the remaining plan of a local desktop agent mid-run. Return only JSON with key "
+                    "'subgoals' (optionally constraints, risk_points). Capability vocabulary: browser_dom, "
+                    "document_authoring, windows_uia, clipboard, filesystem, office_com, guarded_shell_recipe."
+                ),
+            },
+            {"role": "user", "content": user_text},
+        ],
+    }
+    response_format = _build_task_graph_response_format(response_format_mode)
+    if response_format is not None:
+        payload["response_format"] = response_format
+    return payload
 
 
 def _build_task_graph_response_format(mode: str) -> dict[str, Any] | None:
@@ -1791,6 +2008,17 @@ def classify_task_intent(
             ]
         )
         confidence = 0.84
+        planning_strategy = "model_assisted"
+    elif _extract_deliverable_plan(stripped, browser_command, None):
+        task_type = "research_summary"
+        domain = "web"
+        preferred = _merge_preferred_capabilities(
+            ["browser_dom", "document_authoring", "clipboard"], preferred
+        )
+        success_hints.append(
+            "Web research is gathered, then a structured document is written into an editor."
+        )
+        confidence = 0.82
         planning_strategy = "model_assisted"
     elif browser_command is not None:
         domain = "web"
@@ -1915,6 +2143,10 @@ def _extract_semantic_sub_goals(
     if research_query:
         follow_up = research_follow_up or "summarize the findings"
         return [f"search for {research_query}", follow_up]
+
+    deliverable_plan = _extract_deliverable_plan(task, browser_command, intent)
+    if deliverable_plan:
+        return deliverable_plan
 
     if browser_command is not None and browser_command.follow_up_steps:
         initial_step = _describe_browser_initial_step(browser_command)
@@ -2340,6 +2572,141 @@ def _extract_research_goal(task: str) -> tuple[str | None, str | None]:
         if query:
             return query, follow or None
     return None, None
+
+
+_DELIVERABLE_PRODUCE_TOKENS_ZH = (
+    "撰写",
+    "编写",
+    "起草",
+    "制作",
+    "制定",
+    "整理",
+    "规划",
+    "策划",
+    "拟",
+    "写",
+    "做",
+    "生成",
+)
+_DELIVERABLE_PRODUCE_TOKENS_EN = (
+    "write",
+    "compose",
+    "draft",
+    "create",
+    "make",
+    "build",
+    "plan",
+    "design",
+    "prepare",
+    "produce",
+    "generate",
+    "put together",
+)
+_DELIVERABLE_NOUN_TOKENS_ZH = (
+    "报告",
+    "计划",
+    "方案",
+    "攻略",
+    "总结",
+    "纪要",
+    "文档",
+    "作文",
+    "文章",
+    "提纲",
+    "大纲",
+    "清单",
+    "指南",
+    "教程",
+    "笔记",
+    "简介",
+    "路线",
+    "行程",
+)
+_DELIVERABLE_NOUN_TOKENS_EN = (
+    "report",
+    "plan",
+    "proposal",
+    "summary",
+    "guide",
+    "itinerary",
+    "outline",
+    "essay",
+    "article",
+    "checklist",
+    "overview",
+    "tutorial",
+    "notes",
+    "brief",
+    "roadmap",
+    "schedule",
+)
+
+
+def _extract_deliverable_plan(
+    task: str,
+    browser_command: WebCommand | None = None,
+    intent: "TaskIntent | None" = None,
+) -> list[str] | None:
+    """Autonomously expand a high-level "produce a researched document" goal.
+
+    A single vague deliverable goal (e.g. "write a report about X", "规划一个北京
+    三日游") is unactionable as one subgoal. This turns it into a research -> author
+    plan so the agent decides the steps itself: gather material on the web first,
+    then synthesize and write it into an editor.
+    """
+
+    text = task.strip()
+    if not text or browser_command is not None:
+        return None
+    if _contains_multi_step_markers(text):
+        return None
+    zh = _contains_cjk(text)
+    lowered = text.lower()
+    has_produce = any(token in text for token in _DELIVERABLE_PRODUCE_TOKENS_ZH) or any(
+        re.search(rf"\b{re.escape(token)}\b", lowered) for token in _DELIVERABLE_PRODUCE_TOKENS_EN
+    )
+    matched_noun = next((noun for noun in _DELIVERABLE_NOUN_TOKENS_ZH if noun in text), None)
+    if matched_noun is None:
+        matched_noun = next(
+            (noun for noun in _DELIVERABLE_NOUN_TOKENS_EN if re.search(rf"\b{re.escape(noun)}\b", lowered)),
+            None,
+        )
+    if matched_noun is None and zh and re.search(r"[\d一二两三四五六七八九十百]+\s*[日天]\s*游|旅游|旅行|出游|游玩", text):
+        matched_noun = "行程"
+    if not has_produce or not matched_noun:
+        return None
+    topic = _extract_deliverable_topic(text, noun=matched_noun, zh=zh)
+    if not topic or len(topic) < 2:
+        return None
+    if zh:
+        return [f"搜索{topic}", f"撰写{topic}{matched_noun}"]
+    return [f"search for {topic}", _clean_sub_goal_part(f"write the {topic} {matched_noun}")]
+
+
+def _extract_deliverable_topic(text: str, *, noun: str, zh: bool) -> str:
+    cleaned = text.strip().strip(" .,!?。！？")
+    english_about = re.search(r"(?:about|on|regarding|for|of)\s+(?P<topic>.+)$", cleaned, re.I)
+    if english_about and not zh:
+        topic = re.sub(r"^(?:the|a|an)\s+", "", english_about.group("topic").strip(), flags=re.I).strip()
+        if topic:
+            return topic[:80]
+    chinese_about = re.search(r"(?:关于|有关)\s*(?P<topic>.+)$", cleaned)
+    if chinese_about:
+        topic = chinese_about.group("topic").strip()
+        topic = re.sub(rf"的?{re.escape(noun)}.*$", "", topic).strip().rstrip("的")
+        if topic:
+            return topic[:80]
+    stripped = re.sub(
+        r"^(?:请|帮我|帮忙|帮)?\s*(?:"
+        + "|".join(re.escape(token) for token in _DELIVERABLE_PRODUCE_TOKENS_ZH)
+        + r"|write|compose|draft|create|make|build|plan|design|prepare|produce|generate)\s*",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
+    stripped = re.sub(r"^(?:一个|一份|一篇|一张|个|份|篇|a|an|the)\s*", "", stripped, flags=re.I).strip()
+    stripped = re.sub(rf"的?{re.escape(noun)}\s*$", "", stripped, flags=re.I).strip()
+    return stripped.strip(" :：的")[:80]
 
 
 def _looks_like_shopping_task(task: str) -> bool:
@@ -2774,8 +3141,106 @@ def _extract_content_hint(title: str) -> str | None:
     return None
 
 
+def _looks_like_authoring_title(lowered: str) -> bool:
+    """Heuristic hint: does this subgoal ask to compose/write into a document?
+
+    Deliberately conservative: a generic "draft the report" can belong to a web or
+    cross-app flow, so only route to document_authoring when an editor app is named
+    or the phrasing explicitly writes content into a document.
+    """
+
+    if any(token in lowered for token in ("search", "搜索", "查找", "查询", "visit", "访问", "browse", "上网", "click", "点击")):
+        return False
+    author_verb = any(
+        token in lowered
+        for token in (
+            "write",
+            "compose",
+            "draft",
+            "summarize",
+            "summarise",
+            "撰写",
+            "起草",
+            "整理到",
+            "整理成",
+            "整理为",
+            "写入",
+            "写到",
+            "写进",
+            "写出",
+            "记录到",
+            "总结",
+            "生成文档",
+            "生成报告",
+        )
+    )
+    editor_app = any(token in lowered for token in ("word", "记事本", "notepad", "wps", "docx", "文档"))
+    if editor_app and author_verb:
+        return True
+    strong_author = any(
+        token in lowered
+        for token in (
+            "整理到",
+            "整理成",
+            "整理为",
+            "写入",
+            "写到",
+            "写进",
+            "写出",
+            "记录到",
+            "撰写",
+            "起草",
+            "生成文档",
+            "生成报告",
+            "write into",
+            "write up",
+            "write a ",
+            "write the ",
+            "compose ",
+            "summarize into",
+            "summarise into",
+        )
+    )
+    doc_noun = any(
+        token in lowered
+        for token in (
+            "report",
+            "essay",
+            "summary",
+            "itinerary",
+            "guide",
+            "plan",
+            "proposal",
+            "outline",
+            "article",
+            "checklist",
+            "overview",
+            "tutorial",
+            "brief",
+            "roadmap",
+            "schedule",
+            "notes",
+            "报告",
+            "方案",
+            "攻略",
+            "计划",
+            "纪要",
+            "作文",
+            "文章",
+            "总结",
+            "行程",
+            "指南",
+            "提纲",
+            "大纲",
+        )
+    )
+    return strong_author and doc_noun
+
+
 def _infer_capability_preference(title: str, *, world_model: WorldModel | None = None) -> str | None:
     lowered = title.strip().lower()
+    if _looks_like_authoring_title(lowered):
+        return "document_authoring"
     target_app = _extract_target_app_name(title)
     if target_app and target_app != "browser":
         if target_app in {"excel", "powerpoint", "word"}:

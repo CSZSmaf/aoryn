@@ -233,6 +233,8 @@ class RealDesktopExecutor(ActionExecutor):
                 gui.press(action.key or "")
             elif action.type == "type":
                 self._type_text(action.text or "")
+            elif action.type == "insert_text":
+                self._insert_long_text(action.text or "")
             elif action.type == "drag":
                 self._drag_between(
                     action,
@@ -635,6 +637,30 @@ class RealDesktopExecutor(ActionExecutor):
         if _paste_text_via_clipboard(gui, text):
             return
         raise ExecutionError("Could not enter non-ASCII text into the focused control.")
+
+    def _insert_long_text(self, text: str) -> None:
+        """Write a multi-paragraph document into the focused editor.
+
+        Prefers a single clipboard paste because it handles Unicode, newlines, and
+        large bodies quickly; falls back to typing line by line so the agent still
+        behaves like a person at the keyboard when no clipboard is available.
+        """
+
+        if not text:
+            return
+        gui = _load_pyautogui()
+        if _paste_text_via_clipboard(gui, text):
+            return
+        lines = text.split("\n")
+        for index, line in enumerate(lines):
+            self._ensure_not_stopped()
+            if line:
+                if _is_ascii_text(line):
+                    gui.write(line, interval=0.01)
+                elif not _paste_text_via_clipboard(gui, line):
+                    raise ExecutionError("Could not enter non-ASCII document text into the focused control.")
+            if index < len(lines) - 1:
+                gui.press("enter")
 
     def _prepare_for_browser_task(self) -> None:
         self._refresh_environment()
@@ -1103,6 +1129,12 @@ class MockExecutor(ActionExecutor):
                 else:
                     current = self.state.text_buffers.get(self.state.active_app, "")
                     self.state.text_buffers[self.state.active_app] = current + (action.text or "")
+            return
+        if action.type == "insert_text":
+            if self.state.active_app:
+                current = self.state.text_buffers.get(self.state.active_app, "")
+                self.state.text_buffers[self.state.active_app] = current + (action.text or "")
+                self.state.last_extracted_text = self.state.text_buffers[self.state.active_app]
             return
         if action.type == "drag":
             return

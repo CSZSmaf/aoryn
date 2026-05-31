@@ -114,6 +114,9 @@ class Action:
         elif self.type == "type":
             if self.text is None:
                 raise ActionValidationError("type requires text.")
+        elif self.type == "insert_text":
+            if self.text is None:
+                raise ActionValidationError("insert_text requires text.")
         elif self.type in {"browser_open", "browser_search"}:
             if not (self.text or "").strip():
                 raise ActionValidationError(f"{self.type} requires text.")

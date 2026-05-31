@@ -192,6 +192,83 @@ Use it for:
 
 The recommended entry point is the advanced area inside settings.
 
+### 4.4 Complex Tasks: Research -> Synthesize -> Author
+
+Aoryn splits "sit at the computer and finish a complex task like a person" into three layers,
+mapping to brain, eyes, and hands:
+
+1. Research (eyes + hands): browser search, opening pages, and `browser_dom_extract`. On every
+   observation, the visible page title, URL, and body text are accumulated into the research notes
+   on `ExecutionState.workspace` instead of being discarded each step.
+2. Synthesize (brain): `DocumentComposer` in `desktop_agent/composer.py` reuses the configured model
+   endpoint (LM Studio / OpenAI-compatible) to "think" the research notes plus the goal into a
+   structured long-form document (a title plus `##` sections). When the model is unavailable or
+   offline, it falls back to a deterministic outline so dry-run, benchmarks, and offline runs still
+   produce a readable artifact.
+3. Author (hands): the `document_authoring` capability focuses the target editor (Word / Notepad /
+   WPS), then writes the finished document with a single `insert_text` action. `insert_text` prefers
+   a clipboard paste (Unicode, newlines, long bodies) and falls back to line-by-line typing; its size
+   ceiling is `max_document_length`.
+
+It triggers when the task contains an explicit author verb (write / compose / summarize / 整理 / 总结 ...)
+or names an editor (Word / Notepad / WPS). For example, "search Beijing travel guides then write it into
+Word" decomposes into a research subgoal (handled by `browser_dom`) and an authoring subgoal (handled by
+`document_authoring`). A plain "open notepad and type demo" is not treated as authoring.
+
+### 4.5 Autonomous planning: one high-level goal -> research -> author
+
+For a high-level "produce a deliverable that needs research first" goal, the agent **plans the steps
+itself** — you don't have to spell out the research/writing split. `_extract_deliverable_plan` in
+`planner.py` recognizes "a produce verb (write / plan / create / 撰写 / 规划 / 整理 ...) + a deliverable
+noun (report / plan / summary / guide / itinerary / 报告 / 计划 / 攻略 / 行程 ...)" in a single-sentence goal
+and autonomously expands it into:
+
+1. `search for {topic}` -> `browser_dom` (research online; results accumulate into the workspace notes)
+2. `write the {topic} {deliverable}` -> `document_authoring` (synthesize the notes with the model, write into an editor)
+
+with an explicit dependency (research before authoring). Examples:
+
+- "规划一个北京三日游" -> search Beijing 3-day trip -> write the trip itinerary
+- "write a report about EVs" -> search for EVs -> write the EV report
+- "create a study plan for calculus" -> search for calculus -> write the calculus plan
+
+Both subgoals are low risk (web research + local writing), so under the default `conservative` autonomy
+mode they are **auto-approved and run end to end** without step-by-step confirmation. The authoring subgoal
+is only marked complete once the write action actually executes into the editor (merely opening the editor
+does not count), which prevents "opened Word, therefore done" false completions. For fully hands-off runs
+that also skip confirmation on medium/high-risk steps, set `desktop_autonomy_mode` to `autonomous`.
+
+### 4.6 Autonomous planning, part two: model-driven adaptive re-planning
+
+The decomposition above is still heuristic (it reads intent from the wording). True "guide the agent to
+plan" means letting the **model reflect on and revise the plan during execution**: once the agent has
+gathered new information, `orchestrator.reflect_on_plan` -> `planner.reflect_on_plan` hands the model the
+**goal + completed steps + remaining steps + what has been learned** (research notes / facts / world model)
+and asks whether the remaining plan still reaches the goal, then **inserts/adjusts the remaining subgoals**
+accordingly (e.g. gather a missing detail before writing).
+
+Principles:
+
+- **The model plans; the system guides.** *When* to reflect is decided from runtime state (did the agent
+  just do a `browser_dom` research step, is there remaining work) — not by scraping behaviors from your
+  wording. *What* the new plan is comes from the model.
+- **Guardrails:** at most `max_plan_reflections` (default 2) reflections per run; completed subgoals are
+  preserved; if the model returns the current plan unchanged, nothing happens; offline / no model endpoint
+  -> skipped (deterministic degradation); if the revised plan raises the risk level it triggers a stage
+  review.
+- **Trigger:** currently for `research_summary` (research -> produce a deliverable) tasks, once a research
+  subgoal completes and remaining work exists.
+
+Example: running "write a report about EVs", the model inserts "search EV charging-station coverage" after
+the first research step, so execution becomes `research -> research (model-added) -> open Word -> write`.
+Toggles: `plan_reflection_enabled` / `max_plan_reflections`.
+
+Related configuration:
+
+- `composition_enabled`: whether the synthesis step may call the model (off uses the deterministic outline only).
+- `document_default_app`: default editor target when none is named (defaults to `word`).
+- `max_document_length`: maximum characters written in a single authoring step.
+
 ## 5. Core Configuration
 
 `desktop_agent/config.py` defines `AgentConfig`, which remains the single source of truth for runtime settings.
@@ -204,6 +281,9 @@ Common fields:
 - `model_api_key`
 - `model_auto_discover`
 - `model_structured_output`
+- `composition_enabled`
+- `document_default_app`
+- `max_document_length`
 - `max_steps`
 - `pause_after_action`
 - `browser_dom_backend`

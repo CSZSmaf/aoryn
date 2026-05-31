@@ -127,6 +127,69 @@ Agent 模式复用现有执行核心：
 
 推荐从设置里的高级入口进入。
 
+### 4.4 复杂任务：研究 → 综合 → 撰写
+
+Aoryn 把“像人一样坐在电脑前完成复杂任务”拆成三段能力，分别对应大脑、眼、手：
+
+1. 研究（眼 + 手）：浏览器检索、打开页面、`browser_dom_extract` 抽取正文。每一轮观测时，
+   可见的网页标题、URL、正文会沉淀进 `ExecutionState.workspace` 的研究笔记，而不是用完即弃。
+2. 综合（大脑）：`desktop_agent/composer.py` 的 `DocumentComposer` 复用当前配置的模型端点
+   （LM Studio / OpenAI 兼容），把研究笔记 + 任务目标“想成”一篇结构化长文（标题 + `##` 分节）。
+   模型不可用或离线时，回退到确定性大纲，保证 dry-run、基准测试与离线场景仍产出可读文档。
+3. 撰写（手）：`document_authoring` capability 先聚焦目标编辑器（Word / 记事本 / WPS），再用
+   `insert_text` 动作把成稿一次性写入。`insert_text` 优先走剪贴板粘贴（支持中文、换行、长文），
+   不可用时回退到逐行键入，长度上限由 `max_document_length` 控制。
+
+触发方式：任务里出现明确的“写/撰写/整理到/总结/生成报告 …”等动作词，或点名编辑器（Word/记事本/WPS）。
+例如“搜索北京旅游攻略然后整理到 Word 里”会被拆成“检索”子目标（走 `browser_dom`）和“整理到 Word”
+子目标（走 `document_authoring`）。纯粹的“打开记事本并输入 demo”不会被当成撰写任务。
+
+### 4.5 自主规划：从一句高层目标到研究→撰写
+
+更进一步，对“产出一份需要先查资料的成果”这类高层目标，Agent 会**自己规划步骤**，不需要你把
+检索/写作拆开说。`planner.py` 的 `_extract_deliverable_plan` 识别“动词（写/规划/整理/做/撰写/生成…）+
+成果名词（报告/计划/方案/攻略/总结/行程/指南…）”的单句目标，自动展开成：
+
+1. `搜索{主题}` → `browser_dom`（自主联网检索，结果沉淀进研究笔记）
+2. `撰写{主题}{成果}` → `document_authoring`（调用模型综合研究笔记，写入编辑器）
+
+并标注依赖关系（先研究后撰写）。例如：
+
+- “规划一个北京三日游” → 搜索北京三日游 → 撰写北京三日游行程
+- “写一份关于电动汽车的报告” → 搜索电动汽车 → 撰写电动汽车报告
+- “create a study plan for calculus” → search for calculus → write the calculus plan
+
+这两个子目标都是低风险（联网检索 + 本地写入），因此在默认的 `conservative` 自主模式下会
+**自动放行、端到端执行**，无需逐步确认。撰写子目标只有在“写入动作真正执行进编辑器”后才判定完成
+（开编辑器本身不算完成），避免“开了 Word 就以为写完了”。要更激进、连中/高风险步骤也不打断，可把
+`desktop_autonomy_mode` 设为 `autonomous`。
+
+### 4.6 自主规划之二：执行中由模型自适应再规划
+
+上面的拆解仍偏启发式（从描述里识别意图）。真正的“引导 Agent 制定计划”是让**模型在执行过程中
+自己反思、修订计划**：当 Agent 检索到新信息后，`orchestrator.reflect_on_plan` → `planner.reflect_on_plan`
+会把**目标 + 已完成步骤 + 剩余步骤 + 已获取的知识（研究笔记/事实/世界模型）**交给模型，让它判断
+“剩下的计划还能不能达成目标”，据此**插入/调整剩余子目标**（例如发现信息不足就先补查一项再写）。
+
+要点：
+
+- **模型来规划，系统来引导**：决定“何时反思”用的是运行时状态（刚刚是否做了 `browser_dom` 检索、
+  是否还有剩余工作），不是从你的措辞里抠行为；具体“改成什么计划”由模型产出。
+- **护栏**：每次运行最多反思 `max_plan_reflections`（默认 2）次；已完成的子目标只保留不改；模型
+  返回与现状一致就不动；离线/无模型端点时直接跳过（确定性降级）；新计划若抬高风险等级会触发
+  stage review。
+- **触发点**：当前对 `research_summary`（研究→产出成果）类任务，在一次检索子目标完成且仍有剩余
+  工作时反思一次。
+
+例：跑“写一份关于电动汽车的报告”，模型在第一轮检索后插入“搜索电动汽车充电桩分布”，于是实际执行
+变成 `检索 → 检索(模型新增) → 打开Word → 写入`。开关：`plan_reflection_enabled` / `max_plan_reflections`。
+
+相关配置：
+
+- `composition_enabled`：是否允许综合步骤调用模型（关闭则只用确定性大纲）。
+- `document_default_app`：未点名编辑器时的默认目标（默认 `word`）。
+- `max_document_length`：单次写入的最大字符数。
+
 ## 5. 关键配置
 
 `desktop_agent/config.py` 中的 `AgentConfig` 仍然是统一配置来源。
@@ -139,6 +202,9 @@ Agent 模式复用现有执行核心：
 - `model_api_key`
 - `model_auto_discover`
 - `model_structured_output`
+- `composition_enabled`
+- `document_default_app`
+- `max_document_length`
 - `max_steps`
 - `pause_after_action`
 - `browser_dom_backend`

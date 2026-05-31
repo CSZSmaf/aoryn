@@ -1027,6 +1027,21 @@ class DesktopAgent:
                             failure=verification,
                         )
 
+                if (
+                    subgoal_completed_now
+                    and not completed
+                    and self._should_reflect_after_subgoal(
+                        execution_state=execution_state,
+                        subgoal=current_subgoal,
+                        step_proposal=step_proposal,
+                    )
+                ):
+                    self._reflect_and_adapt_plan(
+                        run_dir=run_dir,
+                        execution_state=execution_state,
+                        world_model=post_world_model,
+                    )
+
                 if execution_state.task_graph.is_complete():
                     completed = True
                     execution_state.completed = True
@@ -1676,6 +1691,41 @@ class DesktopAgent:
                 world_model=world_model,
                 failure=failure,
             ):
+                self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
+        except Exception:
+            return
+
+    def _should_reflect_after_subgoal(
+        self,
+        *,
+        execution_state: ExecutionState,
+        subgoal: Subgoal | None,
+        step_proposal: StepProposal | None,
+    ) -> bool:
+        """Decide whether it is worth asking the model to re-plan, based on runtime
+        state (what was just gathered), not on the user's wording."""
+
+        if subgoal is None or not getattr(self.config, "plan_reflection_enabled", True):
+            return False
+        intent = execution_state.task_graph.intent if isinstance(execution_state.task_graph.intent, dict) else {}
+        if str(intent.get("task_type") or "") != "research_summary":
+            return False
+        gathered_information = (
+            step_proposal is not None and step_proposal.capability == "browser_dom"
+        ) or subgoal.capability_preference == "browser_dom"
+        if not gathered_information:
+            return False
+        return any(item.status != "completed" for item in execution_state.task_graph.subgoals)
+
+    def _reflect_and_adapt_plan(
+        self,
+        *,
+        run_dir: Path,
+        execution_state: ExecutionState,
+        world_model: WorldModel,
+    ) -> None:
+        try:
+            if self.orchestrator.reflect_on_plan(state=execution_state, world_model=world_model):
                 self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
         except Exception:
             return

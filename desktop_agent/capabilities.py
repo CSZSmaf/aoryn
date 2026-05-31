@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
+import time
 from typing import Any
 from urllib.parse import urlparse
 
 from desktop_agent.actions import Action, PlanResult
+from desktop_agent.composer import DocumentArtifact, DocumentComposer
 from desktop_agent.config import AgentConfig
 from desktop_agent.drivers import DriverRegistry
 from desktop_agent.planner import PlannerError
@@ -649,6 +651,235 @@ class OfficeCOMCapability(CapabilityAdapter):
         return 0.0
 
 
+class DocumentAuthoringCapability(CapabilityAdapter):
+    """Synthesize gathered research into a structured document and author it.
+
+    This is the "think + write" capability: it opens the target editor, asks the
+    composer (the model) to turn accumulated research notes plus the task goal
+    into a long-form document, then writes that document into the editor with a
+    single ``insert_text`` action.
+    """
+
+    name = "document_authoring"
+
+    _AUTHOR_VERBS = (
+        "write",
+        "compose",
+        "draft",
+        "summarize",
+        "summarise",
+        "撰写",
+        "起草",
+        "整理到",
+        "整理成",
+        "整理为",
+        "写入",
+        "写到",
+        "写进",
+        "写出",
+        "记录到",
+        "记录在",
+        "总结",
+        "生成文档",
+        "生成报告",
+    )
+    _EDITOR_APPS = ("word", "记事本", "notepad", "wps", "文档", "docx")
+
+    def can_handle(self, subgoal: Subgoal, world_model: WorldModel) -> float:
+        lowered = _normalize_text(f"{subgoal.title} {subgoal.goal or ''}")
+        # Require an explicit author verb (write / compose / 整理 / 总结 ...). Merely
+        # naming an editor ("open notepad", "type X") or a document noun is not enough,
+        # otherwise plain typing or navigation steps get hijacked.
+        if not lowered or not any(token in lowered for token in self._AUTHOR_VERBS):
+            return 0.0
+        active_editor = self._active_editor(world_model)
+        return min(0.96, 0.9 + (0.05 if active_editor else 0.0))
+
+    def propose_step(
+        self,
+        *,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        execution_state: ExecutionState,
+        config: AgentConfig,
+        planner,
+    ) -> StepProposal | None:
+        # Only act when this is genuinely an authoring subgoal; otherwise defer so
+        # the fallback planner keeps ownership of unrelated steps.
+        if self.can_handle(subgoal, world_model) < 0.5:
+            return None
+        target_app = self._target_app(subgoal, config)
+        if not _document_app_is_active(world_model, target_app):
+            # Opening the editor must not complete the subgoal: clear the (loosely
+            # inferred) completion evidence so this round only proves the editor is
+            # focused, and the document still has to be written afterwards.
+            subgoal.completion_evidence = None
+            action = Action.from_dict({"type": "open_app_if_needed", "app": target_app})
+            return StepProposal(
+                intent=f"Open {target_app} before writing the document for: {subgoal.title}",
+                actions=[action],
+                capability=self.name,
+                expected_evidence=[
+                    EvidenceRequirement(
+                        kind="active_app_is",
+                        value=target_app,
+                        detail=f"{target_app} should become active before the document is written.",
+                    )
+                ],
+                progress_signals=[target_app, subgoal.title],
+                risk_level="low",
+                current_focus=f"open {target_app}",
+                rationale="The target editor must be focused before the synthesized document can be written.",
+            )
+
+        artifact = self._ensure_artifact(subgoal=subgoal, execution_state=execution_state, config=config)
+        body = artifact.to_plain_text()
+        max_len = max(1, int(config.max_document_length))
+        if len(body) > max_len:
+            body = body[:max_len].rstrip()
+        action = Action.from_dict({"type": "insert_text", "text": body})
+        # Writing the composed document into the focused editor is the completion
+        # signal. The agent cannot read the document back out of the editor, so
+        # completion is proven by the write action executing into the active editor.
+        subgoal.completion_evidence = {
+            "kind": "action_executed",
+            "detail": f"The composed document was written into {target_app} for: {subgoal.title}",
+        }
+        return StepProposal(
+            intent=(
+                f"Write the composed document ({artifact.source}, {len(artifact.sections)} sections) "
+                f"into {target_app}."
+            ),
+            actions=[action],
+            capability=self.name,
+            expected_evidence=[
+                EvidenceRequirement(
+                    kind="active_app_is",
+                    value=target_app,
+                    detail=f"{target_app} stays active while the document is written.",
+                ),
+                EvidenceRequirement(
+                    kind="state_change",
+                    detail="The composed document text should appear in the editor.",
+                    required=False,
+                ),
+            ],
+            progress_signals=[artifact.title, target_app],
+            risk_level="low",
+            current_focus=f"write document into {target_app}",
+            completes_subgoal=True,
+            rationale=f"Authoring the synthesized document ({artifact.source}) completes the writing subgoal.",
+        )
+
+    def build_expected_evidence(
+        self,
+        *,
+        subgoal: Subgoal,
+        world_model: WorldModel,
+        actions: list[Action],
+    ) -> list[EvidenceRequirement]:
+        evidence = super().build_expected_evidence(subgoal=subgoal, world_model=world_model, actions=actions)
+        if any(action.type == "insert_text" for action in actions):
+            evidence.append(
+                EvidenceRequirement(
+                    kind="state_change",
+                    detail="The composed document text should appear in the editor.",
+                    required=False,
+                )
+            )
+        return evidence
+
+    def _ensure_artifact(
+        self,
+        *,
+        subgoal: Subgoal,
+        execution_state: ExecutionState,
+        config: AgentConfig,
+    ) -> DocumentArtifact:
+        workspace = execution_state.workspace
+        for item in workspace.artifacts:
+            if (
+                isinstance(item, dict)
+                and item.get("kind") == "composed_document"
+                and item.get("subgoal_id") == subgoal.id
+                and isinstance(item.get("document"), dict)
+            ):
+                return DocumentArtifact.from_dict(item["document"])
+
+        goal = (execution_state.task or "").strip() or subgoal.title
+        # Feed the composer real research material (web/selection notes), not the
+        # workspace's internal orchestration breadcrumbs.
+        research_notes = [
+            note
+            for note in workspace.notes
+            if isinstance(note, str) and (note.startswith("[web]") or note.startswith("[selection]"))
+        ]
+        if not research_notes:
+            research_notes = [
+                note
+                for note in workspace.notes
+                if isinstance(note, str) and not note.startswith("[composed]") and "proposed:" not in note
+            ]
+        composer = DocumentComposer(config)
+        artifact = composer.compose(
+            goal=goal,
+            notes=research_notes,
+            history=list(execution_state.memory),
+            doc_type=self._doc_type(subgoal),
+        )
+        workspace.artifacts.append(
+            {
+                "kind": "composed_document",
+                "subgoal_id": subgoal.id,
+                "title": artifact.title,
+                "source": artifact.source,
+                "document": artifact.to_dict(),
+                "created_at": time.time(),
+            }
+        )
+        del workspace.artifacts[:-16]
+        if config.task_workspace_enabled:
+            workspace.add_note(
+                f"[composed] {artifact.title} ({artifact.source}, {len(artifact.sections)} sections)"
+            )
+        return artifact
+
+    def _target_app(self, subgoal: Subgoal, config: AgentConfig) -> str:
+        lowered = _normalize_text(f"{subgoal.title} {subgoal.goal or ''}")
+        if any(token in lowered for token in ("notepad", "记事本")):
+            return "notepad"
+        if "wps" in lowered:
+            return "wps"
+        if any(token in lowered for token in ("word", "文档", "docx", "report", "报告", "document")):
+            return "word"
+        return (config.document_default_app or "word").strip() or "word"
+
+    def _doc_type(self, subgoal: Subgoal) -> str | None:
+        lowered = _normalize_text(f"{subgoal.title} {subgoal.goal or ''}")
+        for token, label in (
+            ("itinerary", "travel itinerary"),
+            ("攻略", "travel itinerary"),
+            ("旅游", "travel itinerary"),
+            ("report", "report"),
+            ("报告", "report"),
+            ("plan", "plan"),
+            ("计划", "plan"),
+            ("方案", "plan"),
+            ("summary", "summary"),
+            ("总结", "summary"),
+        ):
+            if token in lowered:
+                return label
+        return None
+
+    def _active_editor(self, world_model: WorldModel) -> bool:
+        active_app = _normalize_text(world_model.active_app)
+        if active_app in {"word", "notepad", "wps", "wordpad"}:
+            return True
+        active_title = _normalize_text(world_model.active_window_title)
+        return any(token in active_title for token in self._EDITOR_APPS)
+
+
 class WindowsUIACapability(CapabilityAdapter):
     name = "windows_uia"
 
@@ -1218,8 +1449,27 @@ def build_capability_registry() -> CapabilityRegistry:
     registry.register(FileSystemCapability())
     registry.register(ClipboardCapability())
     registry.register(OfficeCOMCapability())
+    registry.register(DocumentAuthoringCapability())
     registry.register(GuardedShellRecipeCapability())
     return registry
+
+
+def _document_app_is_active(world_model: WorldModel, app: str) -> bool:
+    aliases = _app_aliases(_normalize_text(app))
+    if not aliases:
+        return False
+    active_app = _normalize_text(world_model.active_app)
+    if active_app in aliases:
+        return True
+    active_title = _normalize_text(world_model.active_window_title)
+    if any(alias in active_title for alias in aliases):
+        return True
+    for item in world_model.visible_windows:
+        title = _normalize_text(item.get("title"))
+        process_name = _normalize_text(item.get("process_name"))
+        if any(alias in title or alias in process_name for alias in aliases):
+            return True
+    return False
 
 
 def _failure_key(subgoal_id: str, capability_name: str) -> str:
@@ -1466,6 +1716,7 @@ def _capability_supports_evidence(capability_name: str, evidence_kind: str) -> b
         "windows_uia": {"window_contains", "state_change"},
         "desktop_gui": {"window_contains", "state_change"},
         "office_com": {"fact_contains", "window_contains", "state_change"},
+        "document_authoring": {"state_change", "window_contains", "clipboard_or_input_changed", "fact_contains"},
         "guarded_shell_recipe": {"file_observation", "state_change"},
     }
     supported = mapping.get(capability_name, set())

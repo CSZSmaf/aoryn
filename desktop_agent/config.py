@@ -73,6 +73,7 @@ class AgentConfig:
     cursor_motion_enabled: bool = False
     cursor_motion_duration: float = 0.12
     max_text_length: int = 200
+    max_document_length: int = 20000
     max_browser_target_length: int = 512
     max_wait_seconds: float = 10.0
     max_scroll_amount: int = 1200
@@ -109,6 +110,10 @@ class AgentConfig:
     screen_target_policy: str = "foreground_window_monitor"
     approval_policy: str = "tiered"
     complex_task_planning: str = "hybrid"
+    composition_enabled: bool = True
+    document_default_app: str = "word"
+    plan_reflection_enabled: bool = True
+    max_plan_reflections: int = 2
     plan_review_policy: str = "low_risk_auto"
     max_task_subgoals: int = 12
     max_subgoal_retries: int = 2
@@ -125,6 +130,7 @@ class AgentConfig:
             "filesystem",
             "clipboard",
             "office_com",
+            "document_authoring",
             "guarded_shell_recipe",
         ]
     )
@@ -249,6 +255,25 @@ class AgentConfig:
         self.browser_headless = _normalized_bool(self.browser_headless, default=False)
         self.display_override_enabled = _normalized_bool(self.display_override_enabled, default=False)
         self.generic_app_launch_enabled = _normalized_bool(self.generic_app_launch_enabled, default=True)
+        self.composition_enabled = _normalized_bool(self.composition_enabled, default=True)
+        self.plan_reflection_enabled = _normalized_bool(self.plan_reflection_enabled, default=True)
+        try:
+            max_plan_reflections = int(self.max_plan_reflections)
+        except (TypeError, ValueError):
+            max_plan_reflections = 2
+        self.max_plan_reflections = max(0, min(10, max_plan_reflections))
+        try:
+            max_document_length = int(self.max_document_length)
+        except (TypeError, ValueError):
+            max_document_length = 20000
+        self.max_document_length = max(self.max_text_length, min(200000, max_document_length))
+        self.document_default_app = str(self.document_default_app or "word").strip() or "word"
+        if self.enabled_capabilities and "document_authoring" not in {
+            str(item).strip().lower() for item in self.enabled_capabilities
+        }:
+            # document_authoring is a core capability introduced after some configs
+            # were written; ensure stale configs still wire it in.
+            self.enabled_capabilities.append("document_authoring")
         try:
             duration = float(self.cursor_motion_duration)
         except (TypeError, ValueError):

@@ -6,6 +6,9 @@ pause_after_action: 0.12
 cursor_motion_enabled: false
 cursor_motion_duration: 0.12
 max_text_length: 200
+# Max characters the document-authoring capability may write in a single
+# insert_text step (research -> synthesize -> author pipeline). Range up to 200000.
+max_document_length: 20000
 max_browser_target_length: 512
 max_wait_seconds: 10
 max_scroll_amount: 1200
@@ -25,6 +28,15 @@ model_provider: lmstudio_local
 desktop_autonomy_mode: conservative
 approval_policy: tiered
 complex_task_planning: hybrid
+# Let the document-authoring "think" step call the model to synthesize gathered
+# research into a document. When false, a deterministic outline is used instead.
+composition_enabled: true
+# Default editor for authoring subgoals that do not name one (word/notepad/wps).
+document_default_app: word
+# Model-driven adaptive re-planning: after the agent gathers information, let the
+# model revise the remaining plan (insert/adjust steps). Bounded per run.
+plan_reflection_enabled: true
+max_plan_reflections: 2
 plan_review_policy: low_risk_auto
 max_task_subgoals: 12
 max_subgoal_retries: 2
@@ -42,6 +54,7 @@ enabled_capabilities:
   - filesystem
   - clipboard
   - office_com
+  - document_authoring
   - guarded_shell_recipe
 driver_preferences: []
 shell_recipe_policy: approval_required
