@@ -1,10 +1,14 @@
 planner_mode: auto
 dry_run: true
-max_steps: 6
-pause_after_action: 0.4
-cursor_motion_enabled: true
-cursor_motion_duration: 0.2
+max_steps: 20
+max_run_seconds:
+pause_after_action: 0.12
+cursor_motion_enabled: false
+cursor_motion_duration: 0.12
 max_text_length: 200
+# Max characters the document-authoring capability may write in a single
+# insert_text step (research -> synthesize -> author pipeline). Range up to 200000.
+max_document_length: 20000
 max_browser_target_length: 512
 max_wait_seconds: 10
 max_scroll_amount: 1200
@@ -14,19 +18,45 @@ model_base_url: http://127.0.0.1:1234/v1
 model_name: auto
 model_api_key:
 model_request_timeout: 90
+# Time budget (seconds) for the structured task-graph decomposition call used on
+# complex tasks. Higher values let the model return a real plan instead of falling
+# back to heuristics; capped by model_request_timeout. Range 0.5-60. Cloud/hosted
+# models often need 30-60s under load; too low silently degrades to heuristic plans.
+task_graph_request_timeout: 30
 model_auto_discover: true
 model_structured_output: auto
 model_provider: lmstudio_local
+# API computer-use mode (no local model): set planner_mode=computer_use,
+# model_base_url=https://api.openai.com/v1 or an OpenAI-compatible /v1 endpoint,
+# model_name=gpt-5.5, model_auto_discover=false, and provide model_api_key
+# or OPENAI_API_KEY. Responses API is preferred; chat/completions vision JSON
+# fallback is used when a compatible provider does not support the computer tool.
+desktop_autonomy_mode: conservative
 approval_policy: tiered
 complex_task_planning: hybrid
+# Let the document-authoring "think" step call the model to synthesize gathered
+# research into a document. When false, a deterministic outline is used instead.
+composition_enabled: true
+# When a research step feeds a downstream synthesis/authoring step, read the page
+# content (browser_dom_extract) into research notes instead of stopping at the
+# search results. Plain search tasks are unaffected.
+research_extract_enabled: true
+# Default editor for authoring subgoals that do not name one (word/notepad/wps).
+document_default_app: word
+# Model-driven adaptive re-planning: after the agent gathers information, let the
+# model revise the remaining plan (insert/adjust steps). Bounded per run.
+plan_reflection_enabled: true
+max_plan_reflections: 2
 plan_review_policy: low_risk_auto
-max_task_subgoals: 8
+max_task_subgoals: 12
 max_subgoal_retries: 2
 orchestrator_mode: unified
 stage_review_policy: risk_change
 task_workspace_enabled: true
-max_replans_per_run: 2
+max_replans_per_run: 3
 max_failures_per_subgoal: 3
+replan_on_recoverable_error: true
+recoverable_error_retry_limit: 2
 enabled_capabilities:
   - browser_dom
   - windows_uia
@@ -34,35 +64,59 @@ enabled_capabilities:
   - filesystem
   - clipboard
   - office_com
+  - document_authoring
   - guarded_shell_recipe
 driver_preferences: []
+# Optional Python modules that register software-specific app drivers or
+# capability adapters through register_plugin(context). Example:
+# plugin_modules:
+#   - desktop_agent.software_plugins.notepad
+#   - my_company.aoryn_excel_plugin
+plugin_modules: []
+plugin_fail_fast: false
 shell_recipe_policy: approval_required
 browser_control_mode: hybrid
 browser_dom_backend: playwright
-browser_dom_timeout: 8
+browser_dom_timeout: 4
 browser_headless: false
 browser_channel: msedge
 browser_executable_path:
 screenshot_format: png
 browser_search_url: https://www.google.com/search?q={query}
+shell_start_mode: main
 app_launch_map:
   notepad: notepad.exe
   calculator: calc.exe
   explorer: explorer.exe
   browser: msedge.exe
+  paint: mspaint.exe
+  settings: "ms-settings:"
+  word: winword.exe
+  excel: excel.exe
+  powerpoint: powerpnt.exe
+  vscode: code.exe
 allowed_apps:
   - notepad
   - calculator
   - explorer
   - browser
+  - paint
+  - settings
+  - word
+  - excel
+  - powerpoint
+  - vscode
 allowed_hotkeys:
   - [win, r]
   - [ctrl, l]
   - [ctrl, t]
+  - [ctrl, f]
   - [ctrl, a]
   - [ctrl, c]
   - [ctrl, v]
+  - [ctrl, s]
   - [alt, tab]
+  - [alt, f4]
 allowed_browser_schemes:
   - http
   - https

@@ -6,7 +6,7 @@ from pathlib import Path
 APP_NAME = "Aoryn"
 APP_BROWSER_NAME = "AorynBrowser"
 APP_BROWSER_DISPLAY_NAME = "Aoryn Browser"
-APP_VERSION = "0.1.28"
+APP_VERSION = "0.1.35"
 APP_PUBLISHER = "Aoryn"
 APP_ID = "Aoryn.Desktop.Shell"
 APP_BROWSER_ID = "Aoryn.Browser.Shell"
@@ -21,6 +21,7 @@ def _asset_version_source_paths() -> tuple[Path, ...]:
         assets_root / "app.js",
         assets_root / "vendor" / "desktop-markdown.js",
         assets_root / "icons" / "logo-mark.png",
+        assets_root / "icons" / "aoryn-mark.png",
     )
 
 

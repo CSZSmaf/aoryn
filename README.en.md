@@ -35,11 +35,11 @@ The equivalent Python entrypoint is:
 python scripts/dev_start.py
 ```
 
-By default this starts the source-mode workbench and tries to start the managed browser runtime:
+By default this starts the source-mode workbench and tries to start the managed browser runtime on ports that are separate from an installed Aoryn session:
 
 ```text
-Dashboard: http://127.0.0.1:8765
-Browser Runtime: http://127.0.0.1:38991
+Dashboard: http://127.0.0.1:8766
+Browser Runtime: http://127.0.0.1:38992
 ```
 
 Useful development flags:
@@ -47,23 +47,31 @@ Useful development flags:
 ```bash
 python scripts/dev_start.py --ui web --no-browser-tab
 python scripts/dev_start.py --no-managed-browser
-python scripts/dev_start.py --port 8766
+python scripts/dev_start.py --port 8770 --managed-browser-port 39000
 python scripts/dev_start.py --print-commands
 ```
 
-If port `8765` is already an Aoryn dashboard, the launcher reuses it. If another service owns the port, it fails early with a replacement port hint. Source-mode browser data stays under `.tmp/browser-runtime/browser-profile`; packaged AppData paths are unchanged.
+The launcher writes `.tmp/source-test/config.yaml` and points the workbench at the same managed browser runtime port. Source-mode browser data stays under `.tmp/source-test/browser-profile`; packaged AppData paths are unchanged. Build and installer validation can wait until the source-mode result looks good.
 
-### 2.3 Lower-Level Entrypoints
+### 2.3 Logic Benchmark
+
+Run the deterministic task-logic benchmark before packaging to check common planner routes such as desktop app launch, browser follow-up clicks, calculator expressions, hotkeys, and save-as flows:
+
+```bash
+python scripts/run_logic_benchmark.py
+```
+
+### 2.4 Lower-Level Entrypoints
 
 The direct commands are still available for debugging:
 
 ```bash
 python run_agent.py
-python run_agent.py ui --browser --no-browser --port 8765
-python run_browser.py --port 38991 --profile-root .tmp/browser-runtime/browser-profile
+python run_agent.py ui --browser --no-browser --port 8766 --config .tmp/source-test/config.yaml
+python run_browser.py --port 38992 --profile-root .tmp/source-test/browser-profile --config-path .tmp/source-test/config.yaml
 ```
 
-### 2.4 Build a Windows EXE
+### 2.5 Build a Windows EXE
 
 Build artifacts are for release validation, not daily source-mode testing. The desktop shell can be packaged as a Windows app with PyInstaller:
 
@@ -91,7 +99,7 @@ release/Aoryn-0.1.6-win64/
 release/Aoryn-Setup-0.1.6.exe
 ```
 
-### 2.4 Deploy the Official Website
+### 2.6 Deploy the Official Website
 
 The public website lives in:
 
@@ -184,6 +192,103 @@ Use it for:
 
 The recommended entry point is the advanced area inside settings.
 
+### 4.4 Complex Tasks: Research -> Synthesize -> Author
+
+Aoryn splits "sit at the computer and finish a complex task like a person" into three layers,
+mapping to brain, eyes, and hands:
+
+1. Research (eyes + hands): when a research subgoal feeds a downstream synthesis/authoring step,
+   `browser_dom` no longer stops at the results page — it **searches and then reads the results page
+   with `browser_dom_extract`**, accumulating the extracted content (`extracted_text`) plus the title/URL
+   into the `ExecutionState.workspace` research notes (`[extract]` ranks above `[web]`). The author then
+   synthesizes from **real page content**, not just a search snippet. Plain search tasks (no downstream
+   consumer) keep their single-step behaviour; toggle with `research_extract_enabled`.
+2. Synthesize (brain): `DocumentComposer` in `desktop_agent/composer.py` reuses the configured model
+   endpoint (LM Studio / OpenAI-compatible) to "think" the research notes plus the goal into a
+   structured long-form document (a title plus `##` sections). When the model is unavailable or
+   offline, it falls back to a deterministic outline so dry-run, benchmarks, and offline runs still
+   produce a readable artifact.
+3. Author (hands): the `document_authoring` capability focuses the target editor (Word / Notepad /
+   WPS), then writes the finished document with a single `insert_text` action. `insert_text` prefers
+   a clipboard paste (Unicode, newlines, long bodies) and falls back to line-by-line typing; its size
+   ceiling is `max_document_length`.
+
+It triggers when the task contains an explicit author verb (write / compose / summarize / 整理 / 总结 ...)
+or names an editor (Word / Notepad / WPS). For example, "search Beijing travel guides then write it into
+Word" decomposes into a research subgoal (handled by `browser_dom`) and an authoring subgoal (handled by
+`document_authoring`). A plain "open notepad and type demo" is not treated as authoring.
+
+### 4.5 Autonomous planning: one high-level goal -> research -> author
+
+For a high-level "produce a deliverable that needs research first" goal, the agent **plans the steps
+itself** — you don't have to spell out the research/writing split. `_extract_deliverable_plan` in
+`planner.py` recognizes "a produce verb (write / plan / create / 撰写 / 规划 / 整理 ...) + a deliverable
+noun (report / plan / summary / guide / itinerary / 报告 / 计划 / 攻略 / 行程 ...)" in a single-sentence goal
+and autonomously expands it into:
+
+1. `search for {topic}` -> `browser_dom` (research online; results accumulate into the workspace notes)
+2. `write the {topic} {deliverable}` -> `document_authoring` (synthesize the notes with the model, write into an editor)
+
+with an explicit dependency (research before authoring). Examples:
+
+- "规划一个北京三日游" -> search Beijing 3-day trip -> write the trip itinerary
+- "write a report about EVs" -> search for EVs -> write the EV report
+- "create a study plan for calculus" -> search for calculus -> write the calculus plan
+
+Both subgoals are low risk (web research + local writing), so under the default `conservative` autonomy
+mode they are **auto-approved and run end to end** without step-by-step confirmation. The authoring subgoal
+is only marked complete once the write action actually executes into the editor (merely opening the editor
+does not count), which prevents "opened Word, therefore done" false completions. For fully hands-off runs
+that also skip confirmation on medium/high-risk steps, set `desktop_autonomy_mode` to `autonomous`.
+
+### 4.6 Autonomous planning, part two: model-first initial planning + adaptive re-planning
+
+**Model-first initial planning.** The hybrid router in `_should_use_structured_task_graph` no longer gates
+on keyword-derived `task_type`/confidence — it now sends **every non-trivial task to the model**. Only
+deterministic single actions (open an app, one search/visit, a calculation, or a browser command) take the
+fast rule/heuristic path; everything else — multi-step tasks, deliverables, and **novel tasks with no
+keyword match at all** (e.g. "compare three note apps and recommend one") — is planned by the model. The
+keyword heuristics (`_extract_deliverable_plan`, etc.) are therefore demoted to an offline fallback plus
+capability hints; they no longer decide whether the model is used. With no model endpoint it falls back to
+heuristics (deterministic degradation).
+
+**Intelligent clarification (the model decides when to ask).** The model first *understands the user's
+intent* — when it understands, it just plans and makes reasonable assumptions for minor details instead of
+nagging. Only when the request is genuinely too vague / missing critical info (e.g. "help me handle this"
+with no object) does it return a `clarification` field (one specific question) or a `goal_type=clarify`
+subgoal, so the system asks instead of guessing. e.g. "帮我处理一下" -> asks "what do you want me to
+handle?", while "plan a Shanghai weekend trip" -> an 8-step plan straight away. The keyword heuristic only
+backstops truly empty commands.
+
+On top of that, true "guide the agent to plan" means letting the **model reflect on and revise the plan
+during execution**: once the agent has gathered new information, `orchestrator.reflect_on_plan` ->
+`planner.reflect_on_plan` hands the model the
+**goal + completed steps + remaining steps + what has been learned** (research notes / facts / world model)
+and asks whether the remaining plan still reaches the goal, then **inserts/adjusts the remaining subgoals**
+accordingly (e.g. gather a missing detail before writing).
+
+Principles:
+
+- **The model plans; the system guides.** *When* to reflect is decided from runtime state (did the agent
+  just do a `browser_dom` research step, is there remaining work) — not by scraping behaviors from your
+  wording. *What* the new plan is comes from the model.
+- **Guardrails:** at most `max_plan_reflections` (default 2) reflections per run; completed subgoals are
+  preserved; if the model returns the current plan unchanged, nothing happens; offline / no model endpoint
+  -> skipped (deterministic degradation); if the revised plan raises the risk level it triggers a stage
+  review.
+- **Trigger:** currently for `research_summary` (research -> produce a deliverable) tasks, once a research
+  subgoal completes and remaining work exists.
+
+Example: running "write a report about EVs", the model inserts "search EV charging-station coverage" after
+the first research step, so execution becomes `research -> research (model-added) -> open Word -> write`.
+Toggles: `plan_reflection_enabled` / `max_plan_reflections`.
+
+Related configuration:
+
+- `composition_enabled`: whether the synthesis step may call the model (off uses the deterministic outline only).
+- `document_default_app`: default editor target when none is named (defaults to `word`).
+- `max_document_length`: maximum characters written in a single authoring step.
+
 ## 5. Core Configuration
 
 `desktop_agent/config.py` defines `AgentConfig`, which remains the single source of truth for runtime settings.
@@ -196,6 +301,9 @@ Common fields:
 - `model_api_key`
 - `model_auto_discover`
 - `model_structured_output`
+- `composition_enabled`
+- `document_default_app`
+- `max_document_length`
 - `max_steps`
 - `pause_after_action`
 - `browser_dom_backend`

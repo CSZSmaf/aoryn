@@ -1,0 +1,75 @@
+cases:
+  - name: notepad_type_save_as
+    task: open notepad, type hello, then save as notes.txt
+    expected_subgoals:
+      - open notepad
+      - open notepad and type hello
+      - open notepad and save as notes.txt
+    expected_action_types:
+      - [open_app_if_needed, wait]
+      - [open_app_if_needed, wait, type]
+      - [open_app_if_needed, wait, hotkey, wait, type, press]
+    expected_action_fields:
+      - [{app: notepad}, {}]
+      - [{app: notepad}, {}, {text: hello}]
+      - [{app: notepad}, {}, {keys: [ctrl, s]}, {}, {text: notes.txt}, {key: enter}]
+
+  - name: calculator_follow_up_expression
+    task: open calculator then calculate 2+3 then wait 1 seconds then close
+    expected_subgoals:
+      - open calculator
+      - open calculator and calculate 2+3
+      - wait 1 seconds
+      - close calculator
+    expected_action_types:
+      - [open_app_if_needed, wait]
+      - [open_app_if_needed, wait, type, press]
+      - [wait]
+      - [close_window]
+    expected_action_fields:
+      - [{app: calculator}, {}]
+      - [{app: calculator}, {}, {text: 2+3}, {key: enter}]
+      - [{seconds: 1.0}]
+      - [{title: calculator}]
+
+  - name: browser_visit_then_click
+    task: visit example.com then click More information
+    expected_subgoals:
+      - open https://example.com
+      - click More information
+    expected_action_types:
+      - [browser_open]
+      - [browser_dom_click]
+    expected_action_fields:
+      - [{text: "https://example.com"}]
+      - [{text: More information}]
+
+  - name: open_url_with_open_verb
+    task: open https://example.com
+    expected_subgoals:
+      - open https://example.com
+    expected_action_types:
+      - [browser_open]
+    expected_action_fields:
+      - [{text: "https://example.com"}]
+
+  - name: generic_app_hotkey
+    task: open paint then press ctrl+s
+    expected_subgoals:
+      - open paint
+      - open paint and press ctrl+s
+    expected_action_types:
+      - [open_app_if_needed, wait]
+      - [open_app_if_needed, wait, hotkey]
+    expected_action_fields:
+      - [{app: paint}, {}]
+      - [{app: paint}, {}, {keys: [ctrl, s]}]
+
+  - name: standalone_calculator_expression
+    task: calculate 12/4
+    expected_subgoals:
+      - calculate 12/4
+    expected_action_types:
+      - [open_app_if_needed, wait, type, press]
+    expected_action_fields:
+      - [{app: calculator}, {}, {text: 12/4}, {key: enter}]

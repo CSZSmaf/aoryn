@@ -24,6 +24,7 @@ from desktop_agent.human_verification import HumanVerificationSignal, detect_hum
 from desktop_agent.logger import RunLogger
 from desktop_agent.orchestrator import TaskOrchestrator, standardize_failure_kind, task_graph_is_ambiguous, task_graph_risk_level
 from desktop_agent.perception import MockCapture, PerceptionError, ScreenCapture
+from desktop_agent.plugins import build_runtime_registries
 from desktop_agent.planner import (
     BasePlanner,
     PlannerError,
@@ -45,6 +46,7 @@ from desktop_agent.workflow import (
     PendingDecision,
     StepProposal,
     Subgoal,
+    TaskGraph,
     VerificationResult,
     WorldModel,
     build_execution_plan_summary,
@@ -69,6 +71,9 @@ class AgentRunResult:
     requires_human: bool = False
     interruption_kind: str | None = None
     interruption_reason: str | None = None
+    execution_budget: dict[str, Any] | None = None
+    execution_environment: dict[str, Any] | None = None
+    execution_state: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -106,12 +111,16 @@ class DesktopAgent:
         self.stop_requested = stop_requested
         self.progress_callback = progress_callback
         self.decision_callback = decision_callback
-        self.driver_registry = driver_registry or build_driver_registry()
+        runtime_capability_registry = None
+        runtime_driver_registry = None
+        if driver_registry is None or capability_executor is None:
+            runtime_capability_registry, runtime_driver_registry, _plugin_results = build_runtime_registries(config)
+        self.driver_registry = driver_registry or runtime_driver_registry or build_driver_registry()
         self.task_graph_planner = task_graph_planner or TaskGraphPlanner(config)
         self.capability_executor = capability_executor or CapabilityExecutor(
             config=config,
             planner=planner,
-            registry=build_capability_registry(),
+            registry=runtime_capability_registry or build_capability_registry(),
             driver_registry=self.driver_registry,
         )
         self.recipe_memory = recipe_memory or TaskRecipeMemory()
@@ -123,6 +132,8 @@ class DesktopAgent:
         )
         self._live_progress_context: dict[str, Any] | None = None
         self._live_pointer_trail: list[dict[str, Any]] = []
+        self._active_run_deadline: float | None = None
+        self._active_stop_reason: str | None = None
         if hasattr(self.executor, "set_action_progress_callback"):
             self.executor.set_action_progress_callback(self._handle_action_progress)
 
@@ -132,6 +143,8 @@ class DesktopAgent:
         *,
         run_dir: Path | None = None,
         execution_state: ExecutionState | None = None,
+        initial_task_graph: TaskGraph | None = None,
+        initial_plan_review_status: str | None = None,
         started_at: float | None = None,
         step_offset: int = 0,
         history: list[str] | None = None,
@@ -160,6 +173,13 @@ class DesktopAgent:
         cancel_reason: str | None = None
         step_count = max(0, int(step_offset))
         challenge_signal: HumanVerificationSignal | None = None
+        previous_deadline = self._active_run_deadline
+        previous_stop_reason = self._active_stop_reason
+        previous_executor_stop_requested = getattr(self.executor, "_run_stop_requested", None)
+        self._active_run_deadline = _resolve_run_deadline(started_at, self.config.max_run_seconds)
+        self._active_stop_reason = None
+        if hasattr(self.executor, "set_run_stop_requested"):
+            self.executor.set_run_stop_requested(self._stop_requested)
         last_step_signature: str | None = None
         repeated_plan_count = 0
         last_visible_step_signature: str | None = None
@@ -170,7 +190,8 @@ class DesktopAgent:
         for relative_step_index in range(1, self.config.max_steps + 1):
             if self._stop_requested():
                 cancelled = True
-                cancel_reason = "Stopped by user."
+                cancel_reason = self._stop_cancel_reason()
+                challenge_signal = self._build_stop_signal()
                 break
 
             step_index = step_offset + relative_step_index
@@ -193,6 +214,7 @@ class DesktopAgent:
                 environment_payload = _build_environment_payload(screen_info)
                 if hasattr(self.executor, "update_environment"):
                     self.executor.update_environment(getattr(screen_info, "environment", None))
+                self._raise_if_stop_requested()
 
                 phase_started = time.perf_counter()
                 world_model = self._build_world_model(
@@ -202,9 +224,29 @@ class DesktopAgent:
                     captured_at=captured_at,
                 )
                 _record_step_timing(step_timings, "world_model", phase_started)
+                self._raise_if_stop_requested()
                 challenge_signal = detect_human_verification(world_model.browser_snapshot)
                 if challenge_signal is not None:
+                    if execution_state is None:
+                        execution_state = self._initialize_execution_state(
+                            task=task,
+                            run_dir=run_dir,
+                            world_model=world_model,
+                            initial_task_graph=initial_task_graph,
+                            initial_plan_review_status=initial_plan_review_status,
+                        )
+                    else:
+                        execution_state.world_model = world_model
+                        execution_state.updated_at = time.time()
+                        self.orchestrator.prime_state(execution_state, world_model=world_model)
                     plan = _build_human_handoff_plan(challenge_signal)
+                    _mark_human_handoff_waiting(
+                        execution_state=execution_state,
+                        signal=challenge_signal,
+                        step_index=step_index,
+                        subgoal=execution_state.current_subgoal(),
+                    )
+                    self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
                     timings_payload = _finalize_step_timings(step_timings, step_started_at)
                     self.logger.log_step(
                         run_dir=run_dir,
@@ -217,6 +259,7 @@ class DesktopAgent:
                         challenge=challenge_signal.to_dict(),
                         captured_at=captured_at,
                         environment=environment_payload,
+                        state=build_execution_plan_summary(execution_state),
                         world_model=world_model.to_dict(),
                         timings=timings_payload,
                     )
@@ -233,7 +276,7 @@ class DesktopAgent:
                             challenge=challenge_signal.to_dict(),
                             started_at=started_at,
                             environment=environment_payload,
-                            execution_state=None,
+                            execution_state=execution_state,
                             step_proposal=None,
                             verification=None,
                             timings=timings_payload,
@@ -244,7 +287,13 @@ class DesktopAgent:
 
                 phase_started = time.perf_counter()
                 if execution_state is None:
-                    execution_state = self._initialize_execution_state(task=task, run_dir=run_dir, world_model=world_model)
+                    execution_state = self._initialize_execution_state(
+                        task=task,
+                        run_dir=run_dir,
+                        world_model=world_model,
+                        initial_task_graph=initial_task_graph,
+                        initial_plan_review_status=initial_plan_review_status,
+                    )
                 else:
                     execution_state.world_model = world_model
                     execution_state.updated_at = time.time()
@@ -265,6 +314,11 @@ class DesktopAgent:
                         title=world_model.active_window_title,
                     )
                     plan = _build_human_handoff_plan(challenge_signal)
+                    _mark_human_handoff_waiting(
+                        execution_state=execution_state,
+                        signal=challenge_signal,
+                        step_index=step_index,
+                    )
                     self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
                     self.logger.log_step(
                         run_dir=run_dir,
@@ -309,10 +363,78 @@ class DesktopAgent:
 
                 current_subgoal = self.orchestrator.prepare_stage(state=execution_state, world_model=world_model)
                 _record_step_timing(step_timings, "observe_prepare", phase_started)
+                self._raise_if_stop_requested()
                 if current_subgoal is None:
-                    completed = True
-                    execution_state.completed = True
-                    self.orchestrator.mark_complete(execution_state)
+                    if execution_state.task_graph.is_complete():
+                        completed = True
+                        execution_state.completed = True
+                        self.orchestrator.mark_complete(execution_state)
+                    else:
+                        error_message = _blocked_task_graph_message(execution_state)
+                        execution_state.completed = False
+                        execution_state.orchestration_phase = "blocked"
+                        execution_state.app_context["recovery_reason"] = error_message
+                        verification = VerificationResult(
+                            success=False,
+                            status="failed",
+                            evidence=[],
+                            failure_kind="goal_ambiguous",
+                            message=error_message,
+                        )
+                        execution_state.last_verification = verification
+                        execution_state.failures.append(
+                            {
+                                "subgoal_id": None,
+                                "failure_kind": verification.failure_kind,
+                                "standard_failure_kind": standardize_failure_kind(verification.failure_kind),
+                                "message": error_message,
+                                "step": step_index,
+                            }
+                        )
+                        plan = PlanResult(
+                            status_summary=error_message,
+                            done=False,
+                            actions=[],
+                            reasoning="No remaining subgoal is ready to execute.",
+                        )
+                        self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
+                        timings_payload = _finalize_step_timings(step_timings, step_started_at)
+                        self.logger.log_step(
+                            run_dir=run_dir,
+                            step_index=step_index,
+                            task=task,
+                            screenshot_path=screenshot_path,
+                            plan=plan,
+                            executed_actions=[],
+                            error=error_message,
+                            challenge=None,
+                            captured_at=captured_at,
+                            environment=environment_payload,
+                            state=build_execution_plan_summary(execution_state),
+                            world_model=world_model.to_dict(),
+                            step_proposal=None,
+                            verification=verification.to_dict(),
+                            timings=timings_payload,
+                        )
+                        self._emit_progress(
+                            self._build_progress_payload(
+                                task=task,
+                                run_dir=run_dir,
+                                step_index=step_index,
+                                screenshot_path=screenshot_path,
+                                captured_at=captured_at,
+                                plan=plan,
+                                executed_actions=[],
+                                error=error_message,
+                                challenge=None,
+                                started_at=started_at,
+                                environment=environment_payload,
+                                execution_state=execution_state,
+                                step_proposal=None,
+                                verification=verification,
+                                timings=timings_payload,
+                            )
+                        )
                     break
                 review_type = self.orchestrator.pending_review_type(execution_state)
                 if review_type is not None:
@@ -326,11 +448,19 @@ class DesktopAgent:
                         world_model=world_model,
                         decision_type=review_type,
                     )
-                    if decision_response.get("decision") == "reject":
+                    decision = _normalize_decision_response(decision_response.get("decision"))
+                    if decision == "reject":
                         error_message = (
                             "The replanned stage was rejected by the user."
                             if review_type == "stage_review"
                             else "The task plan was rejected by the user."
+                        )
+                        verification = VerificationResult(
+                            success=False,
+                            status="failed",
+                            evidence=[],
+                            failure_kind="approval_rejected",
+                            message=error_message,
                         )
                         execution_state.pending_decision = None
                         execution_state.app_context[
@@ -344,12 +474,32 @@ class DesktopAgent:
                             summary=error_message,
                             note=str(decision_response.get("note") or ""),
                         )
+                        _mark_approval_rejected(
+                            execution_state=execution_state,
+                            subgoal=current_subgoal,
+                            step_proposal=None,
+                            step_index=step_index,
+                            message=error_message,
+                            verification=verification,
+                        )
                         self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
                         break
-                    if decision_response.get("decision") == "cancel":
+                    if decision == "cancel":
                         cancelled = True
                         cancel_reason = str(decision_response.get("note") or "Stopped by user.")
                         execution_state.pending_decision = None
+                        execution_state.app_context[
+                            "stage_review_status" if review_type == "stage_review" else "plan_review_status"
+                        ] = "pending"
+                        self.orchestrator.record_decision(
+                            state=execution_state,
+                            decision_type=review_type,
+                            status="cancelled",
+                            risk_level=_task_graph_risk_level(execution_state),
+                            summary=f"{review_type} cancelled before approval.",
+                            note=cancel_reason,
+                        )
+                        execution_state.orchestration_phase = review_type
                         self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
                         break
                     execution_state.pending_decision = None
@@ -373,6 +523,12 @@ class DesktopAgent:
                         title=world_model.active_window_title,
                     )
                     plan = _build_human_handoff_plan(challenge_signal)
+                    _mark_human_handoff_waiting(
+                        execution_state=execution_state,
+                        signal=challenge_signal,
+                        step_index=step_index,
+                        subgoal=current_subgoal,
+                    )
                     self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
                     self.logger.log_step(
                         run_dir=run_dir,
@@ -425,6 +581,7 @@ class DesktopAgent:
                     screen_height=screen_info.height,
                 )
                 _record_step_timing(step_timings, "plan", phase_started)
+                self._raise_if_stop_requested()
                 plan_signature = _build_step_signature(current_subgoal.id, step_proposal, safe_actions)
                 visible_step_signature = _build_visible_step_signature(current_subgoal.id, step_proposal, safe_actions)
                 if plan_signature == last_step_signature:
@@ -455,7 +612,15 @@ class DesktopAgent:
                         failure_kind="goal_ambiguous",
                         message=error_message,
                     )
-                    execution_state.last_verification = verification
+                    _mark_repeated_step_loop_blocked(
+                        execution_state=execution_state,
+                        subgoal=current_subgoal,
+                        step_proposal=step_proposal,
+                        verification=verification,
+                        step_index=step_index,
+                        message=error_message,
+                        increment_attempt=True,
+                    )
                     self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
                     self.logger.log_step(
                         run_dir=run_dir,
@@ -505,7 +670,8 @@ class DesktopAgent:
                         environment_payload=environment_payload,
                         world_model=world_model,
                     )
-                    if decision_response.get("decision") == "reject":
+                    decision = _normalize_decision_response(decision_response.get("decision"))
+                    if decision == "reject":
                         error_message = "The requested high-risk step was rejected by the user."
                         verification = VerificationResult(
                             success=False,
@@ -514,7 +680,6 @@ class DesktopAgent:
                             failure_kind="approval_rejected",
                             message=error_message,
                         )
-                        execution_state.last_verification = verification
                         execution_state.pending_decision = None
                         self.orchestrator.record_decision(
                             state=execution_state,
@@ -523,6 +688,14 @@ class DesktopAgent:
                             risk_level=step_proposal.risk_level,
                             summary=step_proposal.intent,
                             note=str(decision_response.get("note") or ""),
+                        )
+                        _mark_approval_rejected(
+                            execution_state=execution_state,
+                            subgoal=current_subgoal,
+                            step_proposal=step_proposal,
+                            step_index=step_index,
+                            message=error_message,
+                            verification=verification,
                         )
                         self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
                         self.logger.log_step(
@@ -560,9 +733,10 @@ class DesktopAgent:
                             )
                         )
                         break
-                    if decision_response.get("decision") == "cancel":
+                    if decision == "cancel":
                         cancelled = True
                         cancel_reason = str(decision_response.get("note") or "Stopped by user.")
+                        execution_state.pending_decision = None
                         self.orchestrator.record_decision(
                             state=execution_state,
                             decision_type="step_approval",
@@ -584,7 +758,8 @@ class DesktopAgent:
 
                 if self._stop_requested():
                     cancelled = True
-                    cancel_reason = "Stopped by user."
+                    cancel_reason = self._stop_cancel_reason()
+                    challenge_signal = self._build_stop_signal()
                     break
 
                 for action in safe_actions:
@@ -613,11 +788,13 @@ class DesktopAgent:
                     _record_step_timing(step_timings, "execute", phase_started)
                 finally:
                     self._clear_live_progress_context()
+                self._raise_if_stop_requested(executed_actions=safe_actions)
                 execution_state.app_context["last_agent_action_at"] = time.time()
                 execution_state.current_surface_kind = step_proposal.surface_kind
                 recoverable_error_count = 0
                 phase_started = time.perf_counter()
                 captured_at = self._refresh_step_screenshot(screenshot_path) or captured_at
+                self._raise_if_stop_requested(executed_actions=safe_actions)
                 refreshed_screen_info = getattr(self.perception, "last_screen_info", None) or screen_info
                 post_world_model = self._build_world_model(
                     screenshot_path=screenshot_path,
@@ -625,15 +802,26 @@ class DesktopAgent:
                     step_index=step_index,
                     captured_at=captured_at,
                 )
+                last_input_tick_ms = getattr(post_world_model.user_desktop_session, "last_input_tick_ms", None)
+                if last_input_tick_ms is not None:
+                    execution_state.app_context["last_agent_input_tick_ms"] = int(last_input_tick_ms)
                 post_world_model.state_delta = _describe_world_model_delta(world_model, post_world_model)
                 post_facts = self.capability_executor.observe(post_world_model)
                 post_world_model.facts = post_facts
                 execution_state.facts = _merge_facts(execution_state.facts, post_facts)
                 _record_step_timing(step_timings, "capture_after", phase_started)
+                self._raise_if_stop_requested(executed_actions=safe_actions)
                 challenge_signal = detect_human_verification(post_world_model.browser_snapshot)
                 if challenge_signal is not None:
                     execution_state.world_model = post_world_model
                     plan = _build_human_handoff_plan(challenge_signal)
+                    _mark_human_handoff_waiting(
+                        execution_state=execution_state,
+                        signal=challenge_signal,
+                        step_index=step_index,
+                        subgoal=current_subgoal,
+                        step_proposal=step_proposal,
+                    )
                     self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
                     timings_payload = _finalize_step_timings(step_timings, step_started_at)
                     self.logger.log_step(
@@ -681,9 +869,21 @@ class DesktopAgent:
                     before=world_model,
                     after=post_world_model,
                 )
+                _downgrade_unproven_completion_claim(
+                    subgoal=current_subgoal,
+                    step_proposal=step_proposal,
+                    verification=verification,
+                )
+                self._raise_if_stop_requested(executed_actions=safe_actions)
                 execution_state.world_model = post_world_model
                 execution_state.last_verification = verification
                 execution_state.updated_at = time.time()
+                _ensure_verification_trace(
+                    execution_state=execution_state,
+                    subgoal=current_subgoal,
+                    step_proposal=step_proposal,
+                    verification=verification,
+                )
                 self.orchestrator.record_step_result(
                     state=execution_state,
                     step=step_proposal,
@@ -691,8 +891,9 @@ class DesktopAgent:
                     world_model=post_world_model,
                 )
                 _record_step_timing(step_timings, "verify", phase_started)
-                current_subgoal.attempts += 1
-                subgoal_completed_now = step_proposal.completes_subgoal or _verification_completed_subgoal(verification)
+                subgoal_completed_now = verification.status == "success" and (
+                    step_proposal.completes_subgoal or _verification_completed_subgoal(verification)
+                )
 
                 if verification.status == "success" and subgoal_completed_now:
                     execution_state.last_progress_at = time.time()
@@ -703,7 +904,7 @@ class DesktopAgent:
                     repeated_plan_count = 0
                     last_visible_step_signature = None
                     repeated_visible_step_count = 0
-                    if step_proposal.target_scope == "task":
+                    if step_proposal.target_scope == "task" and _verification_completed_task(verification):
                         for subgoal in execution_state.task_graph.subgoals:
                             if subgoal.status != "completed":
                                 execution_state.task_graph.mark_completed(
@@ -712,6 +913,16 @@ class DesktopAgent:
                                 )
                         completed = True
                         execution_state.completed = True
+                    elif step_proposal.target_scope == "task":
+                        message = (
+                            "Task-scope completion was downgraded because verification did not prove "
+                            "all remaining subgoals were complete."
+                        )
+                        if message not in current_subgoal.notes:
+                            current_subgoal.notes.append(message)
+                        execution_state.app_context["task_scope_completion_downgraded"] = True
+                        execution_state.app_context["task_scope_completion_reason"] = message
+                        execution_state.task_graph.mark_completed(current_subgoal.id, evidence=verification.to_dict())
                     else:
                         execution_state.task_graph.mark_completed(current_subgoal.id, evidence=verification.to_dict())
                 elif verification.status == "success":
@@ -736,7 +947,58 @@ class DesktopAgent:
                     repeated_visible_step_count = 0
                     current_subgoal.notes.append(verification.message or "Partial progress observed.")
                     current_subgoal.status = "pending"
+                    if _should_repair_after_partial_progress(
+                        execution_state=execution_state,
+                        subgoal=current_subgoal,
+                        step_proposal=step_proposal,
+                    ):
+                        recovery_mode = _schedule_recovery(
+                            execution_state=execution_state,
+                            subgoal=current_subgoal,
+                            step_proposal=step_proposal,
+                            verification=verification,
+                            step_index=step_index,
+                            recoverable=True,
+                            repeated_step_signature=(repeated_visible_step_count >= 2 or repeated_plan_count >= 2),
+                        )
+                        if recovery_mode == "replan":
+                            self._replan_remaining(
+                                run_dir=run_dir,
+                                execution_state=execution_state,
+                                world_model=post_world_model,
+                                failure=verification,
+                            )
+                        elif recovery_mode == "exhausted":
+                            verification.message = (
+                                "Repeated partial progress did not prove completion after repair and replan attempts."
+                                if not verification.message
+                                else f"Repeated partial progress did not prove completion after repair and replan attempts: {verification.message}"
+                            )
+                            verification.status = "failed"
+                            verification.success = False
+                            verification.failure_kind = verification.failure_kind or "verification_failed"
+                            execution_state.last_verification = verification
+                            current_subgoal.attempts += 1
+                            current_subgoal.status = "blocked"
+                            execution_state.failure_budget[current_subgoal.id] = 0
+                            execution_state.stuck_rounds += 1
+                            execution_state.failures.append(
+                                {
+                                    "subgoal_id": current_subgoal.id,
+                                    "failure_kind": verification.failure_kind,
+                                    "standard_failure_kind": standardize_failure_kind(verification.failure_kind),
+                                    "message": verification.message,
+                                    "step": step_index,
+                                }
+                            )
+                            _ensure_verification_trace(
+                                execution_state=execution_state,
+                                subgoal=current_subgoal,
+                                step_proposal=step_proposal,
+                                verification=verification,
+                            )
                 else:
+                    current_subgoal.attempts += 1
                     if step_proposal.capability and step_proposal.capability not in current_subgoal.failed_capabilities:
                         current_subgoal.failed_capabilities.append(step_proposal.capability)
                     current_subgoal.status = "blocked"
@@ -756,6 +1018,7 @@ class DesktopAgent:
                         step_proposal=step_proposal,
                         verification=verification,
                         step_index=step_index,
+                        repeated_step_signature=(repeated_visible_step_count >= 2 or repeated_plan_count >= 2),
                     )
                     if recovery_mode == "repair":
                         current_subgoal.status = "pending"
@@ -771,6 +1034,21 @@ class DesktopAgent:
                             world_model=post_world_model,
                             failure=verification,
                         )
+
+                if (
+                    subgoal_completed_now
+                    and not completed
+                    and self._should_reflect_after_subgoal(
+                        execution_state=execution_state,
+                        subgoal=current_subgoal,
+                        step_proposal=step_proposal,
+                    )
+                ):
+                    self._reflect_and_adapt_plan(
+                        run_dir=run_dir,
+                        execution_state=execution_state,
+                        world_model=post_world_model,
+                    )
 
                 if execution_state.task_graph.is_complete():
                     completed = True
@@ -823,7 +1101,8 @@ class DesktopAgent:
 
                 if self._stop_requested():
                     cancelled = True
-                    cancel_reason = "Stopped by user."
+                    cancel_reason = self._stop_cancel_reason()
+                    challenge_signal = self._build_stop_signal()
                     break
 
                 if completed:
@@ -832,6 +1111,9 @@ class DesktopAgent:
                     error_message = "Planner returned no executable actions before the task could finish."
                     break
                 if verification.status == "failed":
+                    if recovery_mode in {"repair", "replan"}:
+                        recoverable_error_count += 1
+                        continue
                     if (
                         (repeated_plan_count >= 3 and execution_state.stuck_rounds >= 2)
                         or (repeated_visible_step_count >= 3 and execution_state.stuck_rounds >= 1)
@@ -843,10 +1125,16 @@ class DesktopAgent:
                             if plan_loop_detected
                             else execution_loop_error
                         )
+                        _mark_repeated_step_loop_blocked(
+                            execution_state=execution_state,
+                            subgoal=current_subgoal,
+                            step_proposal=step_proposal,
+                            verification=verification,
+                            step_index=step_index,
+                            message=error_message,
+                            increment_attempt=False,
+                        )
                         break
-                    if recovery_mode in {"repair", "replan"}:
-                        recoverable_error_count += 1
-                        continue
                     if self.orchestrator.can_retry_subgoal(state=execution_state, subgoal=current_subgoal):
                         recoverable_error_count += 1
                         current_subgoal.status = "pending"
@@ -859,7 +1147,8 @@ class DesktopAgent:
                 current_subgoal.status = "pending" if not subgoal_completed_now else current_subgoal.status
             except ExecutionCancelled as exc:
                 cancelled = True
-                cancel_reason = str(exc) or "Stopped by user."
+                cancel_reason = self._stop_cancel_reason(str(exc) or "Stopped by user.")
+                challenge_signal = self._build_stop_signal()
                 cancelled_at = time.time()
                 cancel_plan = _build_cancelled_plan(plan)
                 if execution_state is not None:
@@ -933,6 +1222,7 @@ class DesktopAgent:
                         verification=verification,
                         step_index=step_index,
                         recoverable=recoverable,
+                        repeated_step_signature=(repeated_visible_step_count >= 2 or repeated_plan_count >= 2),
                     )
                 fallback_plan = PlanResult(
                     status_summary="Execution failed for this step.",
@@ -947,6 +1237,23 @@ class DesktopAgent:
                     remaining_steps=list(plan.remaining_steps) if plan else [],
                     raw_response=None,
                 )
+                recoverable_retry_limit = max(0, int(self.config.recoverable_error_retry_limit))
+                can_retry_recoverable = (
+                    self.config.replan_on_recoverable_error
+                    and recoverable_error_count < recoverable_retry_limit
+                )
+                if (
+                    recovery_mode == "replan"
+                    and can_retry_recoverable
+                    and execution_state is not None
+                    and world_model is not None
+                ):
+                    self._replan_remaining(
+                        run_dir=run_dir,
+                        execution_state=execution_state,
+                        world_model=world_model,
+                        failure=verification,
+                    )
                 failure_captured_at = time.time()
                 if execution_state is not None:
                     self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
@@ -993,27 +1300,30 @@ class DesktopAgent:
                 )
                 if execution_state is not None:
                     execution_state.memory = history[-8:]
-                if recovery_mode in {"repair", "replan"}:
-                    if recovery_mode == "replan" and execution_state is not None and world_model is not None:
-                        self._replan_remaining(
-                            run_dir=run_dir,
-                            execution_state=execution_state,
-                            world_model=world_model,
-                            failure=verification,
-                        )
+                if recovery_mode in {"repair", "replan"} and can_retry_recoverable:
                     recoverable_error_count += 1
                     continue
-                if (
-                    recoverable
-                    and self.config.replan_on_recoverable_error
-                    and recoverable_error_count < max(0, int(self.config.recoverable_error_retry_limit))
-                ):
+                if recoverable and can_retry_recoverable:
                     recoverable_error_count += 1
                     continue
                 error_message = step_error
                 break
 
+        if (
+            not completed
+            and not cancelled
+            and challenge_signal is None
+            and error_message is None
+            and int(self.config.max_steps or 0) <= max(0, step_count - step_offset)
+        ):
+            error_message = _mark_step_budget_exhausted(
+                execution_state=execution_state,
+                step_count=step_count,
+                max_steps=int(self.config.max_steps or 0),
+            )
+
         finished_at = time.time()
+        final_state_summary: dict[str, Any] | None = None
         if execution_state is not None:
             execution_state.completed = completed
             execution_state.updated_at = finished_at
@@ -1026,6 +1336,7 @@ class DesktopAgent:
                 except Exception:
                     pass
             self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
+            final_state_summary = build_execution_plan_summary(execution_state)
         self.logger.log_summary(
             run_dir=run_dir,
             task=task,
@@ -1033,6 +1344,22 @@ class DesktopAgent:
             steps=step_count,
             dry_run=self.config.dry_run,
             planner_mode=self.config.planner_mode,
+            task_graph_request_timeout=self.config.task_graph_request_timeout,
+            max_steps=self.config.max_steps,
+            max_run_seconds=self.config.max_run_seconds,
+            pause_after_action=self.config.pause_after_action,
+            desktop_autonomy_mode=self.config.desktop_autonomy_mode,
+            complex_task_planning=self.config.complex_task_planning,
+            approval_policy=self.config.approval_policy,
+            plan_review_policy=self.config.plan_review_policy,
+            stage_review_policy=self.config.stage_review_policy,
+            max_task_subgoals=self.config.max_task_subgoals,
+            max_subgoal_retries=self.config.max_subgoal_retries,
+            max_replans_per_run=self.config.max_replans_per_run,
+            max_failures_per_subgoal=self.config.max_failures_per_subgoal,
+            replan_on_recoverable_error=self.config.replan_on_recoverable_error,
+            recoverable_error_retry_limit=self.config.recoverable_error_retry_limit,
+            **_build_execution_environment_summary(self.config),
             error=error_message,
             cancelled=cancelled,
             cancel_reason=cancel_reason,
@@ -1042,7 +1369,7 @@ class DesktopAgent:
             started_at=started_at,
             finished_at=finished_at,
         )
-        return AgentRunResult(
+        result = AgentRunResult(
             task=task,
             completed=completed,
             steps=step_count,
@@ -1055,7 +1382,15 @@ class DesktopAgent:
             requires_human=challenge_signal is not None,
             interruption_kind=challenge_signal.kind if challenge_signal else None,
             interruption_reason=challenge_signal.detail if challenge_signal else None,
+            execution_budget=_build_execution_budget_summary(self.config),
+            execution_environment=_build_execution_environment_summary(self.config),
+            execution_state=final_state_summary,
         )
+        self._active_run_deadline = previous_deadline
+        self._active_stop_reason = previous_stop_reason
+        if hasattr(self.executor, "set_run_stop_requested"):
+            self.executor.set_run_stop_requested(previous_executor_stop_requested)
+        return result
 
     def _refresh_step_screenshot(self, screenshot_path: Path) -> float | None:
         try:
@@ -1177,7 +1512,35 @@ class DesktopAgent:
             world_model.structured_sources.append(f"driver:{world_model.active_driver}")
         return world_model
 
-    def _initialize_execution_state(self, *, task: str, run_dir: Path, world_model: WorldModel) -> ExecutionState:
+    def _initialize_execution_state(
+        self,
+        *,
+        task: str,
+        run_dir: Path,
+        world_model: WorldModel,
+        initial_task_graph: TaskGraph | None = None,
+        initial_plan_review_status: str | None = None,
+    ) -> ExecutionState:
+        if initial_task_graph is not None:
+            state = self.orchestrator.initialize_state_from_graph(
+                task=task,
+                run_id=run_dir.name,
+                task_graph=initial_task_graph,
+                world_model=world_model,
+                plan_source="preview",
+            )
+            if str(initial_plan_review_status or "").strip().lower() == "approved":
+                state.app_context["plan_review_status"] = "approved"
+                state.app_context["plan_review_reason"] = "The matching dashboard preview was approved before execution."
+                self.orchestrator.record_decision(
+                    state=state,
+                    decision_type="plan_review",
+                    status="approved",
+                    risk_level=_task_graph_risk_level(state),
+                    summary="Preview plan approved before execution.",
+                    note="Submitted from a matching dashboard plan preview.",
+                )
+            return state
         return self.orchestrator.initialize_state(task=task, run_id=run_dir.name, world_model=world_model)
 
     def _log_execution_state(self, *, run_dir: Path, execution_state: ExecutionState) -> None:
@@ -1187,6 +1550,7 @@ class DesktopAgent:
             task_graph=execution_state.task_graph.to_dict(),
             state=summary,
             facts=[item.to_dict() for item in execution_state.facts],
+            execution_state=execution_state.to_dict(),
         )
 
     def _request_plan_review(
@@ -1339,6 +1703,41 @@ class DesktopAgent:
         except Exception:
             return
 
+    def _should_reflect_after_subgoal(
+        self,
+        *,
+        execution_state: ExecutionState,
+        subgoal: Subgoal | None,
+        step_proposal: StepProposal | None,
+    ) -> bool:
+        """Decide whether it is worth asking the model to re-plan, based on runtime
+        state (what was just gathered), not on the user's wording."""
+
+        if subgoal is None or not getattr(self.config, "plan_reflection_enabled", True):
+            return False
+        intent = execution_state.task_graph.intent if isinstance(execution_state.task_graph.intent, dict) else {}
+        if str(intent.get("task_type") or "") != "research_summary":
+            return False
+        gathered_information = (
+            step_proposal is not None and step_proposal.capability == "browser_dom"
+        ) or subgoal.capability_preference == "browser_dom"
+        if not gathered_information:
+            return False
+        return any(item.status != "completed" for item in execution_state.task_graph.subgoals)
+
+    def _reflect_and_adapt_plan(
+        self,
+        *,
+        run_dir: Path,
+        execution_state: ExecutionState,
+        world_model: WorldModel,
+    ) -> None:
+        try:
+            if self.orchestrator.reflect_on_plan(state=execution_state, world_model=world_model):
+                self._log_execution_state(run_dir=run_dir, execution_state=execution_state)
+        except Exception:
+            return
+
     def _build_progress_payload(
         self,
         *,
@@ -1380,6 +1779,7 @@ class DesktopAgent:
             "orchestration_phase": state_summary.get("orchestration_phase") if isinstance(state_summary, dict) else None,
             "active_specialist": state_summary.get("active_specialist") if isinstance(state_summary, dict) else None,
             "workspace_summary": state_summary.get("workspace_summary") if isinstance(state_summary, dict) else None,
+            "plan_review_status": state_summary.get("plan_review_status") if isinstance(state_summary, dict) else None,
             "stage_review_status": state_summary.get("stage_review_status") if isinstance(state_summary, dict) else None,
             "last_replan_reason": state_summary.get("last_replan_reason") if isinstance(state_summary, dict) else None,
             "current_goal": state_summary.get("current_goal") if isinstance(state_summary, dict) else None,
@@ -1509,12 +1909,40 @@ class DesktopAgent:
         )
 
     def _stop_requested(self) -> bool:
+        if self._active_run_deadline is not None and time.time() >= self._active_run_deadline:
+            self._active_stop_reason = "time_limit"
+            return True
         if self.stop_requested is None:
             return False
         try:
-            return bool(self.stop_requested())
+            requested = bool(self.stop_requested())
         except Exception:
             return False
+        if requested:
+            self._active_stop_reason = "user"
+        return requested
+
+    def _raise_if_stop_requested(self, *, executed_actions: list[Action] | None = None) -> None:
+        if self._stop_requested():
+            raise ExecutionCancelled(executed_actions=list(executed_actions or []))
+
+    def _stop_cancel_reason(self, fallback: str = "Stopped by user.") -> str:
+        if self._active_stop_reason == "time_limit":
+            return "Run time limit reached."
+        return fallback
+
+    def _build_stop_signal(self) -> HumanVerificationSignal | None:
+        if self._active_stop_reason != "time_limit":
+            return None
+        return HumanVerificationSignal(
+            kind="time_limit",
+            summary="Run time limit reached. Pause automation and resume when ready.",
+            detail=(
+                "The configured maximum run duration elapsed, so Aoryn stopped before starting more desktop "
+                "automation. Reopen this run from history to resume from the saved state."
+            ),
+            title=None,
+        )
 
     @staticmethod
     def _is_recoverable_error(exc: Exception) -> bool:
@@ -1740,8 +2168,64 @@ def _task_graph_risk_level(execution_state: ExecutionState) -> str:
     return task_graph_risk_level(execution_state.task_graph)
 
 
+def _normalize_decision_response(value: Any) -> str:
+    decision = str(value or "").strip().lower()
+    aliases = {
+        "approved": "approve",
+        "rejected": "reject",
+        "cancelled": "cancel",
+        "canceled": "cancel",
+    }
+    decision = aliases.get(decision, decision)
+    return decision if decision in {"approve", "reject", "cancel"} else "reject"
+
+
 def _task_graph_is_ambiguous(execution_state: ExecutionState) -> bool:
     return task_graph_is_ambiguous(execution_state.task_graph)
+
+
+def _blocked_task_graph_message(execution_state: ExecutionState) -> str:
+    blocked_subgoals = [
+        subgoal
+        for subgoal in execution_state.task_graph.subgoals
+        if subgoal.status != "completed"
+    ]
+    if not blocked_subgoals:
+        return "Task graph is blocked because it has no executable subgoals."
+
+    details: list[str] = []
+    all_subgoals = {subgoal.id: subgoal for subgoal in execution_state.task_graph.subgoals}
+    for subgoal in blocked_subgoals[:3]:
+        prerequisites = execution_state.task_graph.prerequisites_for(subgoal)
+        missing = [item for item in prerequisites if item not in all_subgoals]
+        unmet = [
+            f"{item}:{all_subgoals[item].status}"
+            for item in prerequisites
+            if item in all_subgoals and all_subgoals[item].status != "completed"
+        ]
+        remaining_budget = execution_state.failure_budget.get(subgoal.id)
+        exhausted = (
+            (remaining_budget is not None and int(remaining_budget or 0) <= 0)
+            or subgoal.attempts >= max(1, subgoal.max_attempts)
+        )
+        if exhausted:
+            details.append(
+                f"{subgoal.id} exhausted retries "
+                f"(attempts {subgoal.attempts}/{max(1, subgoal.max_attempts)}, "
+                f"failure budget {remaining_budget if remaining_budget is not None else 'unknown'})"
+            )
+        elif missing or unmet:
+            reason_parts = []
+            if missing:
+                reason_parts.append(f"missing prerequisites {', '.join(missing[:3])}")
+            if unmet:
+                reason_parts.append(f"unmet prerequisites {', '.join(unmet[:3])}")
+            details.append(f"{subgoal.id} waits on {'; '.join(reason_parts)}")
+        else:
+            details.append(f"{subgoal.id} is {subgoal.status} but not ready")
+
+    suffix = f": {' | '.join(details)}" if details else "."
+    return f"Task graph is blocked because no remaining subgoal is ready{suffix}"
 
 
 def _build_plan_review_reason(execution_state: ExecutionState, *, decision_type: str = "plan_review") -> str:
@@ -1766,6 +2250,244 @@ def _count_subgoal_recovery(execution_state: ExecutionState, subgoal_id: str, mo
     return count
 
 
+def _ensure_verification_trace(
+    *,
+    execution_state: ExecutionState,
+    subgoal: Subgoal,
+    step_proposal: StepProposal,
+    verification: VerificationResult,
+) -> None:
+    capability_name = step_proposal.capability or "unknown"
+    key = f"{subgoal.id}:{capability_name}"
+    expected_ledger = {
+        "subgoal_id": subgoal.id,
+        "capability": capability_name,
+        "status": verification.status,
+        "verified_at": verification.verified_at,
+    }
+    already_traced = False
+    traced_item: dict[str, Any] | None = None
+    for item in reversed(execution_state.evidence_ledger[-3:]):
+        if not isinstance(item, dict):
+            continue
+        if (
+            item.get("subgoal_id") == expected_ledger["subgoal_id"]
+            and item.get("capability") == expected_ledger["capability"]
+            and item.get("status") == expected_ledger["status"]
+            and item.get("verified_at") == expected_ledger["verified_at"]
+        ):
+            already_traced = True
+            traced_item = item
+            break
+    if already_traced:
+        if traced_item is not None:
+            traced_item["evidence"] = list(verification.evidence)
+            traced_item["message"] = verification.message
+        return
+
+    history = execution_state.capability_failures.setdefault(key, [])
+    history.append(verification.status)
+    del history[:-6]
+    execution_state.evidence_ledger.append(
+        {
+            **expected_ledger,
+            "evidence": list(verification.evidence),
+            "message": verification.message,
+        }
+    )
+
+
+def _mark_repeated_step_loop_blocked(
+    *,
+    execution_state: ExecutionState,
+    subgoal: Subgoal,
+    step_proposal: StepProposal,
+    verification: VerificationResult,
+    step_index: int,
+    message: str,
+    increment_attempt: bool,
+) -> None:
+    verification.status = "failed"
+    verification.success = False
+    verification.failure_kind = verification.failure_kind or "goal_ambiguous"
+    verification.message = message
+    execution_state.last_verification = verification
+    if increment_attempt:
+        subgoal.attempts += 1
+    subgoal.status = "blocked"
+    if step_proposal.capability and step_proposal.capability not in subgoal.failed_capabilities:
+        subgoal.failed_capabilities.append(step_proposal.capability)
+    execution_state.failure_budget[subgoal.id] = 0
+    execution_state.orchestration_phase = "blocked"
+    execution_state.app_context.pop("pending_repair", None)
+    execution_state.app_context["recovery_reason"] = message
+    execution_state.app_context["standard_recovery_kind"] = standardize_failure_kind(verification.failure_kind)
+    failure_payload = {
+        "subgoal_id": subgoal.id,
+        "failure_kind": verification.failure_kind,
+        "standard_failure_kind": standardize_failure_kind(verification.failure_kind),
+        "message": message,
+        "step": step_index,
+    }
+    if not any(
+        isinstance(item, dict)
+        and item.get("subgoal_id") == failure_payload["subgoal_id"]
+        and item.get("step") == failure_payload["step"]
+        and item.get("message") == failure_payload["message"]
+        for item in execution_state.failures[-3:]
+    ):
+        execution_state.failures.append(failure_payload)
+    _ensure_verification_trace(
+        execution_state=execution_state,
+        subgoal=subgoal,
+        step_proposal=step_proposal,
+        verification=verification,
+    )
+    execution_state.updated_at = time.time()
+
+
+def _mark_approval_rejected(
+    *,
+    execution_state: ExecutionState,
+    subgoal: Subgoal | None,
+    step_proposal: StepProposal | None,
+    step_index: int,
+    message: str,
+    verification: VerificationResult | None = None,
+) -> VerificationResult:
+    verification = verification or VerificationResult(
+        success=False,
+        status="failed",
+        evidence=[],
+        failure_kind="approval_rejected",
+        message=message,
+    )
+    verification.status = "failed"
+    verification.success = False
+    verification.failure_kind = verification.failure_kind or "approval_rejected"
+    verification.message = message
+    execution_state.completed = False
+    execution_state.orchestration_phase = "blocked"
+    execution_state.pending_decision = None
+    execution_state.last_verification = verification
+    execution_state.app_context["recovery_reason"] = message
+    execution_state.app_context["standard_recovery_kind"] = standardize_failure_kind(verification.failure_kind)
+    if subgoal is not None:
+        subgoal.status = "blocked"
+        execution_state.failure_budget[subgoal.id] = 0
+    failure_payload = {
+        "subgoal_id": subgoal.id if subgoal is not None else None,
+        "failure_kind": verification.failure_kind,
+        "standard_failure_kind": standardize_failure_kind(verification.failure_kind),
+        "message": message,
+        "step": step_index,
+    }
+    if not any(
+        isinstance(item, dict)
+        and item.get("subgoal_id") == failure_payload["subgoal_id"]
+        and item.get("step") == failure_payload["step"]
+        and item.get("message") == failure_payload["message"]
+        for item in execution_state.failures[-3:]
+    ):
+        execution_state.failures.append(failure_payload)
+    if subgoal is not None and step_proposal is not None:
+        _ensure_verification_trace(
+            execution_state=execution_state,
+            subgoal=subgoal,
+            step_proposal=step_proposal,
+            verification=verification,
+        )
+    execution_state.updated_at = time.time()
+    return verification
+
+
+def _mark_human_handoff_waiting(
+    *,
+    execution_state: ExecutionState,
+    signal: HumanVerificationSignal,
+    step_index: int,
+    subgoal: Subgoal | None = None,
+    step_proposal: StepProposal | None = None,
+) -> VerificationResult:
+    failure_kind = "requires_clarification" if signal.kind == "requires_clarification" else "requires_human"
+    message = signal.detail or signal.summary
+    verification = VerificationResult(
+        success=False,
+        status="failed",
+        evidence=[
+            {
+                "kind": signal.kind,
+                "message": signal.summary,
+                "detail": signal.detail,
+                "title": signal.title,
+                "requires_human": signal.requires_human,
+            }
+        ],
+        failure_kind=failure_kind,
+        message=message,
+    )
+    execution_state.completed = False
+    execution_state.orchestration_phase = "awaiting_user"
+    execution_state.pending_decision = None
+    execution_state.last_verification = verification
+    execution_state.app_context["human_handoff_kind"] = signal.kind
+    execution_state.app_context["human_handoff_summary"] = signal.summary
+    execution_state.app_context["human_handoff_reason"] = message
+    execution_state.app_context["recovery_reason"] = message
+    execution_state.app_context["standard_recovery_kind"] = "requires_user"
+    if subgoal is not None and subgoal.status == "in_progress":
+        subgoal.status = "pending"
+    if subgoal is not None and step_proposal is not None:
+        _ensure_verification_trace(
+            execution_state=execution_state,
+            subgoal=subgoal,
+            step_proposal=step_proposal,
+            verification=verification,
+        )
+    execution_state.updated_at = time.time()
+    return verification
+
+
+def _mark_step_budget_exhausted(
+    *,
+    execution_state: ExecutionState | None,
+    step_count: int,
+    max_steps: int,
+) -> str:
+    message = f"Step budget exhausted after {max_steps} steps before the task could finish."
+    if execution_state is None:
+        return message
+    subgoal = execution_state.task_graph.current_subgoal()
+    verification = VerificationResult(
+        success=False,
+        status="failed",
+        evidence=[],
+        failure_kind="goal_ambiguous",
+        message=message,
+    )
+    execution_state.completed = False
+    execution_state.orchestration_phase = "blocked"
+    execution_state.last_verification = verification
+    execution_state.app_context["recovery_reason"] = message
+    execution_state.app_context["step_budget_exhausted"] = True
+    failure_payload = {
+        "subgoal_id": subgoal.id if subgoal is not None else None,
+        "failure_kind": verification.failure_kind,
+        "standard_failure_kind": standardize_failure_kind(verification.failure_kind),
+        "message": message,
+        "step": step_count,
+    }
+    if not any(
+        isinstance(item, dict)
+        and item.get("step") == failure_payload["step"]
+        and item.get("message") == failure_payload["message"]
+        for item in execution_state.failures[-3:]
+    ):
+        execution_state.failures.append(failure_payload)
+    execution_state.updated_at = time.time()
+    return message
+
+
 def _schedule_recovery(
     *,
     execution_state: ExecutionState,
@@ -1774,6 +2496,7 @@ def _schedule_recovery(
     verification: VerificationResult,
     step_index: int,
     recoverable: bool = False,
+    repeated_step_signature: bool = False,
 ) -> str | None:
     standard_kind = standardize_failure_kind(verification.failure_kind)
     if verification.failure_kind in {"requires_auth", "requires_human", "approval_rejected"}:
@@ -1785,6 +2508,14 @@ def _schedule_recovery(
     repair_attempts = _count_subgoal_recovery(execution_state, subgoal.id, "repair")
     replan_attempts = _count_subgoal_recovery(execution_state, subgoal.id, "replan")
     capability_name = step_proposal.capability if step_proposal is not None else None
+
+    # When the planner keeps proposing the same action and it keeps failing
+    # despite repair attempts, let the next repair round try a different
+    # capability. Reusing the same blocked-capability list would produce the
+    # same plan again.
+    if repeated_step_signature and repair_attempts >= 1 and subgoal.failed_capabilities:
+        subgoal.failed_capabilities.clear()
+        execution_state.app_context["recovery_escalation"] = "repeated_step_capability_reset"
 
     if repair_attempts < 2:
         execution_state.app_context["pending_repair"] = {
@@ -1834,16 +2565,97 @@ def _schedule_recovery(
     execution_state.app_context.pop("pending_repair", None)
     execution_state.app_context["recovery_reason"] = verification.message or verification.failure_kind
     execution_state.app_context["standard_recovery_kind"] = standard_kind
-    return None
+    return "exhausted"
+
+
+def _should_repair_after_partial_progress(
+    *,
+    execution_state: ExecutionState,
+    subgoal: Subgoal,
+    step_proposal: StepProposal | None,
+) -> bool:
+    if step_proposal is None or not step_proposal.capability:
+        return False
+    history = execution_state.capability_failures.get(f"{subgoal.id}:{step_proposal.capability}", [])
+    return len(history) >= 2 and history[-2:] == ["partial_progress", "partial_progress"]
 
 
 def _verification_completed_subgoal(verification: VerificationResult | None) -> bool:
     if verification is None or verification.status != "success":
         return False
     for item in verification.evidence:
-        if str(item.get("scope")) == "subgoal_completion" and bool(item.get("satisfied")):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("scope")) == "subgoal_completion" and _optional_bool(item.get("satisfied")) is True:
             return True
     return False
+
+
+def _verification_completed_task(verification: VerificationResult | None) -> bool:
+    if verification is None or verification.status != "success":
+        return False
+    for item in verification.evidence:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("scope")) == "task_completion" and _optional_bool(item.get("satisfied")) is True:
+            return True
+    return False
+
+
+def _downgrade_unproven_completion_claim(
+    *,
+    subgoal: Subgoal,
+    step_proposal: StepProposal,
+    verification: VerificationResult,
+) -> None:
+    if verification.status != "success" or not step_proposal.completes_subgoal:
+        return
+    if _verification_has_completion_proof(verification):
+        return
+    verification.status = "failed"
+    verification.success = False
+    verification.failure_kind = verification.failure_kind or "verification_failed"
+    verification.message = (
+        "Completion was claimed, but verification did not provide evidence proving "
+        f"the subgoal is complete: {subgoal.title}"
+    )
+
+
+def _verification_has_completion_proof(verification: VerificationResult) -> bool:
+    if _verification_completed_subgoal(verification):
+        return True
+    return any(_evidence_item_supports_completion(item) for item in verification.evidence)
+
+
+def _evidence_item_supports_completion(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return bool(str(item or "").strip())
+    satisfied = _optional_bool(item.get("satisfied"))
+    if satisfied is True:
+        return True
+    if "satisfied" in item:
+        return False
+    for key in ("value", "detail", "message", "text", "path", "url", "title", "actual", "observed"):
+        if str(item.get(key) or "").strip():
+            return True
+    return False
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if not lowered:
+            return None
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        return None
+    return bool(value)
 
 
 def _collect_anchor_candidates(
@@ -1967,11 +2779,11 @@ def _infer_active_app(*, active_window_title: str | None, browser_snapshot: dict
         return "powerpoint"
     if "word" in title:
         return "word"
-    if "notepad" in title:
+    if "notepad" in title or "记事本" in title:
         return "notepad"
-    if "calculator" in title:
+    if "calculator" in title or "计算器" in title:
         return "calculator"
-    if "explorer" in title or "file explorer" in title:
+    if "explorer" in title or "file explorer" in title or "资源管理器" in title:
         return "explorer"
     return title.split(" - ")[-1] if title else None
 
@@ -2005,6 +2817,18 @@ def _record_step_timing(timings: dict[str, float], key: str, started_at: float) 
     timings[key] = round(max(0.0, time.perf_counter() - started_at), 4)
 
 
+def _resolve_run_deadline(started_at: float, max_run_seconds: float | None) -> float | None:
+    if max_run_seconds is None:
+        return None
+    try:
+        seconds = float(max_run_seconds)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    return float(started_at) + seconds
+
+
 def _finalize_step_timings(timings: dict[str, float], step_started_at: float) -> dict[str, float]:
     payload = dict(timings)
     payload["total"] = round(max(0.0, time.perf_counter() - step_started_at), 4)
@@ -2020,7 +2844,7 @@ def build_agent(
 ) -> DesktopAgent:
     planner = build_planner(config)
     subgoal_planner = SubgoalPlanner(config, base_planner=planner)
-    driver_registry = build_driver_registry()
+    capability_registry, driver_registry, _plugin_results = build_runtime_registries(config)
     if config.dry_run:
         executor: BaseExecutor = MockExecutor(config)
         perception = MockCapture(config=config)
@@ -2043,7 +2867,7 @@ def build_agent(
         capability_executor=CapabilityExecutor(
             config=config,
             planner=subgoal_planner,
-            registry=build_capability_registry(),
+            registry=capability_registry,
             driver_registry=driver_registry,
         ),
         driver_registry=driver_registry,
@@ -2068,6 +2892,11 @@ def load_agent_config(
 ) -> AgentConfig:
     resolved_config_path = discover_config_path(config_path)
     config = AgentConfig.from_yaml(resolved_config_path)
+    if config_overrides:
+        for key, value in config_overrides.items():
+            if value is None or not hasattr(config, key):
+                continue
+            setattr(config, key, value)
     if planner_mode:
         config.planner_mode = planner_mode
     if dry_run is not None:
@@ -2078,11 +2907,6 @@ def load_agent_config(
         config.max_steps = max_steps
     if pause_after_action is not None:
         config.pause_after_action = pause_after_action
-    if config_overrides:
-        for key, value in config_overrides.items():
-            if value is None or not hasattr(config, key):
-                continue
-            setattr(config, key, value)
     config.normalize()
     return config
 
@@ -2118,6 +2942,48 @@ def _build_live_pointer_payload(
     }
 
 
+def _build_execution_budget_summary(config: AgentConfig) -> dict[str, Any]:
+    return {
+        "task_graph_request_timeout": config.task_graph_request_timeout,
+        "max_steps": config.max_steps,
+        "max_run_seconds": config.max_run_seconds,
+        "pause_after_action": config.pause_after_action,
+        "desktop_autonomy_mode": config.desktop_autonomy_mode,
+        "approval_policy": config.approval_policy,
+        "complex_task_planning": config.complex_task_planning,
+        "plan_review_policy": config.plan_review_policy,
+        "max_task_subgoals": config.max_task_subgoals,
+        "max_subgoal_retries": config.max_subgoal_retries,
+        "stage_review_policy": config.stage_review_policy,
+        "max_replans_per_run": config.max_replans_per_run,
+        "max_failures_per_subgoal": config.max_failures_per_subgoal,
+        "replan_on_recoverable_error": config.replan_on_recoverable_error,
+        "recoverable_error_retry_limit": config.recoverable_error_retry_limit,
+    }
+
+
+def _build_execution_environment_summary(config: AgentConfig) -> dict[str, Any]:
+    return {
+        "browser_control_mode": config.browser_control_mode,
+        "browser_dom_backend": config.browser_dom_backend,
+        "browser_dom_timeout": config.browser_dom_timeout,
+        "browser_headless": config.browser_headless,
+        "browser_channel": config.browser_channel,
+        "browser_executable_path": config.browser_executable_path,
+        "cursor_motion_enabled": config.cursor_motion_enabled,
+        "cursor_motion_duration": config.cursor_motion_duration,
+        "display_override_enabled": config.display_override_enabled,
+        "display_override_monitor_device_name": config.display_override_monitor_device_name,
+        "display_override_dpi_scale": config.display_override_dpi_scale,
+        "display_override_work_area_left": config.display_override_work_area_left,
+        "display_override_work_area_top": config.display_override_work_area_top,
+        "display_override_work_area_width": config.display_override_work_area_width,
+        "display_override_work_area_height": config.display_override_work_area_height,
+        "generic_app_launch_enabled": config.generic_app_launch_enabled,
+        "shell_recipe_policy": config.shell_recipe_policy,
+    }
+
+
 def _resolve_resume_run_dir(run_root: Path, run_id: str) -> Path:
     normalized_run_id = str(run_id or "").strip()
     if not normalized_run_id or "/" in normalized_run_id or "\\" in normalized_run_id:
@@ -2130,6 +2996,218 @@ def _resolve_resume_run_dir(run_root: Path, run_id: str) -> Path:
     if not run_dir.exists() or not run_dir.is_dir():
         raise RuntimeError("Run not found.")
     return run_dir
+
+
+def _load_optional_resume_payload(path: Path, error_message: str) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(error_message) from exc
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise RuntimeError(error_message)
+    return payload
+
+
+def _normalize_resume_execution_payload(
+    payload: dict[str, Any],
+    *,
+    run_dir: Path,
+    task: str,
+) -> dict[str, Any]:
+    normalized = dict(payload)
+    if not str(normalized.get("task", "")).strip():
+        normalized["task"] = task
+    if not str(normalized.get("run_id", "")).strip():
+        normalized["run_id"] = run_dir.name
+    return normalized
+
+
+def _has_resume_task_graph(payload: dict[str, Any]) -> bool:
+    task_graph = payload.get("task_graph")
+    return isinstance(task_graph, dict) and bool(task_graph)
+
+
+def _load_resume_execution_state(*, run_dir: Path, task: str) -> ExecutionState | None:
+    full_payload = _load_optional_resume_payload(
+        run_dir / "execution_state.json",
+        "Saved execution state could not be read.",
+    )
+    if full_payload and _has_resume_task_graph(full_payload):
+        return ExecutionState.from_dict(
+            _normalize_resume_execution_payload(full_payload, run_dir=run_dir, task=task)
+        )
+
+    state_payload = _load_optional_resume_payload(
+        run_dir / "state.json",
+        "Saved execution state could not be read.",
+    )
+    if not state_payload:
+        return None
+
+    if _has_resume_task_graph(state_payload):
+        return ExecutionState.from_dict(
+            _normalize_resume_execution_payload(state_payload, run_dir=run_dir, task=task)
+        )
+
+    reconstructed_payload = _reconstruct_resume_execution_payload(
+        run_dir=run_dir,
+        task=task,
+        state_payload=state_payload,
+    )
+    if reconstructed_payload is None:
+        return None
+    return ExecutionState.from_dict(reconstructed_payload)
+
+
+def _prepare_execution_state_for_resume(execution_state: ExecutionState | None) -> ExecutionState | None:
+    if execution_state is None:
+        return None
+    app_context = execution_state.app_context if isinstance(execution_state.app_context, dict) else {}
+    handoff_kind = str(app_context.get("human_handoff_kind") or "").strip().lower()
+    verification_kind = (
+        str(execution_state.last_verification.failure_kind or "").strip().lower()
+        if execution_state.last_verification is not None
+        else ""
+    )
+    verification_message = (
+        str(execution_state.last_verification.message or "").strip()
+        if execution_state.last_verification is not None
+        else ""
+    )
+    if handoff_kind == "requires_clarification" or verification_kind == "requires_clarification":
+        return execution_state
+    if execution_state.pending_decision is not None:
+        for key in ("human_handoff_kind", "human_handoff_summary", "human_handoff_reason"):
+            app_context.pop(key, None)
+        if str(app_context.get("standard_recovery_kind") or "").strip().lower() == "requires_user":
+            app_context.pop("standard_recovery_kind", None)
+        execution_state.app_context = app_context
+        return execution_state
+
+    handoff_reason = str(
+        app_context.get("human_handoff_reason")
+        or app_context.get("human_handoff_summary")
+        or app_context.get("recovery_reason")
+        or (verification_message if verification_kind in {"requires_human", "requires_auth"} else "")
+        or ""
+    ).strip()
+    orchestration_phase = str(execution_state.orchestration_phase or "").strip().lower()
+    was_waiting_for_user = (
+        orchestration_phase in {"awaiting_user", "awaiting_approval"}
+        or bool(handoff_reason)
+        or verification_kind in {"requires_human", "requires_auth"}
+    )
+    if not was_waiting_for_user:
+        return execution_state
+
+    for key in ("human_handoff_kind", "human_handoff_summary", "human_handoff_reason"):
+        app_context.pop(key, None)
+    if str(app_context.get("standard_recovery_kind") or "").strip().lower() == "requires_user":
+        app_context.pop("standard_recovery_kind", None)
+    if handoff_reason and str(app_context.get("recovery_reason") or "").strip() == handoff_reason:
+        app_context.pop("recovery_reason", None)
+
+    execution_state.pending_decision = None
+    execution_state.orchestration_phase = "stage_ready"
+    execution_state.last_verification = None
+    execution_state.app_context = app_context
+    execution_state.app_context["manual_resume_status"] = "resumed"
+    execution_state.app_context["manual_resumed_at"] = time.time()
+    if handoff_reason:
+        execution_state.app_context["manual_resume_reason"] = handoff_reason
+        resume_note = f"Resumed after user completed manual step: {handoff_reason}"
+        if resume_note not in execution_state.memory:
+            execution_state.memory.append(resume_note)
+    current_subgoal = execution_state.current_subgoal()
+    if current_subgoal is not None and current_subgoal.status in {"in_progress", "blocked"}:
+        current_subgoal.status = "pending"
+    execution_state.repair_history.append(
+        {
+            "kind": "manual_resume",
+            "reason": handoff_reason or "User resumed the paused run.",
+            "recorded_at": execution_state.app_context["manual_resumed_at"],
+        }
+    )
+    del execution_state.repair_history[:-10]
+    execution_state.updated_at = time.time()
+    return execution_state
+
+
+def _reconstruct_resume_execution_payload(
+    *,
+    run_dir: Path,
+    task: str,
+    state_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    plan_payload = _load_optional_resume_payload(
+        run_dir / "plan.json",
+        "Saved task graph could not be read.",
+    )
+    task_graph_payload = dict(plan_payload or {})
+    if not task_graph_payload:
+        subgoals = state_payload.get("subgoals")
+        if not isinstance(subgoals, list):
+            return None
+        task_graph_payload = {
+            "task": state_payload.get("task") or task,
+            "subgoals": subgoals,
+            "dependencies": state_payload.get("dependencies", {}),
+            "completion_summary": state_payload.get("completion_summary"),
+            "intent": state_payload.get("intent"),
+        }
+    if not str(task_graph_payload.get("task", "")).strip():
+        task_graph_payload["task"] = state_payload.get("task") or task
+
+    reconstructed: dict[str, Any] = {
+        "task": state_payload.get("task") or task,
+        "run_id": run_dir.name,
+        "task_graph": task_graph_payload,
+    }
+    for key in (
+        "completed",
+        "orchestration_phase",
+        "active_specialist",
+        "stage_decisions",
+        "failure_budget",
+        "last_replan_reason",
+        "pending_decision",
+        "last_step",
+        "last_verification",
+        "evidence_ledger",
+        "stuck_rounds",
+        "capability_failures",
+        "stable_targets",
+        "app_context",
+        "last_progress_at",
+        "repair_history",
+        "current_surface_kind",
+        "started_at",
+        "updated_at",
+    ):
+        if key in state_payload:
+            reconstructed[key] = state_payload[key]
+
+    workspace_payload = state_payload.get("workspace")
+    if not isinstance(workspace_payload, dict):
+        workspace_payload = state_payload.get("workspace_summary")
+    if isinstance(workspace_payload, dict):
+        reconstructed["workspace"] = workspace_payload
+
+    facts_payload = state_payload.get("facts")
+    if not isinstance(facts_payload, list):
+        saved_facts = _load_optional_resume_payload(
+            run_dir / "facts.json",
+            "Saved execution facts could not be read.",
+        )
+        facts_payload = saved_facts.get("items") if isinstance(saved_facts, dict) else None
+    if isinstance(facts_payload, list):
+        reconstructed["facts"] = facts_payload
+
+    return _normalize_resume_execution_payload(reconstructed, run_dir=run_dir, task=task)
 
 
 def _load_resume_context(run_root: Path, run_id: str) -> ResumeRunContext:
@@ -2156,15 +3234,7 @@ def _load_resume_context(run_root: Path, run_id: str) -> ResumeRunContext:
     summary_steps = int(summary_payload.get("steps", 0) or 0)
     step_offset = max(summary_steps, latest_step)
 
-    execution_state: ExecutionState | None = None
-    state_path = run_dir / "state.json"
-    if state_path.exists():
-        try:
-            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError("Saved execution state could not be read.") from exc
-        if isinstance(state_payload, dict) and state_payload:
-            execution_state = ExecutionState.from_dict(state_payload)
+    execution_state = _load_resume_execution_state(run_dir=run_dir, task=task)
 
     return ResumeRunContext(
         task=task,
@@ -2173,6 +3243,63 @@ def _load_resume_context(run_root: Path, run_id: str) -> ResumeRunContext:
         step_offset=step_offset,
         execution_state=execution_state,
     )
+
+
+def coerce_initial_task_graph(
+    task: str,
+    payload: TaskGraph | dict[str, Any] | None,
+    *,
+    max_subgoals: int,
+) -> TaskGraph | None:
+    if payload is None:
+        return None
+    normalized_task = str(task or "").strip()
+    if not normalized_task:
+        raise ValueError("Task is required.")
+    if isinstance(payload, TaskGraph):
+        task_graph = TaskGraph.from_dict(payload.to_dict())
+    elif isinstance(payload, dict):
+        try:
+            task_graph = TaskGraph.from_dict(payload)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Task graph is invalid.") from exc
+    else:
+        raise ValueError("Task graph must be an object.")
+
+    graph_task = str(task_graph.task or "").strip()
+    if graph_task and graph_task != normalized_task:
+        raise ValueError("Task graph does not match the task.")
+    if not task_graph.subgoals:
+        raise ValueError("Task graph must include at least one subgoal.")
+    limit = max(1, int(max_subgoals or 1))
+    if len(task_graph.subgoals) > limit:
+        raise ValueError(f"Task graph includes too many subgoals; maximum is {limit}.")
+
+    seen_ids: set[str] = set()
+    for index, subgoal in enumerate(task_graph.subgoals, start=1):
+        subgoal.id = str(subgoal.id or f"subgoal_{index:02d}").strip()
+        if subgoal.id in seen_ids:
+            raise ValueError("Task graph contains duplicate subgoal ids.")
+        seen_ids.add(subgoal.id)
+        subgoal.status = "pending"
+        subgoal.attempts = 0
+        subgoal.notes = []
+        subgoal.failed_capabilities = []
+
+    for subgoal in task_graph.subgoals:
+        subgoal.prerequisites = [
+            item for item in subgoal.prerequisites if item in seen_ids and item != subgoal.id
+        ]
+    task_graph.dependencies = {
+        key: [item for item in value if item in seen_ids and item != key]
+        for key, value in task_graph.dependencies.items()
+        if key in seen_ids
+    }
+    for subgoal in task_graph.subgoals:
+        task_graph.dependencies.setdefault(subgoal.id, list(subgoal.prerequisites))
+
+    task_graph.task = normalized_task
+    return task_graph
 
 
 def run_task(
@@ -2188,6 +3315,8 @@ def run_task(
     stop_requested: Callable[[], bool] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     decision_callback: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+    initial_task_graph: TaskGraph | dict[str, Any] | None = None,
+    initial_plan_review_status: str | None = None,
 ) -> AgentRunResult:
     config = load_agent_config(
         config_path=config_path,
@@ -2198,13 +3327,22 @@ def run_task(
         pause_after_action=pause_after_action,
         config_overrides=config_overrides,
     )
+    task_graph = coerce_initial_task_graph(
+        task,
+        initial_task_graph,
+        max_subgoals=config.max_task_subgoals,
+    )
     agent = build_agent(
         config,
         stop_requested=stop_requested,
         progress_callback=progress_callback,
         decision_callback=decision_callback,
     )
-    return agent.run(task)
+    return agent.run(
+        task,
+        initial_task_graph=task_graph,
+        initial_plan_review_status=initial_plan_review_status,
+    )
 
 
 def resume_task(
@@ -2231,6 +3369,7 @@ def resume_task(
         config_overrides=config_overrides,
     )
     resume_context = _load_resume_context(config.run_root, run_id)
+    execution_state = _prepare_execution_state_for_resume(resume_context.execution_state)
     agent = build_agent(
         config,
         stop_requested=stop_requested,
@@ -2240,10 +3379,10 @@ def resume_task(
     return agent.run(
         resume_context.task,
         run_dir=resume_context.run_dir,
-        execution_state=resume_context.execution_state,
+        execution_state=execution_state,
         started_at=resume_context.started_at,
         step_offset=resume_context.step_offset,
-        history=list(resume_context.execution_state.memory) if resume_context.execution_state is not None else None,
+        history=list(execution_state.memory) if execution_state is not None else None,
     )
 
 

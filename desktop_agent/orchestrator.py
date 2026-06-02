@@ -45,15 +45,30 @@ _RISK_TERMS = (
     "secret",
     "token",
     "登录",
+    "登陆",
+    "验证码",
     "支付",
     "付款",
+    "购买",
+    "买",
+    "购物车",
+    "结账",
+    "下单",
     "提交",
     "发送",
     "删除",
+    "移除",
+    "覆盖",
     "安装",
+    "卸载",
+    "授权",
     "权限",
     "隐私",
     "密码",
+    "终端",
+    "命令",
+    "命令行",
+    "注册表",
 )
 _FAILURE_ALIASES = {
     "blocked_by_ui": "blocked_ui",
@@ -61,6 +76,7 @@ _FAILURE_ALIASES = {
     "transient_failure": "verification_failed",
     "requires_human": "requires_user",
     "requires_auth": "requires_user",
+    "requires_clarification": "requires_user",
     "approval_rejected": "safety_gate",
 }
 _STANDARD_FAILURE_KINDS = {
@@ -83,6 +99,25 @@ class TaskOrchestrator:
 
     def initialize_state(self, *, task: str, run_id: str, world_model: WorldModel) -> ExecutionState:
         task_graph = self.task_graph_planner.plan(task, history=[], world_model=world_model)
+        return self.initialize_state_from_graph(
+            task=task,
+            run_id=run_id,
+            task_graph=task_graph,
+            world_model=world_model,
+            plan_source="planner",
+        )
+
+    def initialize_state_from_graph(
+        self,
+        *,
+        task: str,
+        run_id: str,
+        task_graph: TaskGraph,
+        world_model: WorldModel,
+        plan_source: str = "planner",
+    ) -> ExecutionState:
+        task_graph = TaskGraph.from_dict(task_graph.to_dict())
+        task_graph.task = task
         try:
             self.recipe_memory.apply_hints(task_graph)
         except Exception:
@@ -92,7 +127,7 @@ class TaskOrchestrator:
             run_id=run_id,
             task_graph=task_graph,
             world_model=world_model,
-            app_context={"pending_repair": None},
+            app_context={"pending_repair": None, "plan_source": plan_source},
             current_surface_kind=world_model.surface_kind,
             started_at=time.time(),
             updated_at=time.time(),
@@ -125,6 +160,7 @@ class TaskOrchestrator:
         if self.config.task_workspace_enabled:
             state.workspace.add_world_model(world_model)
             state.workspace.add_facts(facts)
+            _accumulate_research_notes(state, world_model)
         state.updated_at = time.time()
         return facts
 
@@ -134,7 +170,7 @@ class TaskOrchestrator:
             if pending_type not in {"plan_review", "stage_review"}:
                 return None
         stage_status = str(state.app_context.get("stage_review_status") or "").strip().lower()
-        if stage_status == "pending":
+        if stage_status in {"pending", "cancelled", "canceled"}:
             return "stage_review"
         if self._plan_review_required(state):
             return "plan_review"
@@ -142,12 +178,14 @@ class TaskOrchestrator:
 
     def prepare_stage(self, *, state: ExecutionState, world_model: WorldModel) -> Subgoal | None:
         self.prime_state(state, world_model=world_model)
-        subgoal = state.current_subgoal()
+        subgoal = self._next_continuable_subgoal(state)
         if subgoal is None:
             state.orchestration_phase = "complete" if state.task_graph.is_complete() else "blocked"
             state.active_specialist = None
+            state.app_context.pop("active_subgoal_id", None)
             return None
         state.orchestration_phase = "stage_ready"
+        state.app_context["active_subgoal_id"] = subgoal.id
         state.active_specialist = self.select_specialist(subgoal=subgoal, world_model=world_model)
         state.updated_at = time.time()
         return subgoal
@@ -247,8 +285,13 @@ class TaskOrchestrator:
             self.recipe_memory.apply_hints(state.task_graph)
         except Exception:
             pass
+        refreshed_budget = max(1, int(self.config.max_failures_per_subgoal))
         for subgoal in state.task_graph.subgoals:
-            state.failure_budget.setdefault(subgoal.id, max(1, int(self.config.max_failures_per_subgoal)))
+            if subgoal.status == "completed":
+                state.failure_budget.setdefault(subgoal.id, refreshed_budget)
+                continue
+            subgoal.attempts = 0
+            state.failure_budget[subgoal.id] = refreshed_budget
         new_risk = task_graph_risk_level(state.task_graph)
         reason = failure.message or standardize_failure_kind(failure.failure_kind) or "verification_failed"
         state.last_replan_reason = reason
@@ -266,6 +309,52 @@ class TaskOrchestrator:
         state.updated_at = time.time()
         return True
 
+    def reflect_on_plan(self, *, state: ExecutionState, world_model: WorldModel | None) -> bool:
+        """Model-driven adaptive re-planning: revise the remaining plan after the
+        agent has learned something (e.g. finished researching). Returns True if the
+        plan changed. Self-limited by a reflection budget."""
+
+        if not getattr(self.config, "plan_reflection_enabled", True):
+            return False
+        reflection_count = int(state.app_context.get("reflection_count", 0) or 0)
+        if reflection_count >= max(0, int(getattr(self.config, "max_plan_reflections", 0))):
+            return False
+        try:
+            new_graph = self.task_graph_planner.reflect_on_plan(state, world_model)
+        except Exception:
+            return False
+        if new_graph is None:
+            return False
+        old_risk = task_graph_risk_level(state.task_graph)
+        state.task_graph = new_graph
+        try:
+            self.recipe_memory.apply_hints(state.task_graph)
+        except Exception:
+            pass
+        refreshed_budget = max(1, int(self.config.max_failures_per_subgoal))
+        for subgoal in state.task_graph.subgoals:
+            if subgoal.status == "completed":
+                state.failure_budget.setdefault(subgoal.id, refreshed_budget)
+                continue
+            subgoal.attempts = 0
+            state.failure_budget[subgoal.id] = refreshed_budget
+        new_risk = task_graph_risk_level(state.task_graph)
+        reason = "Adapted the remaining plan after reflecting on gathered information."
+        state.last_replan_reason = reason
+        state.app_context["reflection_count"] = reflection_count + 1
+        state.app_context["last_reflection_at"] = time.time()
+        state.app_context["last_replan_reason"] = reason
+        if self._stage_review_required_after_replan(old_risk=old_risk, new_risk=new_risk):
+            state.app_context["stage_review_status"] = "pending"
+            state.app_context["stage_review_reason"] = (
+                f"Reflection changed plan risk from {old_risk} to {new_risk}."
+            )
+            state.orchestration_phase = "stage_review"
+        else:
+            state.orchestration_phase = "stage_ready"
+        state.updated_at = time.time()
+        return True
+
     def decrement_failure_budget(self, *, state: ExecutionState, subgoal: Subgoal | None) -> None:
         if subgoal is None:
             return
@@ -276,9 +365,36 @@ class TaskOrchestrator:
         remaining = state.failure_budget.get(subgoal.id, max(1, int(self.config.max_failures_per_subgoal)))
         return remaining > 0 and subgoal.can_retry()
 
+    def _can_continue_subgoal(self, *, state: ExecutionState, subgoal: Subgoal) -> bool:
+        pending_repair = state.app_context.get("pending_repair") if isinstance(state.app_context, dict) else None
+        if isinstance(pending_repair, dict) and str(pending_repair.get("subgoal_id")) == subgoal.id:
+            return True
+        return self.can_retry_subgoal(state=state, subgoal=subgoal)
+
+    def _next_continuable_subgoal(self, state: ExecutionState) -> Subgoal | None:
+        for status in ("in_progress", "pending", "blocked"):
+            for subgoal in state.task_graph.subgoals:
+                if subgoal.status != status or not state.task_graph.is_ready(subgoal):
+                    continue
+                if self._can_continue_subgoal(state=state, subgoal=subgoal):
+                    return subgoal
+                self._mark_retry_exhausted(state=state, subgoal=subgoal)
+        return None
+
+    def _mark_retry_exhausted(self, *, state: ExecutionState, subgoal: Subgoal) -> None:
+        subgoal.status = "blocked"
+        message = f"Subgoal {subgoal.id} is blocked because its retry budget is exhausted."
+        if message not in subgoal.notes:
+            subgoal.notes.append(message)
+        if state.app_context.get("active_subgoal_id") == subgoal.id:
+            state.app_context.pop("active_subgoal_id", None)
+        state.app_context["recovery_reason"] = message
+        state.updated_at = time.time()
+
     def mark_complete(self, state: ExecutionState) -> None:
         state.orchestration_phase = "complete"
         state.active_specialist = None
+        state.app_context.pop("active_subgoal_id", None)
         state.updated_at = time.time()
 
     def select_specialist(
@@ -351,7 +467,24 @@ def task_graph_risk_level(task_graph: TaskGraph) -> str:
 def task_graph_is_ambiguous(task_graph: TaskGraph) -> bool:
     intent = task_graph.intent if isinstance(task_graph.intent, dict) else {}
     ambiguity = str(intent.get("ambiguity") or "low").strip().lower()
-    return ambiguity in {"medium", "high"} or bool(intent.get("requires_clarification"))
+    return ambiguity in {"medium", "high"} or _optional_bool(intent.get("requires_clarification")) is True
+
+
+def _optional_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if not lowered:
+            return None
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        return None
+    return bool(value)
 
 
 def standardize_failure_kind(value: str | None) -> str | None:
@@ -361,3 +494,29 @@ def standardize_failure_kind(value: str | None) -> str | None:
     if normalized in _STANDARD_FAILURE_KINDS:
         return normalized
     return _FAILURE_ALIASES.get(normalized, "verification_failed")
+
+
+def _accumulate_research_notes(state: ExecutionState, world_model: WorldModel) -> None:
+    """Record web/page content into the workspace so it can be synthesized later.
+
+    This is what makes "research" real: as the agent browses and extracts text,
+    the visible page content becomes durable notes the document composer can
+    reason over, instead of being thrown away each step.
+    """
+
+    browser = world_model.browser_snapshot or {}
+    title = str(browser.get("title") or "").strip()
+    url = str(browser.get("url") or "").strip()
+    text = str(browser.get("text") or "").strip()
+    extracted = str(browser.get("extracted_text") or "").strip()
+    header = " - ".join(part for part in (title, url) if part)
+    if header:
+        state.workspace.add_note(f"[web] {header}")
+    if extracted:
+        # Content explicitly read off the page is the richest research material.
+        state.workspace.add_note(f"[extract] {extracted[:1200]}")
+    if text and text != extracted:
+        state.workspace.add_note(f"[web] {text[:600]}")
+    selection = str(world_model.selection_text or "").strip()
+    if selection and selection not in (text, extracted):
+        state.workspace.add_note(f"[selection] {selection[:600]}")

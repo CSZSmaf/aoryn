@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import mimetypes
 import os
 import re
@@ -31,8 +32,11 @@ from desktop_agent.chat_support import (
     sanitize_assistant_chat_text,
     sanitize_chat_messages,
 )
-from desktop_agent.controller import discover_config_path, load_agent_config, resume_task, run_task
-from desktop_agent.history import list_runs, load_run_details, resolve_artifact_path
+from desktop_agent.config import desktop_autonomy_mode_presets
+from desktop_agent.controller import coerce_initial_task_graph, discover_config_path, load_agent_config, resume_task, run_task
+from desktop_agent.history import clear_runs, list_runs, load_run_details, resolve_artifact_path
+from desktop_agent.orchestrator import task_graph_is_ambiguous, task_graph_risk_level
+from desktop_agent.planner import TaskGraphPlanner
 from desktop_agent.provider_tools import (
     ProviderModelEntry,
     ProviderSnapshot,
@@ -52,6 +56,7 @@ from desktop_agent.runtime_paths import (
     runtime_preferences_path_for,
 )
 from desktop_agent.version import APP_ASSET_VERSION, APP_NAME, APP_VERSION
+from desktop_agent.workflow import ExecutionState, PendingDecision, TaskGraph, build_execution_plan_summary
 from desktop_agent.windows_env import detect_display_environment
 
 
@@ -74,8 +79,11 @@ class DashboardJob:
     dry_run: bool
     max_steps: int | None
     pause_after_action: float | None
+    max_run_seconds: float | None = None
     resume_run_id: str | None = None
     config_overrides: dict[str, Any] = field(default_factory=dict)
+    initial_task_graph: dict[str, Any] | None = None
+    initial_plan_review_status: str | None = None
     status: str = "queued"
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -91,15 +99,18 @@ class DashboardJob:
     interruption_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "id": self.job_id,
             "task": self.task,
             "planner_mode": self.planner_mode,
             "dry_run": self.dry_run,
             "max_steps": self.max_steps,
             "pause_after_action": self.pause_after_action,
+            "max_run_seconds": self.max_run_seconds,
             "resume_run_id": self.resume_run_id,
             "config_overrides": self.config_overrides,
+            "initial_task_graph": self.initial_task_graph,
+            "initial_plan_review_status": self.initial_plan_review_status,
             "status": self.status,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -114,6 +125,456 @@ class DashboardJob:
             "interruption_kind": self.interruption_kind,
             "interruption_reason": self.interruption_reason,
         }
+        if _payload_has_terminal_result(payload) and _optional_bool(payload.get("requires_human")) is not True:
+            result = payload.get("result")
+            if isinstance(result, dict):
+                payload["result"] = _clear_pending_decision_from_result(result)
+            payload["requires_human"] = False
+        return payload
+
+
+def _payload_has_terminal_result(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    status = str(payload.get("status") or "").strip().lower()
+    return bool(
+        _optional_bool(payload.get("completed")) is True
+        or _optional_bool(payload.get("cancelled")) is True
+        or payload.get("error")
+        or status in {"completed", "failed", "cancelled"}
+    )
+
+
+def _normalize_decision_action(value: Any, *, default: str | None = None) -> str:
+    decision = str(value or "").strip().lower()
+    aliases = {
+        "approved": "approve",
+        "rejected": "reject",
+        "cancelled": "cancel",
+        "canceled": "cancel",
+    }
+    decision = aliases.get(decision, decision)
+    if decision in {"approve", "reject", "cancel"}:
+        return decision
+    return str(default or decision)
+
+
+def _payload_has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_payload_has_value(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_payload_has_value(item) for item in value)
+    return True
+
+
+def _has_pending_decision_payload(value: Any) -> bool:
+    return isinstance(value, dict) and _payload_has_value(value)
+
+
+def _is_empty_state_shell(value: Any) -> bool:
+    return isinstance(value, (dict, list, tuple, set)) and not _payload_has_value(value)
+
+
+_STATE_SUMMARY_EMPTY_SHELL_KEYS = {
+    "pending_decision",
+    "plan_health",
+    "workspace_summary",
+    "last_verification",
+    "evidence_ledger",
+    "repair_history",
+    "capability_failures",
+    "task_graph",
+}
+
+
+def _merge_execution_state_summary_payloads(
+    full_state: dict[str, Any],
+    display_state: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(full_state)
+    for key, value in display_state.items():
+        if (
+            key in _STATE_SUMMARY_EMPTY_SHELL_KEYS
+            and _is_empty_state_shell(value)
+            and _payload_has_value(merged.get(key))
+        ):
+            continue
+        merged[key] = value
+    return merged
+
+
+def _clear_pending_decision_from_result(
+    result: dict[str, Any] | None,
+    *,
+    decision: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(result, dict):
+        return result
+    normalized_decision = _normalize_decision_action(decision)
+    cleaned = dict(result)
+    pending_decision = cleaned.pop("pending_decision", None)
+    if not _has_pending_decision_payload(pending_decision):
+        pending_decision = None
+    execution_state = cleaned.get("execution_state")
+    state_payload = cleaned.get("state")
+    for candidate in (execution_state, state_payload):
+        if _has_pending_decision_payload(pending_decision) or not isinstance(candidate, dict):
+            continue
+        candidate_pending = candidate.get("pending_decision")
+        if _has_pending_decision_payload(candidate_pending):
+            pending_decision = candidate_pending
+
+    if isinstance(execution_state, dict):
+        cleaned_state = dict(execution_state)
+        cleaned_state.pop("pending_decision", None)
+        _apply_submitted_decision_to_state(
+            cleaned_state,
+            decision=normalized_decision,
+            pending_decision=pending_decision,
+        )
+        cleaned["execution_state"] = cleaned_state
+    if isinstance(state_payload, dict):
+        cleaned_state = dict(state_payload)
+        cleaned_state.pop("pending_decision", None)
+        _apply_submitted_decision_to_state(
+            cleaned_state,
+            decision=normalized_decision,
+            pending_decision=pending_decision,
+        )
+        cleaned["state"] = cleaned_state
+    _apply_submitted_decision_to_result(
+        cleaned,
+        decision=normalized_decision,
+        pending_decision=pending_decision,
+    )
+    return cleaned
+
+
+_FINAL_EXECUTION_STATE_RESULT_KEYS = (
+    "intent",
+    "orchestration_phase",
+    "active_specialist",
+    "workspace_summary",
+    "plan_review_status",
+    "stage_review_status",
+    "last_replan_reason",
+    "current_goal",
+    "chosen_capability",
+    "verification_status",
+    "recovery_reason",
+    "completion_summary",
+    "last_progress_at",
+    "current_surface_kind",
+)
+
+
+def _finalize_job_result_payload(
+    current_result: dict[str, Any] | None,
+    final_payload: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(current_result or {})
+    merged.update(final_payload)
+    if _payload_has_terminal_result(merged) and _optional_bool(merged.get("requires_human")) is not True:
+        cleared = _clear_pending_decision_from_result(merged)
+        if isinstance(cleared, dict):
+            merged = cleared
+            merged["requires_human"] = False
+    execution_state = merged.get("execution_state")
+    if not isinstance(execution_state, dict):
+        return merged
+
+    if not _has_pending_decision_payload(execution_state.get("pending_decision")):
+        cleared = _clear_pending_decision_from_result(merged)
+        if isinstance(cleared, dict):
+            merged = cleared
+            execution_state = merged.get("execution_state")
+    if not isinstance(execution_state, dict):
+        return merged
+
+    if isinstance(merged.get("state"), dict):
+        merged["state"] = dict(execution_state)
+    for key in _FINAL_EXECUTION_STATE_RESULT_KEYS:
+        if key in execution_state:
+            merged[key] = execution_state.get(key)
+
+    if "last_step" in execution_state:
+        last_step = execution_state.get("last_step")
+        if isinstance(last_step, dict):
+            merged["step_proposal"] = dict(last_step)
+        else:
+            merged.pop("step_proposal", None)
+    if "last_verification" in execution_state:
+        last_verification = execution_state.get("last_verification")
+        if isinstance(last_verification, dict):
+            merged["verification"] = dict(last_verification)
+        else:
+            merged.pop("verification", None)
+
+    pending_decision = execution_state.get("pending_decision")
+    if _has_pending_decision_payload(pending_decision):
+        merged["pending_decision"] = dict(pending_decision)
+    else:
+        merged.pop("pending_decision", None)
+    return merged
+
+
+def _merge_progress_job_result_payload(
+    current_result: dict[str, Any] | None,
+    progress_payload: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(current_result or {})
+    merged.update(progress_payload)
+    state_summary = _execution_state_summary_from_payload(progress_payload)
+    if not isinstance(state_summary, dict):
+        return merged
+
+    if isinstance(merged.get("state"), dict):
+        merged["state"] = dict(state_summary)
+    for key in _FINAL_EXECUTION_STATE_RESULT_KEYS:
+        if key in state_summary:
+            merged[key] = state_summary.get(key)
+
+    if "last_step" in state_summary and "step_proposal" not in progress_payload:
+        last_step = state_summary.get("last_step")
+        if isinstance(last_step, dict):
+            merged["step_proposal"] = dict(last_step)
+        else:
+            merged.pop("step_proposal", None)
+    if "last_verification" in state_summary and "verification" not in progress_payload:
+        last_verification = state_summary.get("last_verification")
+        if isinstance(last_verification, dict):
+            merged["verification"] = dict(last_verification)
+        else:
+            merged.pop("verification", None)
+
+    if "pending_decision" in state_summary:
+        pending_decision = state_summary.get("pending_decision")
+        if _has_pending_decision_payload(pending_decision):
+            merged["pending_decision"] = dict(pending_decision)
+        else:
+            merged.pop("pending_decision", None)
+    return merged
+
+
+def _execution_state_summary_from_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    execution_state = payload.get("execution_state") if isinstance(payload.get("execution_state"), dict) else None
+    state_payload = payload.get("state") if isinstance(payload.get("state"), dict) else None
+    if execution_state and state_payload:
+        return _merge_execution_state_summary_payloads(execution_state, state_payload)
+    if execution_state:
+        return dict(execution_state)
+    if state_payload:
+        return dict(state_payload)
+    return None
+
+
+def _fail_job_result_payload(
+    current_result: dict[str, Any] | None,
+    *,
+    error: str,
+    finished_at: float,
+) -> dict[str, Any]:
+    failed = dict(current_result or {})
+    failed.update(
+        {
+            "completed": False,
+            "error": error,
+            "finished_at": finished_at,
+            "requires_human": False,
+        }
+    )
+    cleaned = _clear_pending_decision_from_result(failed)
+    if isinstance(cleaned, dict):
+        failed = cleaned
+    for state_key in ("execution_state", "state"):
+        state_payload = failed.get(state_key)
+        if isinstance(state_payload, dict):
+            failed[state_key] = _mark_pending_review_state_failed(state_payload, error=error)
+    for review_key in ("plan_review_status", "stage_review_status"):
+        if str(failed.get(review_key) or "").strip().lower() == "pending":
+            failed[review_key] = "failed"
+    return failed
+
+
+def _mark_pending_review_state_failed(state_payload: dict[str, Any], *, error: str) -> dict[str, Any]:
+    state = dict(state_payload)
+    state.pop("pending_decision", None)
+    phase = str(state.get("orchestration_phase") or "").strip().lower()
+    if phase in {"plan_review", "stage_review", "awaiting_approval"}:
+        state["orchestration_phase"] = "blocked"
+    for review_key in ("plan_review_status", "stage_review_status"):
+        if str(state.get(review_key) or "").strip().lower() == "pending":
+            state[review_key] = "failed"
+
+    app_context = state.get("app_context")
+    if isinstance(app_context, dict):
+        context = dict(app_context)
+        for review_key in ("plan_review_status", "stage_review_status"):
+            if str(context.get(review_key) or "").strip().lower() == "pending":
+                context[review_key] = "failed"
+        context["recovery_reason"] = error
+        state["app_context"] = context
+
+    plan_health = state.get("plan_health")
+    if isinstance(plan_health, dict):
+        updated_plan_health = dict(plan_health)
+        autonomy = updated_plan_health.get("autonomy")
+        if isinstance(autonomy, dict):
+            updated_autonomy = dict(autonomy)
+            blockers = [
+                item
+                for item in updated_autonomy.get("blockers", [])
+                if isinstance(item, str) and item.strip()
+            ]
+            if error and error not in blockers:
+                blockers.append(error)
+            updated_autonomy.update(
+                {
+                    "status": "blocked",
+                    "can_continue": False,
+                    "requires_review": False,
+                    "requires_user": False,
+                    "next_action": "inspect_failure",
+                    "blockers": blockers,
+                }
+            )
+            updated_plan_health["autonomy"] = updated_autonomy
+        state["plan_health"] = updated_plan_health
+    return state
+
+
+def _apply_submitted_decision_to_result(
+    result_payload: dict[str, Any],
+    *,
+    decision: str,
+    pending_decision: Any,
+) -> None:
+    if decision not in {"approve", "reject", "cancel"} or not isinstance(pending_decision, dict):
+        return
+    decision_type = str(pending_decision.get("decision_type") or "").strip().lower()
+    status_value = {
+        "approve": "approved",
+        "reject": "rejected",
+        "cancel": "cancelled",
+    }[decision]
+    if decision_type == "stage_review":
+        result_payload["stage_review_status"] = status_value
+    elif decision_type == "plan_review":
+        result_payload["plan_review_status"] = status_value
+
+
+def _apply_submitted_decision_to_state(
+    state_payload: dict[str, Any],
+    *,
+    decision: str,
+    pending_decision: Any,
+) -> None:
+    if decision not in {"approve", "reject", "cancel"}:
+        return
+    decision_type = ""
+    if isinstance(pending_decision, dict):
+        decision_type = str(pending_decision.get("decision_type") or "").strip().lower()
+    status_value = {
+        "approve": "approved",
+        "reject": "rejected",
+        "cancel": "cancelled",
+    }[decision]
+    if decision_type == "stage_review":
+        state_payload["stage_review_status"] = status_value
+    elif decision_type == "plan_review":
+        state_payload["plan_review_status"] = status_value
+
+    app_context = state_payload.get("app_context")
+    if isinstance(app_context, dict):
+        context = dict(app_context)
+        if decision_type == "stage_review":
+            context["stage_review_status"] = status_value
+        elif decision_type == "plan_review":
+            context["plan_review_status"] = status_value
+        state_payload["app_context"] = context
+
+    if decision == "approve" and str(state_payload.get("orchestration_phase") or "").strip().lower() in {
+        "plan_review",
+        "stage_review",
+        "awaiting_approval",
+    }:
+        state_payload["orchestration_phase"] = "stage_ready"
+    elif decision in {"reject", "cancel"}:
+        state_payload["orchestration_phase"] = "blocked"
+
+    plan_health = state_payload.get("plan_health")
+    if not isinstance(plan_health, dict):
+        return
+    autonomy = plan_health.get("autonomy")
+    if not isinstance(autonomy, dict):
+        return
+    updated_autonomy = dict(autonomy)
+    if decision == "approve":
+        updated_autonomy.update(
+            {
+                "status": "ready",
+                "can_continue": True,
+                "requires_review": False,
+                "requires_user": False,
+                "next_action": "execute",
+                "blockers": [],
+            }
+        )
+    elif decision == "reject":
+        updated_autonomy.update(
+            {
+                "status": "blocked",
+                "can_continue": False,
+                "requires_review": False,
+                "next_action": "recover_or_replan",
+                "blockers": ["The pending review was rejected."],
+            }
+        )
+    else:
+        updated_autonomy.update(
+            {
+                "status": "waiting_user",
+                "can_continue": False,
+                "requires_review": False,
+                "requires_user": True,
+                "next_action": "resume_after_user",
+                "blockers": ["The pending review was cancelled."],
+            }
+        )
+    updated_plan_health = dict(plan_health)
+    updated_plan_health["autonomy"] = updated_autonomy
+    state_payload["plan_health"] = updated_plan_health
+
+
+def _pending_decision_from_progress_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    pending_decision = payload.get("pending_decision")
+    if _has_pending_decision_payload(pending_decision):
+        return pending_decision
+    for key in ("execution_state", "state"):
+        execution_state = payload.get(key)
+        nested_decision = execution_state.get("pending_decision") if isinstance(execution_state, dict) else None
+        if _has_pending_decision_payload(nested_decision):
+            return nested_decision
+    return None
+
+
+def _overview_expected_run_ids_from_jobs(jobs: list[dict[str, Any]]) -> set[str]:
+    expected: set[str] = set()
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        status = str(job.get("status") or "").strip().lower()
+        if status not in {"running", "approval", "stopping", "completed", "failed", "cancelled", "attention"}:
+            continue
+        result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        run_id = str(result.get("run_id") or "").strip()
+        if run_id:
+            expected.add(run_id)
+    return expected
 
 
 class TaskQueue:
@@ -136,6 +597,8 @@ class TaskQueue:
         max_steps: int | None,
         pause_after_action: float | None,
         config_overrides: dict[str, Any] | None = None,
+        initial_task_graph: dict[str, Any] | None = None,
+        initial_plan_review_status: str | None = None,
     ) -> DashboardJob:
         clean_task = task.strip()
         if not clean_task:
@@ -154,18 +617,38 @@ class TaskQueue:
                 pause_after_action=pause_after_action,
                 config_overrides=resolved_overrides,
             )
+            graph_payload = None
+            initial_result = None
+            if initial_task_graph is not None:
+                task_graph = coerce_initial_task_graph(
+                    clean_task,
+                    initial_task_graph,
+                    max_subgoals=config.max_task_subgoals,
+                )
+                graph_payload = task_graph.to_dict()
+                initial_result = _build_initial_task_graph_result(
+                    task=clean_task,
+                    task_graph=task_graph,
+                    config=config,
+                    plan_review_status=initial_plan_review_status,
+                )
             job = DashboardJob(
                 job_id=uuid.uuid4().hex[:12],
                 task=clean_task,
                 planner_mode=config.planner_mode,
                 dry_run=config.dry_run,
-                max_steps=max_steps,
-                pause_after_action=pause_after_action,
+                max_steps=config.max_steps,
+                pause_after_action=config.pause_after_action,
+                max_run_seconds=config.max_run_seconds,
                 config_overrides=resolved_overrides,
+                initial_task_graph=graph_payload,
+                initial_plan_review_status=initial_plan_review_status,
+                result=initial_result,
             )
             self.jobs[job.job_id] = job
             self.cancel_events[job.job_id] = threading.Event()
             self.decision_events[job.job_id] = threading.Event()
+            self._seed_pending_decision_from_initial_result_locked(job)
             self.active_job_id = job.job_id
 
         thread = threading.Thread(
@@ -181,6 +664,8 @@ class TaskQueue:
         self,
         *,
         run_id: str,
+        max_steps: int | None = None,
+        pause_after_action: float | None = None,
         config_overrides: dict[str, Any] | None = None,
     ) -> DashboardJob:
         clean_run_id = str(run_id or "").strip()
@@ -195,25 +680,35 @@ class TaskQueue:
             details = load_run_details(config.run_root, clean_run_id)
             if details is None:
                 raise RuntimeError("Run not found.")
-            if bool(details.get("completed")):
+            if _optional_bool(details.get("completed")) is True:
                 raise RuntimeError("This run is already complete.")
-            if not bool(details.get("requires_human")):
-                raise RuntimeError("This run is not waiting for manual continuation.")
+            if not _details_can_resume(details):
+                raise RuntimeError("This run has no saved execution state to resume.")
 
             resolved_overrides = dict(config_overrides or {})
+            effective_config = load_agent_config(
+                self.config_path,
+                max_steps=max_steps,
+                pause_after_action=pause_after_action,
+                config_overrides=resolved_overrides,
+            )
+            initial_result = _build_resume_job_result(details=details, run_id=clean_run_id)
             job = DashboardJob(
                 job_id=uuid.uuid4().hex[:12],
                 task=str(details.get("task") or clean_run_id),
                 planner_mode=str(details.get("planner_mode") or "auto"),
-                dry_run=bool(details.get("dry_run")),
-                max_steps=None,
-                pause_after_action=None,
+                dry_run=_optional_bool(details.get("dry_run")) or False,
+                max_steps=effective_config.max_steps,
+                pause_after_action=effective_config.pause_after_action,
+                max_run_seconds=effective_config.max_run_seconds,
                 resume_run_id=clean_run_id,
                 config_overrides=resolved_overrides,
+                result=initial_result,
             )
             self.jobs[job.job_id] = job
             self.cancel_events[job.job_id] = threading.Event()
             self.decision_events[job.job_id] = threading.Event()
+            self._seed_pending_decision_from_initial_result_locked(job)
             self.active_job_id = job.job_id
 
         thread = threading.Thread(
@@ -242,6 +737,18 @@ class TaskQueue:
             job = self.jobs.get(self.active_job_id)
             return job.to_dict() if job else None
 
+    def clear_history(self) -> int:
+        with self.lock:
+            if self.active_job_id is not None:
+                raise RuntimeError("Another task is running. Please wait for it to finish.")
+            cleared = len(self.jobs)
+            self.jobs.clear()
+            self.cancel_events.clear()
+            self.decision_events.clear()
+            self.pending_decisions.clear()
+            self.decision_responses.clear()
+            return cleared
+
     def cancel_active(self) -> dict[str, Any]:
         with self.lock:
             if self.active_job_id is None:
@@ -254,13 +761,15 @@ class TaskQueue:
             if decision_event is not None:
                 self.decision_responses[job.job_id] = {"decision": "cancel", "note": "Stopped by user."}
                 decision_event.set()
+            self.pending_decisions.pop(job.job_id, None)
             job.cancel_requested = True
             job.status = "stopping"
+            job.result = _clear_pending_decision_from_result(job.result, decision="cancel")
             job.updated_at = time.time()
             return job.to_dict()
 
     def decide(self, job_id: str, *, decision: str, note: str | None = None) -> dict[str, Any]:
-        normalized = str(decision or "").strip().lower()
+        normalized = _normalize_decision_action(decision)
         if normalized not in {"approve", "reject", "cancel"}:
             raise ValueError("decision must be approve, reject, or cancel.")
         with self.lock:
@@ -274,31 +783,66 @@ class TaskQueue:
                 raise RuntimeError("No approval wait is registered for this job.")
             self.decision_responses[job_id] = {"decision": normalized, "note": note}
             event.set()
+            self.pending_decisions.pop(job_id, None)
+            job.status = "stopping" if normalized == "cancel" else "running"
+            job.result = _clear_pending_decision_from_result(job.result, decision=normalized)
             job.updated_at = time.time()
             return job.to_dict()
+
+    def _seed_pending_decision_from_initial_result_locked(self, job: DashboardJob) -> None:
+        if not isinstance(job.result, dict):
+            return
+        pending_decision = _pending_decision_from_progress_payload(job.result)
+        if not pending_decision:
+            return
+        self.pending_decisions[job.job_id] = dict(pending_decision)
+        job.status = "approval"
+        job.result = _merge_progress_job_result_payload(
+            job.result,
+            {"pending_decision": pending_decision},
+        )
+        job.updated_at = time.time()
+
+    def _apply_decision_response_locked(self, job_id: str, response: dict[str, Any]) -> dict[str, Any]:
+        normalized = _normalize_decision_action(response.get("decision"), default="reject")
+        response["decision"] = normalized
+        event = self.decision_events.get(job_id)
+        if event is not None:
+            event.clear()
+        self.pending_decisions.pop(job_id, None)
+        job = self.jobs.get(job_id)
+        if job is not None:
+            job.status = "stopping" if normalized == "cancel" else "running"
+            job.result = _clear_pending_decision_from_result(job.result, decision=normalized)
+            job.updated_at = time.time()
+        return response
 
     def _run_job(self, job_id: str) -> None:
         with self.lock:
             job = self.jobs[job_id]
-            job.status = "running"
+            if job.status != "approval":
+                job.status = "running"
             job.started_at = time.time()
             job.updated_at = time.time()
             cancel_event = self.cancel_events.get(job_id)
 
         try:
             runner = resume_task if job.resume_run_id else run_task
-            result = runner(
-                job.resume_run_id or job.task,
-                config_path=self.config_path,
-                planner_mode=job.planner_mode,
-                dry_run=job.dry_run,
-                max_steps=job.max_steps,
-                pause_after_action=job.pause_after_action,
-                config_overrides=job.config_overrides,
-                stop_requested=cancel_event.is_set if cancel_event is not None else None,
-                progress_callback=lambda payload: self._update_job_progress(job_id, payload),
-                decision_callback=lambda payload: self._await_job_decision(job_id, payload),
-            )
+            runner_kwargs = {
+                "config_path": self.config_path,
+                "planner_mode": job.planner_mode,
+                "dry_run": job.dry_run,
+                "max_steps": job.max_steps,
+                "pause_after_action": job.pause_after_action,
+                "config_overrides": job.config_overrides,
+                "stop_requested": cancel_event.is_set if cancel_event is not None else None,
+                "progress_callback": lambda payload: self._update_job_progress(job_id, payload),
+                "decision_callback": lambda payload: self._await_job_decision(job_id, payload),
+            }
+            if not job.resume_run_id:
+                runner_kwargs["initial_task_graph"] = job.initial_task_graph
+                runner_kwargs["initial_plan_review_status"] = job.initial_plan_review_status
+            result = runner(job.resume_run_id or job.task, **runner_kwargs)
             payload = {
                 "task": result.task,
                 "completed": result.completed,
@@ -314,6 +858,12 @@ class TaskQueue:
                 "interruption_kind": result.interruption_kind,
                 "interruption_reason": result.interruption_reason,
             }
+            if result.execution_budget is not None:
+                payload["execution_budget"] = result.execution_budget
+            if result.execution_environment is not None:
+                payload["execution_environment"] = result.execution_environment
+            if result.execution_state is not None:
+                payload["execution_state"] = result.execution_state
             with self.lock:
                 if result.completed:
                     job.status = "completed"
@@ -323,7 +873,7 @@ class TaskQueue:
                     job.status = "attention"
                 else:
                     job.status = "failed"
-                job.result = payload
+                job.result = _finalize_job_result_payload(job.result, payload)
                 job.error = result.error
                 job.cancelled = result.cancelled
                 job.cancel_reason = result.cancel_reason
@@ -336,9 +886,12 @@ class TaskQueue:
                 self.active_job_id = None
         except Exception as exc:  # pragma: no cover - runtime safety
             with self.lock:
+                finished_at = time.time()
                 job.status = "failed"
                 job.error = str(exc)
-                job.finished_at = time.time()
+                job.finished_at = finished_at
+                job.requires_human = False
+                job.result = _fail_job_result_payload(job.result, error=str(exc), finished_at=finished_at)
                 job.updated_at = time.time()
                 self.active_job_id = None
         finally:
@@ -353,16 +906,18 @@ class TaskQueue:
             job = self.jobs.get(job_id)
             if job is None:
                 return
-            current_result = dict(job.result or {})
-            current_result.update(payload)
-            job.result = current_result
-            pending_decision = payload.get("execution_state", {}).get("pending_decision") if isinstance(payload.get("execution_state"), dict) else None
+            current_result = _merge_progress_job_result_payload(job.result, payload)
+            pending_decision = _pending_decision_from_progress_payload(payload)
             if pending_decision:
                 self.pending_decisions[job_id] = pending_decision
                 job.status = "approval"
+                job.result = current_result
             elif job.status == "approval":
                 job.status = "running"
                 self.pending_decisions.pop(job_id, None)
+                job.result = _clear_pending_decision_from_result(current_result)
+            else:
+                job.result = current_result
             if isinstance(payload.get("started_at"), (int, float)):
                 job.started_at = float(payload["started_at"])
             job.updated_at = time.time()
@@ -373,19 +928,32 @@ class TaskQueue:
             event = self.decision_events.get(job_id)
             if event is None:
                 raise RuntimeError("No approval event is registered for this job.")
-            self.pending_decisions[job_id] = dict(payload.get("pending_decision") or {})
+            pending_decision = _pending_decision_from_progress_payload(payload)
+            if pending_decision is None:
+                raise RuntimeError("Approval callback payload did not include a pending decision.")
+            self.pending_decisions[job_id] = dict(pending_decision)
             event.clear()
             job.status = "approval"
+            execution_state_payload = (
+                payload.get("execution_state")
+                if isinstance(payload.get("execution_state"), dict)
+                else payload.get("state")
+            )
             current_result = dict(job.result or {})
-            current_result.update(
+            current_result = _merge_progress_job_result_payload(
+                current_result,
                 {
                     "pending_decision": self.pending_decisions[job_id],
-                    "execution_state": payload.get("state"),
+                    "execution_state": execution_state_payload,
                     "step_proposal": payload.get("step_proposal"),
-                }
+                },
             )
             job.result = current_result
             job.updated_at = time.time()
+            buffered_response = self.decision_responses.pop(job_id, None)
+            if isinstance(buffered_response, dict):
+                return self._apply_decision_response_locked(job_id, dict(buffered_response))
+            event.clear()
 
         while True:
             if event.wait(timeout=0.1):
@@ -396,16 +964,7 @@ class TaskQueue:
 
         with self.lock:
             response = dict(self.decision_responses.pop(job_id, {"decision": "reject"}))
-            self.pending_decisions.pop(job_id, None)
-            event.clear()
-            job = self.jobs.get(job_id)
-            if job is not None:
-                job.status = "running"
-                current_result = dict(job.result or {})
-                current_result.pop("pending_decision", None)
-                job.result = current_result
-                job.updated_at = time.time()
-            return response
+            return self._apply_decision_response_locked(job_id, response)
 
 _TEXT_TEMPLATE_REPLACEMENTS = {
     "__APP_NAME__": APP_NAME,
@@ -510,16 +1069,16 @@ def _provider_error_payload(exc: Exception) -> dict[str, Any]:
 def _clean_ui_preferences(raw: Any, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
     base = dict(existing or {})
     if not isinstance(raw, dict):
-        base.setdefault("onboarding_completed", False)
         return {
-            "onboarding_completed": bool(base.get("onboarding_completed")),
+            "onboarding_completed": _optional_bool(base.get("onboarding_completed")) or False,
         }
 
     if "onboarding_completed" in raw:
-        base["onboarding_completed"] = bool(raw.get("onboarding_completed"))
-    base.setdefault("onboarding_completed", False)
+        parsed_onboarding = _optional_bool(raw.get("onboarding_completed"))
+        if parsed_onboarding is not None:
+            base["onboarding_completed"] = parsed_onboarding
     return {
-        "onboarding_completed": bool(base.get("onboarding_completed")),
+        "onboarding_completed": _optional_bool(base.get("onboarding_completed")) or False,
     }
 
 
@@ -933,20 +1492,47 @@ class DashboardApp:
 
                 if path == "/api/tasks":
                     try:
+                        task_text = str(body.get("task", ""))
                         resolved_overrides = app._resolve_request_config_overrides(body.get("config_overrides"))
+                        initial_task_graph = app._resolve_initial_task_graph(
+                            task=task_text,
+                            raw_task_graph=body.get("task_graph"),
+                            raw_task_graph_signature=body.get("task_graph_signature"),
+                            config_overrides=resolved_overrides,
+                        )
+                        initial_plan_review_status = app._resolve_initial_plan_review_status(
+                            task=task_text,
+                            task_graph=initial_task_graph,
+                            raw_review_status=body.get("task_graph_review_status"),
+                            raw_review_signature=body.get("task_graph_review_signature"),
+                            config_overrides=resolved_overrides,
+                        )
                         job = app.queue.submit(
-                            task=str(body.get("task", "")),
+                            task=task_text,
                             planner_mode="auto",
                             dry_run=False,
                             max_steps=_optional_int(body.get("max_steps")),
                             pause_after_action=_optional_float(body.get("pause_after_action")),
                             config_overrides=resolved_overrides,
+                            initial_task_graph=initial_task_graph,
+                            initial_plan_review_status=initial_plan_review_status,
                         )
                     except ValueError as exc:
                         return self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                     except RuntimeError as exc:
                         return self._send_error(HTTPStatus.CONFLICT, str(exc))
                     return self._send_json(job.to_dict(), status=HTTPStatus.ACCEPTED)
+
+                if path == "/api/tasks/preview":
+                    try:
+                        resolved_overrides = app._resolve_request_config_overrides(body.get("config_overrides"))
+                        payload = app.preview_task(
+                            task=str(body.get("task", "")),
+                            config_overrides=resolved_overrides,
+                        )
+                    except ValueError as exc:
+                        return self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                    return self._send_json(payload)
 
                 if path == "/api/runtime-preferences":
                     snapshot = app.runtime_preferences.update(
@@ -971,6 +1557,13 @@ class DashboardApp:
                         return self._send_error(HTTPStatus.CONFLICT, str(exc))
                     return self._send_json(job, status=HTTPStatus.ACCEPTED)
 
+                if path == "/api/history/clear":
+                    try:
+                        payload = app.clear_history()
+                    except RuntimeError as exc:
+                        return self._send_error(HTTPStatus.CONFLICT, str(exc))
+                    return self._send_json(payload, status=HTTPStatus.ACCEPTED)
+
                 if path.startswith("/api/jobs/") and path.endswith("/decision"):
                     job_id = path.removeprefix("/api/jobs/").removesuffix("/decision").strip("/")
                     try:
@@ -989,6 +1582,8 @@ class DashboardApp:
                         resolved_overrides = app._resolve_request_config_overrides(body.get("config_overrides"))
                         job = app.queue.resume(
                             run_id=run_id,
+                            max_steps=_optional_int(body.get("max_steps")),
+                            pause_after_action=_optional_float(body.get("pause_after_action")),
                             config_overrides=resolved_overrides,
                         )
                     except (RuntimeError, ValueError) as exc:
@@ -1036,7 +1631,7 @@ class DashboardApp:
                         payload = app.provider_load_model(
                             config_overrides=resolved_overrides,
                             model_id=str(body.get("model_id", "")).strip(),
-                            unload_first=bool(body.get("unload_first")),
+                            unload_first=_optional_bool(body.get("unload_first")) or False,
                         )
                     except ProviderToolError as exc:
                         return self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
@@ -1172,6 +1767,7 @@ class DashboardApp:
                 "planner_mode": "auto",
                 "dry_run": False,
                 "max_steps": config.max_steps,
+                "max_run_seconds": config.max_run_seconds,
                 "pause_after_action": config.pause_after_action,
                 "cursor_motion_enabled": config.cursor_motion_enabled,
                 "cursor_motion_duration": config.cursor_motion_duration,
@@ -1181,6 +1777,8 @@ class DashboardApp:
                 "model_base_url": config.model_base_url,
                 "model_name": config.model_name,
                 "model_api_key": config.model_api_key or "",
+                "model_request_timeout": config.model_request_timeout,
+                "task_graph_request_timeout": config.task_graph_request_timeout,
                 "model_auto_discover": config.model_auto_discover,
                 "model_structured_output": config.model_structured_output,
                 "default_surface_policy": config.default_surface_policy,
@@ -1190,10 +1788,23 @@ class DashboardApp:
                 "user_input_preemption_policy": config.user_input_preemption_policy,
                 "browser_runtime_transport": config.browser_runtime_transport,
                 "browser_profile_strategy": config.browser_profile_strategy,
+                "desktop_autonomy_mode": config.desktop_autonomy_mode,
                 "approval_policy": config.approval_policy,
+                "complex_task_planning": config.complex_task_planning,
+                "plan_review_policy": config.plan_review_policy,
+                "max_task_subgoals": config.max_task_subgoals,
                 "max_subgoal_retries": config.max_subgoal_retries,
+                "orchestrator_mode": config.orchestrator_mode,
+                "stage_review_policy": config.stage_review_policy,
+                "task_workspace_enabled": config.task_workspace_enabled,
+                "max_replans_per_run": config.max_replans_per_run,
+                "max_failures_per_subgoal": config.max_failures_per_subgoal,
+                "replan_on_recoverable_error": config.replan_on_recoverable_error,
+                "recoverable_error_retry_limit": config.recoverable_error_retry_limit,
                 "enabled_capabilities": list(config.enabled_capabilities),
                 "driver_preferences": list(config.driver_preferences),
+                "plugin_modules": list(getattr(config, "plugin_modules", []) or []),
+                "plugin_fail_fast": bool(getattr(config, "plugin_fail_fast", False)),
                 "shell_recipe_policy": config.shell_recipe_policy,
                 "browser_control_mode": config.browser_control_mode,
                 "browser_dom_backend": config.browser_dom_backend,
@@ -1220,6 +1831,7 @@ class DashboardApp:
                 {"value": "rule", "label": "Rule"},
                 {"value": "vlm", "label": "VLM"},
             ],
+            "autonomy_mode_presets": desktop_autonomy_mode_presets(),
             "model_providers": [
                 {
                     "value": "lmstudio_local",
@@ -1394,22 +2006,56 @@ class DashboardApp:
         }
 
     def overview(self) -> dict[str, Any]:
+        active_job = self.queue.active_job()
+        jobs = self.queue.list_jobs(limit=8)
         return {
             "meta": self.meta(),
             "runtime_preferences": self.runtime_preferences.snapshot(),
-            "active_job": self.queue.active_job(),
-            "jobs": self.queue.list_jobs(limit=8),
-            "runs": self._overview_runs(limit=12),
+            "active_job": active_job,
+            "jobs": jobs,
+            "runs": self._overview_runs(
+                limit=12,
+                expected_run_ids=_overview_expected_run_ids_from_jobs(jobs),
+            ),
         }
 
-    def _overview_runs(self, *, limit: int) -> list[dict[str, Any]]:
+    def clear_history(self) -> dict[str, Any]:
+        jobs_cleared = self.queue.clear_history()
+        runs_cleared = clear_runs(self.run_root)
+        with self._overview_runs_lock:
+            self._overview_runs_cache = None
+            self._overview_runs_refreshing = False
+        return {
+            "ok": True,
+            "jobs_cleared": jobs_cleared,
+            "runs_cleared": runs_cleared,
+        }
+
+    def _overview_runs(self, *, limit: int, expected_run_ids: set[str] | None = None) -> list[dict[str, Any]]:
         now = time.time()
+        expected_ids = {run_id for run_id in (expected_run_ids or set()) if run_id}
         with self._overview_runs_lock:
             cached = self._overview_runs_cache
-            if not self._overview_runs_refreshing and (
-                cached is None or int(cached.get("limit") or 0) != int(limit)
-                or now - float(cached.get("updated_at") or 0.0) >= _OVERVIEW_RUNS_CACHE_SECONDS
-            ):
+            cache_miss = cached is None or int(cached.get("limit") or 0) != int(limit)
+            cached_run_ids = {
+                str(item.get("id") or "").strip()
+                for item in (cached.get("items", []) if isinstance(cached, dict) else [])
+                if isinstance(item, dict)
+            }
+            cache_missing_expected = bool(expected_ids and not expected_ids.issubset(cached_run_ids))
+            cache_stale = cached is not None and now - float(cached.get("updated_at") or 0.0) >= _OVERVIEW_RUNS_CACHE_SECONDS
+            if cache_miss or cache_missing_expected:
+                try:
+                    items = list_runs(self.run_root, limit=limit)
+                except Exception:
+                    items = []
+                self._overview_runs_cache = {
+                    "limit": int(limit),
+                    "updated_at": now,
+                    "items": [dict(item) for item in items if isinstance(item, dict)],
+                }
+                return [dict(item) for item in self._overview_runs_cache["items"]]
+            if not self._overview_runs_refreshing and cache_stale:
                 self._overview_runs_refreshing = True
                 threading.Thread(
                     target=self._refresh_overview_runs,
@@ -1572,6 +2218,9 @@ class DashboardApp:
             "custom": "Custom provider",
         }
         provider_value = str(config.model_provider or "").strip()
+        planner_mode = str(getattr(config, "planner_mode", "") or "").strip().lower().replace("-", "_")
+        computer_use_mode = planner_mode in {"computer_use", "cua"}
+        connection_provider_value = "openai_api" if computer_use_mode else provider_value
         provider_label = provider_labels.get(provider_value, provider_value or "Not selected")
         items.append(
             {
@@ -1606,7 +2255,11 @@ class DashboardApp:
         )
 
         api_base = normalize_api_base_url(config.model_base_url)
+        if computer_use_mode and _looks_like_local_api_base(api_base):
+            api_base = "https://api.openai.com/v1"
         api_key = str(config.model_api_key or "").strip()
+        env_api_key = str(os.environ.get("OPENAI_API_KEY") or "").strip()
+        effective_api_key = api_key or env_api_key
         connection_item = {
             "id": "provider_connection",
             "label": "Provider connection",
@@ -1614,20 +2267,20 @@ class DashboardApp:
             "detail": "Complete the provider settings first.",
             "action": "refresh_model_catalog",
         }
-        requires_api_key = provider_value in {"openai_api", "openai_compatible"}
-        if not provider_value:
+        requires_api_key = connection_provider_value in {"openai_api", "openai_compatible"}
+        if not connection_provider_value:
             connection_item["action"] = "open_settings"
         elif not api_base:
             connection_item["detail"] = "Add a Base URL in Settings before checking the provider connection."
             connection_item["action"] = "open_settings"
-        elif requires_api_key and not api_key:
-            connection_item["detail"] = "Add an API key in Settings before checking the provider connection."
+        elif requires_api_key and not effective_api_key:
+            connection_item["detail"] = "Add an API key in Settings or set OPENAI_API_KEY before checking the provider connection."
             connection_item["action"] = "open_settings"
         else:
             snapshot = self._environment_provider_snapshot(
-                provider=provider_value,
+                provider=connection_provider_value,
                 base_url=api_base,
-                api_key=api_key,
+                api_key=effective_api_key,
                 timeout=float(config.model_request_timeout),
             )
             if snapshot is None:
@@ -1635,7 +2288,7 @@ class DashboardApp:
             elif snapshot.ok:
                 catalog_count = len(snapshot.catalog_models)
                 loaded_count = len(snapshot.loaded_models)
-                if provider_value == "lmstudio_local":
+                if connection_provider_value == "lmstudio_local":
                     connection_item["label"] = "LM Studio connection"
                     if catalog_count or loaded_count:
                         connection_item["status"] = "Ready"
@@ -1665,6 +2318,45 @@ class DashboardApp:
                 connection_item["detail"] = detail
 
         items.append(connection_item)
+        if computer_use_mode:
+            items.append(
+                {
+                    "id": "computer_use_api",
+                    "label": "Computer use API",
+                    "status": "Ready" if effective_api_key else "Needs setup",
+                    "detail": (
+                        f"Responses API computer tool will use {api_base}; local model discovery is skipped."
+                        if effective_api_key
+                        else "Set model_api_key or OPENAI_API_KEY before running computer_use mode."
+                    ),
+                    "action": "open_settings",
+                }
+            )
+        plugin_modules = list(getattr(config, "plugin_modules", []) or [])
+        if plugin_modules:
+            from desktop_agent.plugins import build_runtime_registries
+
+            _capability_registry, _driver_registry, plugin_results = build_runtime_registries(config)
+            failed_plugins = [item for item in plugin_results if not item.loaded]
+            registered_capabilities = sum(len(item.capabilities) for item in plugin_results if item.loaded)
+            registered_drivers = sum(len(item.drivers) for item in plugin_results if item.loaded)
+            items.append(
+                {
+                    "id": "software_plugins",
+                    "label": "Software plugins",
+                    "status": "Needs setup" if failed_plugins else "Ready",
+                    "detail": (
+                        f"{len(failed_plugins)} plugin(s) failed to load: "
+                        + "; ".join(f"{item.module}: {item.error}" for item in failed_plugins[:3])
+                        if failed_plugins
+                        else (
+                            f"Loaded {len(plugin_results)} plugin module(s), "
+                            f"{registered_capabilities} capability adapter(s), {registered_drivers} app driver(s)."
+                        )
+                    ),
+                    "action": "open_settings",
+                }
+            )
         return {
             "items": items,
             "checked_at": time.time(),
@@ -1752,6 +2444,168 @@ class DashboardApp:
         merged = self._runtime_config_overrides()
         merged.update(_clean_config_overrides(raw_overrides))
         return _clean_config_overrides(merged)
+
+    def _resolve_initial_task_graph(
+        self,
+        *,
+        task: str,
+        raw_task_graph: Any,
+        raw_task_graph_signature: Any = None,
+        config_overrides: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if raw_task_graph is None:
+            return None
+        config = load_agent_config(self.config_path, config_overrides=config_overrides)
+        graph_payload = coerce_initial_task_graph(
+            task,
+            raw_task_graph,
+            max_subgoals=config.max_task_subgoals,
+        ).to_dict()
+        clean_signature = str(raw_task_graph_signature or "").strip()
+        if not clean_signature:
+            raise ValueError("Task graph signature is required. Refresh the plan preview.")
+        expected_signature = self._preview_task_graph_signature(
+            task=task,
+            task_graph=graph_payload,
+            config_overrides=config_overrides,
+            config=config,
+        )
+        if clean_signature != expected_signature:
+            raise ValueError("Task graph signature does not match the current task or configuration. Refresh the plan preview.")
+        start_blocker = _preview_task_graph_start_blocker(config, graph_payload)
+        if start_blocker:
+            raise ValueError(start_blocker)
+        return graph_payload
+
+    def _resolve_initial_plan_review_status(
+        self,
+        *,
+        task: str,
+        task_graph: dict[str, Any] | None,
+        raw_review_status: Any = None,
+        raw_review_signature: Any = None,
+        config_overrides: dict[str, Any],
+    ) -> str | None:
+        review_status = str(raw_review_status or "").strip().lower()
+        if not review_status:
+            return None
+        if review_status != "approved":
+            raise ValueError("Unsupported task graph review status.")
+        if task_graph is None:
+            raise ValueError("Task graph review status requires a matching preview task graph.")
+        review_signature = str(raw_review_signature or "").strip()
+        if not review_signature:
+            raise ValueError("Task graph review signature is required.")
+        config = load_agent_config(self.config_path, config_overrides=config_overrides)
+        expected_signature = self._preview_task_graph_signature(
+            task=task,
+            task_graph=task_graph,
+            config_overrides=config_overrides,
+            config=config,
+        )
+        if review_signature != expected_signature:
+            raise ValueError("Task graph review signature does not match the current task or configuration. Refresh the plan preview.")
+        graph = TaskGraph.from_dict(task_graph)
+        graph.task = str(task or graph.task or "").strip()
+        if not _preview_plan_review_required(config, graph):
+            raise ValueError("Task graph review status does not match the current review policy. Refresh the plan preview.")
+        return "approved"
+
+    def _preview_task_graph_signature(
+        self,
+        *,
+        task: str,
+        task_graph: dict[str, Any],
+        config_overrides: dict[str, Any],
+        config: Any | None = None,
+    ) -> str:
+        effective_config = config or load_agent_config(self.config_path, config_overrides=config_overrides)
+        payload = {
+            "task": str(task or "").strip(),
+            "task_graph": _stable_preview_value(task_graph),
+            "config_overrides": _stable_preview_value(_redact_preview_signature_config(config_overrides)),
+            "planning_contract": _stable_preview_value(_preview_signature_config_contract(effective_config)),
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def preview_task(self, *, task: str, config_overrides: dict[str, Any]) -> dict[str, Any]:
+        normalized_task = str(task or "").strip()
+        if not normalized_task:
+            raise ValueError("Task is required.")
+
+        resolved_overrides = self._resolve_request_config_overrides(config_overrides)
+        config = load_agent_config(self.config_path, config_overrides=resolved_overrides)
+        task_graph = TaskGraphPlanner(config).plan(normalized_task, history=[], world_model=None)
+        risk_level = task_graph_risk_level(task_graph)
+        ambiguous = task_graph_is_ambiguous(task_graph)
+        requires_review = _preview_plan_review_required(config, task_graph)
+        preview_state = ExecutionState(
+            task=task_graph.task,
+            run_id=f"preview-{uuid.uuid4().hex[:12]}",
+            task_graph=task_graph,
+        )
+        if requires_review:
+            preview_state.app_context["plan_review_status"] = "pending"
+            preview_state.app_context["plan_review_reason"] = "Preview uses the same plan review policy as execution."
+        summary = build_execution_plan_summary(preview_state)
+        intent = dict(task_graph.intent) if isinstance(task_graph.intent, dict) else {}
+        task_graph_payload = task_graph.to_dict()
+        start_blocker = _preview_task_graph_start_blocker(config, task_graph)
+        return {
+            "task": normalized_task,
+            "task_graph": task_graph_payload,
+            "task_graph_signature": self._preview_task_graph_signature(
+                task=normalized_task,
+                task_graph=task_graph_payload,
+                config_overrides=resolved_overrides,
+                config=config,
+            ),
+            "intent": intent,
+            "risk_level": risk_level,
+            "ambiguous": ambiguous,
+            "requires_review": requires_review,
+            "can_start": start_blocker is None,
+            "start_blocker": start_blocker,
+            "execution_budget": {
+                "task_graph_request_timeout": config.task_graph_request_timeout,
+                "max_steps": config.max_steps,
+                "max_run_seconds": config.max_run_seconds,
+                "pause_after_action": config.pause_after_action,
+                "desktop_autonomy_mode": config.desktop_autonomy_mode,
+                "approval_policy": config.approval_policy,
+                "complex_task_planning": config.complex_task_planning,
+                "plan_review_policy": config.plan_review_policy,
+                "max_task_subgoals": config.max_task_subgoals,
+                "max_subgoal_retries": config.max_subgoal_retries,
+                "stage_review_policy": config.stage_review_policy,
+                "max_replans_per_run": config.max_replans_per_run,
+                "max_failures_per_subgoal": config.max_failures_per_subgoal,
+                "replan_on_recoverable_error": config.replan_on_recoverable_error,
+                "recoverable_error_retry_limit": config.recoverable_error_retry_limit,
+            },
+            "execution_environment": {
+                "browser_control_mode": config.browser_control_mode,
+                "browser_dom_backend": config.browser_dom_backend,
+                "browser_dom_timeout": config.browser_dom_timeout,
+                "browser_headless": config.browser_headless,
+                "browser_channel": config.browser_channel,
+                "browser_executable_path": config.browser_executable_path,
+                "cursor_motion_enabled": config.cursor_motion_enabled,
+                "cursor_motion_duration": config.cursor_motion_duration,
+                "display_override_enabled": config.display_override_enabled,
+                "display_override_monitor_device_name": config.display_override_monitor_device_name,
+                "display_override_dpi_scale": config.display_override_dpi_scale,
+                "display_override_work_area_left": config.display_override_work_area_left,
+                "display_override_work_area_top": config.display_override_work_area_top,
+                "display_override_work_area_width": config.display_override_work_area_width,
+                "display_override_work_area_height": config.display_override_work_area_height,
+                "generic_app_launch_enabled": config.generic_app_launch_enabled,
+                "shell_recipe_policy": config.shell_recipe_policy,
+            },
+            "plan_health": summary.get("plan_health", {}),
+            "summary": summary,
+        }
 
     def open_diagnostic_path(self, key: str) -> dict[str, Any]:
         diagnostics = self.system_paths()
@@ -2173,7 +3027,10 @@ def launch_dashboard(
     server = app.create_server()
     url = f"http://{host}:{port}"
     print(f"{APP_NAME} {APP_VERSION} is running at {url}")
-    print("Attempting to open the dashboard in your browser...")
+    if open_browser:
+        print("Attempting to open the dashboard in your browser...")
+    else:
+        print("Browser auto-open is disabled for this session.")
     print("Keep this terminal open while you use the dashboard. Press Ctrl+C to stop the server.")
     print(f"If the page does not appear automatically, open {url} in your browser.")
     if open_browser:
@@ -2675,18 +3532,353 @@ def _optional_float(value: Any) -> float | None:
 
 
 def _optional_bool(value: Any) -> bool | None:
-    if value in {None, ""}:
+    if value is None:
         return None
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
         lowered = value.strip().lower()
+        if not lowered:
+            return None
         if lowered in {"1", "true", "yes", "on"}:
             return True
         if lowered in {"0", "false", "no", "off"}:
             return False
         return None
-    return bool(value)
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    return None
+
+
+def _looks_like_local_api_base(base_url: str) -> bool:
+    try:
+        parsed = urlparse(str(base_url or "").strip())
+    except Exception:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    return host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def _stable_preview_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _stable_preview_value(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_stable_preview_value(item) for item in value]
+    return value
+
+
+def _redact_preview_signature_config(config_overrides: dict[str, Any]) -> dict[str, Any]:
+    redacted: dict[str, Any] = {}
+    for key, value in (config_overrides or {}).items():
+        if "api_key" in key.lower() or key.lower().endswith("_secret"):
+            redacted[key] = "<redacted>"
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def _preview_signature_config_contract(config: Any) -> dict[str, Any]:
+    keys = (
+        "model_provider",
+        "model_base_url",
+        "model_name",
+        "model_auto_discover",
+        "model_structured_output",
+        "task_graph_request_timeout",
+        "max_steps",
+        "max_run_seconds",
+        "pause_after_action",
+        "cursor_motion_enabled",
+        "cursor_motion_duration",
+        "default_surface_policy",
+        "browser_control_mode",
+        "browser_dom_backend",
+        "browser_dom_timeout",
+        "browser_headless",
+        "browser_channel",
+        "browser_executable_path",
+        "desktop_autonomy_mode",
+        "approval_policy",
+        "complex_task_planning",
+        "plan_review_policy",
+        "max_task_subgoals",
+        "max_subgoal_retries",
+        "orchestrator_mode",
+        "stage_review_policy",
+        "task_workspace_enabled",
+        "max_replans_per_run",
+        "max_failures_per_subgoal",
+        "replan_on_recoverable_error",
+        "recoverable_error_retry_limit",
+        "enabled_capabilities",
+        "driver_preferences",
+        "shell_recipe_policy",
+        "display_override_enabled",
+        "display_override_monitor_device_name",
+        "display_override_dpi_scale",
+        "display_override_work_area_left",
+        "display_override_work_area_top",
+        "display_override_work_area_width",
+        "display_override_work_area_height",
+        "generic_app_launch_enabled",
+    )
+    contract: dict[str, Any] = {}
+    for key in keys:
+        value = getattr(config, key, None)
+        if isinstance(value, tuple):
+            value = list(value)
+        contract[key] = value
+    return contract
+
+
+def _preview_task_graph_start_blocker(config: Any, task_graph: TaskGraph | dict[str, Any]) -> str | None:
+    graph = task_graph if isinstance(task_graph, TaskGraph) else TaskGraph.from_dict(task_graph)
+    graph = TaskGraph.from_dict(graph.to_dict())
+    state = ExecutionState(
+        task=str(graph.task or "").strip(),
+        run_id=f"preview-check-{uuid.uuid4().hex[:12]}",
+        task_graph=graph,
+        app_context={"plan_source": "preview"},
+    )
+    if _preview_plan_review_required(config, graph):
+        state.orchestration_phase = "plan_review"
+        state.app_context["plan_review_status"] = "pending"
+    summary = build_execution_plan_summary(state)
+    plan_health = summary.get("plan_health") if isinstance(summary, dict) else None
+    autonomy = plan_health.get("autonomy") if isinstance(plan_health, dict) else None
+    if not isinstance(autonomy, dict):
+        return None
+    status = str(autonomy.get("status") or "").strip().lower()
+    next_action = str(autonomy.get("next_action") or "").strip().lower()
+    if status == "review_required" or next_action.startswith("approve_") or _optional_bool(autonomy.get("requires_review")) is True:
+        return None
+    blockers = [str(item).strip() for item in autonomy.get("blockers", []) or [] if str(item).strip()]
+    if status == "needs_clarification" or next_action == "ask_user" or _optional_bool(autonomy.get("requires_user")) is True:
+        return blockers[0] if blockers else "Clarify the task before starting."
+    if status == "blocked" or next_action in {"recover_or_replan", "inspect_failure"} or _optional_bool(autonomy.get("can_continue")) is False:
+        return blockers[0] if blockers else "The preview plan is not ready to start."
+    return None
+
+
+def _preview_plan_review_required(config: Any, task_graph: Any) -> bool:
+    policy = str(getattr(config, "plan_review_policy", "low_risk_auto") or "low_risk_auto").strip().lower()
+    if policy == "never":
+        return False
+    current_subgoal = task_graph.current_subgoal() if hasattr(task_graph, "current_subgoal") else None
+    if current_subgoal is not None and getattr(current_subgoal, "goal_type", None) == "clarify":
+        return False
+    if policy == "always":
+        return True
+    return task_graph_risk_level(task_graph) != "low" or task_graph_is_ambiguous(task_graph)
+
+
+def _build_initial_task_graph_result(
+    *,
+    task: str,
+    task_graph: TaskGraph | dict[str, Any],
+    config: Any,
+    plan_review_status: str | None = None,
+) -> dict[str, Any]:
+    graph = task_graph if isinstance(task_graph, TaskGraph) else TaskGraph.from_dict(task_graph)
+    graph = TaskGraph.from_dict(graph.to_dict())
+    graph.task = str(task or graph.task or "").strip()
+    state = ExecutionState(
+        task=graph.task,
+        run_id=f"queued-{uuid.uuid4().hex[:12]}",
+        task_graph=graph,
+        app_context={"plan_source": "preview"},
+    )
+    if plan_review_status == "approved":
+        state.orchestration_phase = "stage_ready"
+        state.app_context["plan_review_status"] = "approved"
+        state.app_context["plan_review_reason"] = "The matching dashboard preview was approved before execution."
+    elif _preview_plan_review_required(config, graph):
+        state.orchestration_phase = "plan_review"
+        state.pending_decision = PendingDecision(
+            id=f"plan-review-{state.run_id}",
+            summary=f"Review the task plan before execution: {graph.task}",
+            reason="Plan review is required before execution.",
+            risk_level=task_graph_risk_level(graph),
+            decision_type="plan_review",
+            actions=[],
+        )
+        state.app_context["plan_review_status"] = "pending"
+        state.app_context["plan_review_reason"] = "The previewed plan matches a policy that requires review before execution."
+    else:
+        state.orchestration_phase = "stage_ready"
+    summary = build_execution_plan_summary(state)
+    return {
+        "latest_summary": summary.get("current_goal") or graph.completion_summary or graph.task,
+        "current_goal": summary.get("current_goal"),
+        "orchestration_phase": summary.get("orchestration_phase"),
+        "active_specialist": summary.get("active_specialist"),
+        "stage_review_status": summary.get("stage_review_status"),
+        "last_replan_reason": summary.get("last_replan_reason"),
+        "verification_status": summary.get("verification_status"),
+        "recovery_reason": summary.get("recovery_reason"),
+        "execution_state": summary,
+    }
+
+
+def _build_resume_job_result(*, details: dict[str, Any], run_id: str) -> dict[str, Any] | None:
+    execution_state = _resume_display_execution_state(details)
+    if not isinstance(execution_state, dict):
+        return None
+    execution_state = _prepare_resume_display_execution_state(execution_state, details=details)
+    timeline = [item for item in details.get("timeline", []) or [] if isinstance(item, dict)]
+    latest_step = timeline[-1] if timeline else {}
+    latest_plan = latest_step.get("plan") if isinstance(latest_step.get("plan"), dict) else {}
+    latest_summary = (
+        _optional_text(latest_plan.get("status_summary"))
+        or _optional_text(execution_state.get("current_goal"))
+        or _optional_text(details.get("interruption_reason"))
+        or _optional_text(details.get("task"))
+    )
+    result = {
+        "run_id": run_id,
+        "steps": details.get("steps"),
+        "latest_summary": latest_summary,
+        "latest_screenshot": latest_step.get("screenshot"),
+        "execution_state": execution_state,
+    }
+    return {key: value for key, value in result.items() if value is not None}
+
+
+def _prepare_resume_display_execution_state(
+    execution_state: dict[str, Any],
+    *,
+    details: dict[str, Any],
+) -> dict[str, Any]:
+    state_payload = dict(execution_state)
+    app_context = dict(state_payload.get("app_context") or {}) if isinstance(state_payload.get("app_context"), dict) else {}
+    handoff_kind = str(app_context.get("human_handoff_kind") or details.get("interruption_kind") or "").strip().lower()
+    last_verification = state_payload.get("last_verification")
+    verification_kind = (
+        str(last_verification.get("failure_kind") or "").strip().lower()
+        if isinstance(last_verification, dict)
+        else ""
+    )
+    verification_message = (
+        str(last_verification.get("message") or "").strip()
+        if isinstance(last_verification, dict)
+        else ""
+    )
+    if handoff_kind == "requires_clarification" or verification_kind == "requires_clarification":
+        return state_payload
+    if _has_pending_decision_payload(state_payload.get("pending_decision")):
+        for key in ("human_handoff_kind", "human_handoff_summary", "human_handoff_reason"):
+            app_context.pop(key, None)
+        if str(app_context.get("standard_recovery_kind") or "").strip().lower() == "requires_user":
+            app_context.pop("standard_recovery_kind", None)
+        state_payload["app_context"] = app_context
+        return state_payload
+
+    handoff_reason = str(
+        app_context.get("human_handoff_reason")
+        or app_context.get("human_handoff_summary")
+        or state_payload.get("recovery_reason")
+        or details.get("interruption_reason")
+        or (verification_message if verification_kind in {"requires_human", "requires_auth"} else "")
+        or ""
+    ).strip()
+    orchestration_phase = str(state_payload.get("orchestration_phase") or "").strip().lower()
+    was_waiting_for_user = (
+        orchestration_phase in {"awaiting_user", "awaiting_approval"}
+        or _optional_bool(details.get("requires_human")) is True
+        or bool(str(details.get("interruption_kind") or "").strip())
+        or bool(str(details.get("interruption_reason") or "").strip())
+        or bool(handoff_reason)
+        or verification_kind in {"requires_human", "requires_auth"}
+    )
+    if not was_waiting_for_user:
+        return state_payload
+
+    for key in ("human_handoff_kind", "human_handoff_summary", "human_handoff_reason"):
+        app_context.pop(key, None)
+    if str(app_context.get("standard_recovery_kind") or "").strip().lower() == "requires_user":
+        app_context.pop("standard_recovery_kind", None)
+    if handoff_reason and str(app_context.get("recovery_reason") or "").strip() == handoff_reason:
+        app_context.pop("recovery_reason", None)
+    app_context["manual_resume_status"] = "resumed"
+    app_context["manual_resume_reason"] = handoff_reason or "User resumed the paused run."
+    state_payload["app_context"] = app_context
+    state_payload["orchestration_phase"] = "stage_ready"
+    state_payload["pending_decision"] = None
+    state_payload["last_verification"] = None
+    if state_payload.get("verification_status"):
+        state_payload["verification_status"] = None
+    if state_payload.get("recovery_reason") == handoff_reason:
+        state_payload["recovery_reason"] = None
+
+    plan_health = state_payload.get("plan_health")
+    if isinstance(plan_health, dict):
+        updated_plan_health = dict(plan_health)
+        autonomy = updated_plan_health.get("autonomy")
+        updated_autonomy = dict(autonomy) if isinstance(autonomy, dict) else {}
+        updated_autonomy.update(
+            {
+                "status": "ready",
+                "can_continue": True,
+                "requires_review": False,
+                "requires_user": False,
+                "next_action": "execute",
+                "blockers": [],
+            }
+        )
+        updated_plan_health["autonomy"] = updated_autonomy
+        state_payload["plan_health"] = updated_plan_health
+    return state_payload
+
+
+def _resume_display_execution_state(details: dict[str, Any]) -> dict[str, Any] | None:
+    full_state = details.get("execution_state") if isinstance(details.get("execution_state"), dict) else None
+    display_state = details.get("state") if isinstance(details.get("state"), dict) else None
+    plan_payload = details.get("plan") if isinstance(details.get("plan"), dict) else None
+    merged: dict[str, Any] = {}
+    if isinstance(full_state, dict):
+        merged.update(full_state)
+    if isinstance(plan_payload, dict) and "task_graph" not in merged:
+        merged["task_graph"] = plan_payload
+    if isinstance(display_state, dict):
+        merged = _merge_execution_state_summary_payloads(merged, display_state)
+        if not isinstance(merged.get("task_graph"), dict) and isinstance(full_state, dict) and isinstance(full_state.get("task_graph"), dict):
+            merged["task_graph"] = full_state["task_graph"]
+        if not isinstance(merged.get("task_graph"), dict) and isinstance(plan_payload, dict):
+            merged["task_graph"] = plan_payload
+    if not merged:
+        return None
+    if not str(merged.get("task") or "").strip():
+        merged["task"] = details.get("task")
+    return {key: value for key, value in merged.items() if value is not None}
+
+
+def _details_can_resume(details: dict[str, Any]) -> bool:
+    if not isinstance(details, dict) or _optional_bool(details.get("completed")) is True:
+        return False
+    can_resume = _optional_bool(details.get("can_resume"))
+    if can_resume is not None:
+        return can_resume
+    if str(details.get("resume_mode") or "").strip():
+        return True
+    if _optional_bool(details.get("requires_human")) is True:
+        return True
+    return _details_have_resume_state(details)
+
+
+def _details_have_resume_state(details: dict[str, Any]) -> bool:
+    execution_state = details.get("execution_state")
+    if isinstance(execution_state, dict) and isinstance(execution_state.get("task_graph"), dict):
+        return True
+    state_payload = details.get("state")
+    if isinstance(state_payload, dict) and (
+        isinstance(state_payload.get("task_graph"), dict) or isinstance(state_payload.get("subgoals"), list)
+    ):
+        return True
+    plan_payload = details.get("plan")
+    return isinstance(plan_payload, dict) and isinstance(plan_payload.get("subgoals"), list)
 
 
 def _clean_config_overrides(raw: Any) -> dict[str, Any]:
@@ -2701,6 +3893,11 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
         "model_base_url": _optional_text,
         "model_name": _optional_text,
         "model_api_key": _optional_text,
+        "model_request_timeout": _optional_float,
+        "task_graph_request_timeout": _optional_float,
+        "max_steps": _optional_int,
+        "max_run_seconds": _optional_float,
+        "pause_after_action": _optional_float,
         "model_auto_discover": _optional_bool,
         "model_structured_output": _optional_text,
         "default_surface_policy": _optional_text,
@@ -2708,10 +3905,23 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
         "external_browser_attach_enabled": _optional_bool,
         "safe_mode_enabled": _optional_bool,
         "user_input_preemption_policy": _optional_text,
+        "shell_start_mode": _optional_text,
         "browser_runtime_transport": _optional_text,
         "browser_profile_strategy": _optional_text,
+        "desktop_autonomy_mode": _optional_text,
         "approval_policy": _optional_text,
+        "complex_task_planning": _optional_text,
+        "plan_review_policy": _optional_text,
+        "max_task_subgoals": _optional_int,
         "max_subgoal_retries": _optional_int,
+        "orchestrator_mode": _optional_text,
+        "stage_review_policy": _optional_text,
+        "task_workspace_enabled": _optional_bool,
+        "max_replans_per_run": _optional_int,
+        "max_failures_per_subgoal": _optional_int,
+        "replan_on_recoverable_error": _optional_bool,
+        "recoverable_error_retry_limit": _optional_int,
+        "plugin_fail_fast": _optional_bool,
         "browser_control_mode": _optional_text,
         "browser_dom_backend": _optional_text,
         "browser_dom_timeout": _optional_float,
@@ -2739,4 +3949,9 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
     driver_preferences = raw.get("driver_preferences")
     if isinstance(driver_preferences, list):
         cleaned["driver_preferences"] = [str(item).strip() for item in driver_preferences if str(item).strip()]
+    plugin_modules = raw.get("plugin_modules")
+    if isinstance(plugin_modules, str):
+        cleaned["plugin_modules"] = [item.strip() for item in plugin_modules.replace(";", ",").split(",") if item.strip()]
+    elif isinstance(plugin_modules, list):
+        cleaned["plugin_modules"] = [str(item).strip() for item in plugin_modules if str(item).strip()]
     return cleaned

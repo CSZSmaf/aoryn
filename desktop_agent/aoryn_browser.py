@@ -290,7 +290,7 @@ def build_browser_ai_setup_summary(
     for item in provider_options or []:
         if _optional_str(item.get("value")) == provider_value:
             provider_label = _optional_str(item.get("label")) or provider_value
-            provider_requires_api_key = bool(item.get("api_key_required"))
+            provider_requires_api_key = _optional_bool(item.get("api_key_required")) is True
             break
 
     model_name = _optional_str(getattr(config, "model_name", None)) or "auto"
@@ -308,7 +308,7 @@ def build_browser_ai_setup_summary(
         browser_channel_label = browser_channel
 
     browser_path = _optional_str(getattr(config, "browser_executable_path", None))
-    browser_headless = bool(getattr(config, "browser_headless", False))
+    browser_headless = _bool_with_default(getattr(config, "browser_headless", False), False)
 
     status = "Ready"
     detail = f"{provider_label} will answer questions about the current page."
@@ -377,7 +377,7 @@ def _browser_provider_options(config: Any) -> list[dict[str, Any]]:
             "description": "Bring your own endpoint and request settings.",
             "base_url": _optional_str(getattr(config, "model_base_url", None)) or "",
             "api_key_required": False,
-            "auto_discover": bool(getattr(config, "model_auto_discover", False)),
+            "auto_discover": _bool_with_default(getattr(config, "model_auto_discover", False), False),
             "supports_model_refresh": True,
             "supports_model_load": False,
         },
@@ -1188,8 +1188,8 @@ if QApplication is not None:
             self.base_url_edit.setText(_optional_str(effective.get("model_base_url")) or "")
             self.api_key_edit.setText(_optional_str(effective.get("model_api_key")) or "")
             self.browser_path_edit.setText(_optional_str(effective.get("browser_executable_path")) or "")
-            self.auto_discover_checkbox.setChecked(bool(effective.get("model_auto_discover", True)))
-            self.browser_headless_checkbox.setChecked(bool(effective.get("browser_headless", False)))
+            self.auto_discover_checkbox.setChecked(_bool_with_default(effective.get("model_auto_discover"), True))
+            self.browser_headless_checkbox.setChecked(_bool_with_default(effective.get("browser_headless"), False))
 
             self.model_combo.clear()
             self.model_combo.addItem("auto")
@@ -1855,7 +1855,7 @@ if QApplication is not None:
                 "html": payload.get("html"),
                 "value": payload.get("value"),
                 "selector": selector,
-                "found": bool(payload.get("found")),
+                "found": _optional_bool(payload.get("found")) is True,
                 "tab_id": tab.tab_id,
             }
 
@@ -1890,7 +1890,8 @@ if QApplication is not None:
             )
             result = _run_js_sync(tab.view.page(), script)
             payload = result if isinstance(result, dict) else {"annotated": False}
-            if payload.get("annotated") and runtime is not None:
+            annotated = _optional_bool(payload.get("annotated")) is True
+            if annotated and runtime is not None:
                 runtime.register_annotation(
                     {
                         "tab_id": tab.tab_id,
@@ -1901,8 +1902,8 @@ if QApplication is not None:
                     }
                 )
             return {
-                "annotated": bool(payload.get("annotated")),
-                "annotation_id": annotation_id if payload.get("annotated") else None,
+                "annotated": annotated,
+                "annotation_id": annotation_id if annotated else None,
                 "tab_id": tab.tab_id,
                 "selector": selector,
                 "label": label or annotation_id,
@@ -1920,9 +1921,10 @@ if QApplication is not None:
             if runtime is not None:
                 runtime.clear_registered_annotations(tab.tab_id, annotation_id=annotation_id)
             payload = result if isinstance(result, dict) else {"cleared": False, "count": 0}
+            cleared = _optional_bool(payload.get("cleared")) is True
             return {
-                "ok": bool(payload.get("cleared")),
-                "cleared": bool(payload.get("cleared")),
+                "ok": cleared,
+                "cleared": cleared,
                 "count": int(payload.get("count", 0) or 0),
                 "tab_id": tab.tab_id,
             }
@@ -1955,7 +1957,7 @@ if QApplication is not None:
             )
             result = _run_js_sync(page, script)
             return {
-                "ok": bool(result),
+                "ok": _optional_bool(result) is True,
                 "tab_id": tab.tab_id,
                 "action": "upload",
                 "files": upload_paths,
@@ -2018,7 +2020,7 @@ if QApplication is not None:
                         "feature": feature,
                         "decision": value or "prompt",
                         "request_id": _optional_str(payload.get("request_id")),
-                        "remember": bool(payload.get("remember", True)),
+                        "remember": _bool_with_default(payload.get("remember"), True),
                     }
                 )
             if action == "pause_for_auth":
@@ -2054,7 +2056,7 @@ if QApplication is not None:
             else:
                 return {"ok": False, "error": f"Unsupported browser action: {action}"}
             result = _run_js_sync(tab.view.page(), script)
-            return {"ok": bool(result), "tab_id": tab.tab_id, "action": action}
+            return {"ok": _optional_bool(result) is True, "tab_id": tab.tab_id, "action": action}
 
         def wait_for_state(self, *, selector: str | None = None, text: str | None = None, timeout_seconds: float = 8.0) -> dict[str, Any]:
             deadline = time.time() + max(0.2, float(timeout_seconds or 0.0))
@@ -2617,7 +2619,7 @@ if QApplication is not None:
             return self.dispatcher.invoke(
                 lambda: (self._active_window() or self._require_window()).query_dom(
                     selector=_optional_str(payload.get("selector")),
-                    include_text=bool(payload.get("include_text", True)),
+                    include_text=_bool_with_default(payload.get("include_text"), True),
                 )
             )
 
@@ -2713,7 +2715,7 @@ if QApplication is not None:
             origin = _optional_str(request.get("origin"))
             feature = _optional_str(request.get("feature"))
             decision = normalize_permission_decision(request.get("decision"))
-            remember = bool(request.get("remember", True))
+            remember = _bool_with_default(request.get("remember"), True)
             if request_id:
                 pending = next((item for item in self.permission_requests if item.get("request_id") == request_id), None)
                 if pending is not None:
@@ -3360,6 +3362,33 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+        return None
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    return None
+
+
+def _bool_with_default(value: Any, default: bool) -> bool:
+    parsed = _optional_bool(value)
+    return default if parsed is None else parsed
 
 
 # Delegate internal-page rendering to a dedicated module so UI templates stay

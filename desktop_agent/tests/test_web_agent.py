@@ -146,6 +146,35 @@ def test_web_agent_builds_navigation_plan_for_shopping_follow_up():
     assert plan.remaining_steps == ["sort by price low to high"]
 
 
+def test_web_agent_plans_decomposed_shopping_results_subgoal():
+    agent = WebAgent()
+
+    plan = agent.try_plan("open shopping results for high-value men's pants on amazon")
+
+    assert plan is not None
+    assert plan.done is True
+    assert plan.actions[0].type == "browser_open"
+    assert plan.actions[0].text.startswith("https://www.amazon.com/s?k=")
+
+
+def test_web_agent_plans_standalone_dom_follow_up_step():
+    agent = WebAgent()
+
+    plan = agent.build_dom_action_plan("filter by price range")
+
+    assert plan is not None
+    assert plan.done is True
+    assert plan.actions[0].type == "browser_dom_click"
+    assert plan.actions[0].text == "price range"
+
+
+def test_web_agent_does_not_treat_open_app_task_as_standalone_dom_action():
+    agent = WebAgent()
+
+    assert agent.build_dom_action_plan("open calculator and calculate 1+1") is None
+    assert agent.build_dom_action_plan("open notepad") is None
+
+
 def test_web_agent_builds_dom_follow_up_click_plan():
     agent = WebAgent(requests_module=_RaisingRequests())
 

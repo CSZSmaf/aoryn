@@ -193,6 +193,13 @@ def detect_user_input_preemption(
     last_agent_action_at = _optional_float((execution_context or {}).get("last_agent_action_at"))
     if last_agent_action_at is None:
         return False
+    last_agent_input_tick = _optional_int((execution_context or {}).get("last_agent_input_tick_ms"))
+    if (
+        last_agent_input_tick is not None
+        and getattr(session, "last_input_tick_ms", None) is not None
+        and int(getattr(session, "last_input_tick_ms")) <= last_agent_input_tick
+    ):
+        return False
     if time.time() - last_agent_action_at <= 0.75:
         return False
     return session.last_input_age_seconds <= max(0.25, float(threshold_seconds))
@@ -248,5 +255,14 @@ def _optional_float(value: Any) -> float | None:
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None

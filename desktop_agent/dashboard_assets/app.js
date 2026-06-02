@@ -7,11 +7,26 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = "desktop-agent-workspace.sidebar-collapsed
 const OVERVIEW_CACHE_KEY = "desktop-agent-workspace.overview-cache";
 const SEND_SHORTCUT_STORAGE_KEY = "desktop-agent-workspace.send-shortcut";
 const CHAT_SESSIONS_STORAGE_KEY = "desktop-agent-workspace.chat-sessions";
+const AGENT_SESSIONS_STORAGE_KEY = "desktop-agent-workspace.agent-sessions";
+const AGENT_RUN_SESSION_MAP_STORAGE_KEY = "desktop-agent-workspace.agent-run-session-map";
 const HISTORY_SELECTION_STORAGE_KEY = "desktop-agent-workspace.history-selection";
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "desktop-agent-workspace.active-chat-session";
 const ACTIVE_CHAT_SESSION_SESSION_KEY = "desktop-agent-workspace.session-active-chat-session";
 const CHAT_LAUNCH_SESSION_KEY = "desktop-agent-workspace.session-chat-launch-id";
-const CUSTOM_SELECT_IDS = ["languageSelect", "sendShortcutSelect", "modelProvider", "structuredOutput", "availableModels", "browserDomBackend", "browserChannel"];
+const CUSTOM_SELECT_IDS = [
+  "languageSelect",
+  "sendShortcutSelect",
+  "autonomyModeSelect",
+  "planningModeSelect",
+  "planReviewPolicySelect",
+  "approvalPolicySelect",
+  "stageReviewPolicySelect",
+  "modelProvider",
+  "structuredOutput",
+  "availableModels",
+  "browserDomBackend",
+  "browserChannel",
+];
 const DISPLAY_DEVICE_NAME_PATTERN = /DISPLAY(\d+)/i;
 
 const FALLBACK_COPY = {
@@ -43,9 +58,12 @@ const state = {
   runs: [],
   jobs: [],
   chatSessions: [],
+  agentSessions: [],
+  agentRunSessionMap: {},
   selectedRunId: null,
   selectedRunDetails: null,
   selectedChatSessionId: null,
+  selectedAgentSessionId: null,
   locale: DEFAULT_LOCALE,
   uiMode: "agent",
   detailView: "overview",
@@ -57,6 +75,7 @@ const state = {
   pollingHandle: null,
   overviewFetchInFlight: false,
   lastOverviewSignature: "",
+  activeJobActivationSeq: 0,
   startupDiagnosticsScheduled: false,
   providerSnapshot: null,
   providerStatusMessage: "",
@@ -67,6 +86,15 @@ const state = {
   showWelcome: true,
   loadingRunDetails: false,
   pendingTask: null,
+  taskPreview: null,
+  taskPreviewTask: "",
+  taskPreviewConfigSignature: "",
+  taskPreviewLoading: false,
+  taskPreviewError: "",
+  taskPreviewStartError: "",
+  decisionPendingJobId: "",
+  decisionPendingChoice: "",
+  resumePendingRunId: "",
   chatPending: false,
   chatStopRequested: false,
   chatAbortController: null,
@@ -112,6 +140,7 @@ const elements = {
   sidebarBackdrop: document.getElementById("sidebarBackdrop"),
   newTaskButton: document.getElementById("newTaskButton"),
   sidebarRunList: document.getElementById("sidebarRunList"),
+  clearHistoryButton: document.getElementById("clearHistoryButton"),
   refreshRunsButton: document.getElementById("refreshRunsButton"),
   connectionBadge: document.getElementById("connectionBadge"),
   uiModeTabs: document.getElementById("uiModeTabs"),
@@ -123,6 +152,7 @@ const elements = {
   composerSuggestions: document.getElementById("composerSuggestions"),
   taskForm: document.getElementById("taskForm"),
   taskInput: document.getElementById("taskInput"),
+  previewTaskButton: document.getElementById("previewTaskButton"),
   submitButton: document.getElementById("submitButton"),
   stopButton: document.getElementById("stopButton"),
   submitHint: document.getElementById("submitHint"),
@@ -148,7 +178,21 @@ const elements = {
   languageSelect: document.getElementById("languageSelect"),
   sendShortcutSelect: document.getElementById("sendShortcutSelect"),
   maxStepsInput: document.getElementById("maxStepsInput"),
+  maxRunSecondsInput: document.getElementById("maxRunSecondsInput"),
   pauseInput: document.getElementById("pauseInput"),
+  autonomyModeSelect: document.getElementById("autonomyModeSelect"),
+  planningModeSelect: document.getElementById("planningModeSelect"),
+  taskGraphRequestTimeoutInput: document.getElementById("taskGraphRequestTimeoutInput"),
+  planReviewPolicySelect: document.getElementById("planReviewPolicySelect"),
+  approvalPolicySelect: document.getElementById("approvalPolicySelect"),
+  stageReviewPolicySelect: document.getElementById("stageReviewPolicySelect"),
+  maxTaskSubgoalsInput: document.getElementById("maxTaskSubgoalsInput"),
+  maxSubgoalRetriesInput: document.getElementById("maxSubgoalRetriesInput"),
+  maxReplansInput: document.getElementById("maxReplansInput"),
+  maxFailuresInput: document.getElementById("maxFailuresInput"),
+  recoverableRetryLimitInput: document.getElementById("recoverableRetryLimitInput"),
+  taskWorkspaceEnabled: document.getElementById("taskWorkspaceEnabled"),
+  replanOnRecoverableError: document.getElementById("replanOnRecoverableError"),
   cursorMotionEnabled: document.getElementById("cursorMotionEnabled"),
   cursorMotionDuration: document.getElementById("cursorMotionDuration"),
   displaySettingsTitle: document.getElementById("displaySettingsTitle"),
@@ -246,6 +290,8 @@ function initializeState() {
   clearLegacyActiveChatSessionStorage();
   state.chatLaunchId = readSessionStorage(CHAT_LAUNCH_SESSION_KEY) || null;
   state.chatSessions = loadChatSessions();
+  state.agentSessions = loadAgentSessions();
+  state.agentRunSessionMap = loadAgentRunSessionMap();
   state.historySelection = loadPersistedHistorySelection();
   state.selectedChatSessionId = detectInitialChatSessionId(state.chatSessions);
   ensureRuntimePreferencesState();
@@ -264,6 +310,7 @@ function ensureModeSwitchStructure() {
 
   const chatActive = state.uiMode === "chat";
   const agentActive = state.uiMode === "agent";
+  const developerActive = state.uiMode === "developer";
   elements.uiModeTabs.innerHTML = `
     <button
       class="mode-switch__button${chatActive ? " active" : ""}"
@@ -307,6 +354,27 @@ function ensureModeSwitchStructure() {
       </svg>
       <span class="mode-switch__button-label">Agent</span>
     </button>
+    <button
+      class="mode-switch__button${developerActive ? " active" : ""}"
+      data-ui-mode="developer"
+      type="button"
+      role="tab"
+      aria-selected="${developerActive}"
+      aria-label="Dev"
+      title="Dev"
+    >
+      <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="m8.5 9-3 3 3 3M15.5 9l3 3-3 3M13 5l-2 14"
+          fill="none"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="1.8"
+        />
+      </svg>
+      <span class="mode-switch__button-label">Dev</span>
+    </button>
   `;
 }
 
@@ -320,6 +388,7 @@ function bindEvents() {
   elements.mobileMenuButton?.addEventListener("click", openSidebar);
   elements.sidebarBackdrop?.addEventListener("click", closeSidebar);
   elements.newTaskButton?.addEventListener("click", startNewTask);
+  elements.clearHistoryButton?.addEventListener("click", clearHistoryRecords);
   elements.refreshRunsButton?.addEventListener("click", () => refreshOverview({ forceDetailRefresh: true }));
   elements.uiModeTabs?.addEventListener("click", handleModeClick);
   elements.settingsButton?.addEventListener("click", openSettings);
@@ -341,7 +410,12 @@ function bindEvents() {
   elements.displayOverrideEnabled?.addEventListener("change", handleDisplayOverrideToggle);
   elements.displayResetButton?.addEventListener("click", resetDisplayOverrides);
   elements.taskForm?.addEventListener("submit", handleSubmit);
+  elements.previewTaskButton?.addEventListener("click", handlePreviewTask);
+  elements.taskInput?.addEventListener("input", handleTaskInputChange);
   elements.taskInput?.addEventListener("keydown", handleTaskInputKeydown);
+  elements.maxRunSecondsInput?.addEventListener("change", handleRunLimitChange);
+  elements.maxRunSecondsInput?.addEventListener("input", handleRunLimitChange);
+  elements.autonomyModeSelect?.addEventListener("change", handleAutonomyModeChange);
   elements.stopButton?.addEventListener("click", handleStopTask);
   elements.sidebarRunList?.addEventListener("click", handleHistoryClick);
   elements.chatStream?.addEventListener("click", handleInteractiveClick);
@@ -377,6 +451,21 @@ function bindEvents() {
     elements.modelApiKey,
     elements.modelAutoDiscover,
     elements.structuredOutput,
+    elements.maxStepsInput,
+    elements.maxRunSecondsInput,
+    elements.pauseInput,
+    elements.planningModeSelect,
+    elements.taskGraphRequestTimeoutInput,
+    elements.planReviewPolicySelect,
+    elements.approvalPolicySelect,
+    elements.stageReviewPolicySelect,
+    elements.maxTaskSubgoalsInput,
+    elements.maxSubgoalRetriesInput,
+    elements.maxReplansInput,
+    elements.maxFailuresInput,
+    elements.recoverableRetryLimitInput,
+    elements.taskWorkspaceEnabled,
+    elements.replanOnRecoverableError,
     elements.browserDomBackend,
     elements.browserDomTimeout,
     elements.cursorMotionEnabled,
@@ -414,6 +503,7 @@ async function refreshOverview(options = {}) {
   if (state.overviewFetchInFlight) {
     return;
   }
+  const activeJobActivationSeqAtStart = Number(state.activeJobActivationSeq || 0);
   state.overviewFetchInFlight = true;
   try {
     const payload = await fetchJson("/api/overview");
@@ -440,11 +530,27 @@ async function refreshOverview(options = {}) {
     state.runtimePreferences = payload.runtime_preferences || state.runtimePreferences;
     ensureRuntimePreferencesState();
     syncChatLaunchState(state.meta);
-    state.activeJob = payload.active_job || null;
-    state.jobs = payload.jobs || [];
+    let nextActiveJob = payload.active_job || null;
+    let nextJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+    const currentActiveJob = state.activeJob && typeof state.activeJob === "object" ? state.activeJob : null;
+    const currentActiveJobId = normalizeText(currentActiveJob?.id || "");
+    const nextActiveJobId = normalizeText(nextActiveJob?.id || "");
+    if (
+      currentActiveJobId &&
+      Number(state.activeJobActivationSeq || 0) !== activeJobActivationSeqAtStart &&
+      nextActiveJobId !== currentActiveJobId
+    ) {
+      nextActiveJob = currentActiveJob;
+      if (!nextJobs.some((job) => normalizeText(job?.id || "") === currentActiveJobId)) {
+        nextJobs = [currentActiveJob, ...nextJobs].slice(0, 12);
+      }
+    }
+    state.activeJob = nextActiveJob;
+    state.jobs = nextJobs;
     state.runs = payload.runs || [];
-    persistOverviewSnapshot(payload);
+    persistOverviewSnapshot({ ...payload, active_job: nextActiveJob, jobs: nextJobs });
     clearPendingTaskIfObserved();
+    syncAgentSessionsWithRuns();
 
     hydrateDefaults();
     restoreInitialHistorySelection(options);
@@ -481,6 +587,57 @@ function updateJobSnapshot(jobId, patch) {
     if (!job || job.id !== jobId) return job;
     return { ...job, ...patch };
   });
+}
+
+function upsertJobSnapshot(jobPayload) {
+  if (!jobPayload || typeof jobPayload !== "object" || !jobPayload.id) return;
+  let found = false;
+  state.jobs = (state.jobs || []).map((job) => {
+    if (!job || job.id !== jobPayload.id) return job;
+    found = true;
+    return { ...job, ...jobPayload };
+  });
+  if (!found) {
+    state.jobs = [jobPayload, ...(state.jobs || [])].slice(0, 12);
+  }
+}
+
+function activateSubmittedJob(jobPayload, agentSession = null) {
+  if (!jobPayload || typeof jobPayload !== "object") return false;
+  const jobId = normalizeText(jobPayload.id || "");
+  if (!jobId) return false;
+  const job = { ...jobPayload, id: jobId };
+  state.activeJob = job;
+  state.activeJobActivationSeq = Number(state.activeJobActivationSeq || 0) + 1;
+  state.pendingTask = null;
+  upsertJobSnapshot(job);
+  if (agentSession) {
+    agentSession.pending_job_id = jobId;
+    if (normalizeText(agentSession.pending_task || "") === normalizeText(job.task || "")) {
+      agentSession.pending_task = "";
+    }
+    agentSession.updated_at = Math.floor(Date.now() / 1000);
+  }
+  return true;
+}
+
+function findAgentSessionByPendingJobId(jobId) {
+  const cleanJobId = normalizeText(jobId || "");
+  if (!cleanJobId) return null;
+  return (
+    (state.agentSessions || []).find((session) => normalizeText(session?.pending_job_id || "") === cleanJobId) || null
+  );
+}
+
+function clearAgentRequestPendingState(agentSession = null) {
+  if (agentSession) {
+    agentSession.pending_task = "";
+    agentSession.pending_job_id = "";
+  }
+  state.pendingTask = null;
+  state.resumePendingRunId = "";
+  pruneEmptyAgentSessions();
+  persistAgentSessions();
 }
 
 function markActiveJobStopping() {
@@ -525,20 +682,62 @@ function hydrateDefaults() {
     localizeBrowserChannels(state.meta.browser_channels || []),
     (firstHydration ? defaults.browser_channel : elements.browserChannel.value) || defaults.browser_channel || ""
   );
+  fillSelect(
+    elements.autonomyModeSelect,
+    autonomyModeOptions(),
+    (firstHydration ? defaults.desktop_autonomy_mode : elements.autonomyModeSelect.value) ||
+      defaults.desktop_autonomy_mode ||
+      "conservative"
+  );
+  fillSelect(
+    elements.planningModeSelect,
+    planningModeOptions(),
+    (firstHydration ? defaults.complex_task_planning : elements.planningModeSelect.value) ||
+      defaults.complex_task_planning ||
+      "hybrid"
+  );
+  fillSelect(
+    elements.planReviewPolicySelect,
+    planReviewPolicyOptions(),
+    (firstHydration ? defaults.plan_review_policy : elements.planReviewPolicySelect.value) ||
+      defaults.plan_review_policy ||
+      "low_risk_auto"
+  );
+  fillSelect(
+    elements.approvalPolicySelect,
+    approvalPolicyOptions(),
+    (firstHydration ? defaults.approval_policy : elements.approvalPolicySelect.value) || defaults.approval_policy || "tiered"
+  );
+  fillSelect(
+    elements.stageReviewPolicySelect,
+    stageReviewPolicyOptions(),
+    (firstHydration ? defaults.stage_review_policy : elements.stageReviewPolicySelect.value) ||
+      defaults.stage_review_policy ||
+      "risk_change"
+  );
 
   if (firstHydration) {
     elements.maxStepsInput.value = defaults.max_steps ?? "";
+    elements.maxRunSecondsInput.value = defaults.max_run_seconds ?? "";
     elements.pauseInput.value = defaults.pause_after_action ?? "";
-    elements.cursorMotionEnabled.checked = defaults.cursor_motion_enabled !== false;
+    elements.taskGraphRequestTimeoutInput.value = defaults.task_graph_request_timeout ?? "";
+    elements.maxTaskSubgoalsInput.value = defaults.max_task_subgoals ?? "";
+    elements.maxSubgoalRetriesInput.value = defaults.max_subgoal_retries ?? "";
+    elements.maxReplansInput.value = defaults.max_replans_per_run ?? "";
+    elements.maxFailuresInput.value = defaults.max_failures_per_subgoal ?? "";
+    elements.recoverableRetryLimitInput.value = defaults.recoverable_error_retry_limit ?? "";
+    elements.taskWorkspaceEnabled.checked = boolWithDefault(defaults.task_workspace_enabled, true);
+    elements.replanOnRecoverableError.checked = boolWithDefault(defaults.replan_on_recoverable_error, true);
+    elements.cursorMotionEnabled.checked = boolWithDefault(defaults.cursor_motion_enabled, false);
     elements.cursorMotionDuration.value = defaults.cursor_motion_duration ?? "";
     elements.modelBaseUrl.value = defaults.model_base_url ?? "";
     elements.modelName.value = defaults.model_name ?? "";
     elements.modelApiKey.value = defaults.model_api_key ?? "";
-    elements.modelAutoDiscover.checked = Boolean(defaults.model_auto_discover);
+    elements.modelAutoDiscover.checked = boolWithDefault(defaults.model_auto_discover, true);
     elements.browserDomTimeout.value = defaults.browser_dom_timeout ?? "";
     elements.browserChannel.value = defaults.browser_channel ?? "";
     elements.browserExecutablePath.value = defaults.browser_executable_path ?? "";
-    elements.browserHeadless.checked = Boolean(defaults.browser_headless);
+    elements.browserHeadless.checked = boolWithDefault(defaults.browser_headless, false);
     elements.modelProvider.dataset.previousProfile = elements.modelProvider.value || "";
     updateModelBaseUrlAutofillState();
     state.hydrated = true;
@@ -550,15 +749,16 @@ function hydrateDefaults() {
 }
 
 function ensureSelectedRun(options = {}) {
-  const latestRunId = state.runs[0]?.id || null;
   const activeRunId = state.activeJob?.result?.run_id || null;
+  const selectedSession = getSelectedAgentSession();
+  const latestRunId = getAgentSessionLatestRunId(selectedSession) || state.runs[0]?.id || null;
   const selectedExists = state.runs.some((run) => run.id === state.selectedRunId);
 
   if (activeRunId && (state.autoFollowLatest || options.forceLatest)) {
     state.selectedRunId = activeRunId;
     state.showWelcome = false;
     if (state.uiMode !== "chat") {
-      persistHistorySelection({ kind: "run", id: activeRunId });
+      persistHistorySelection(selectedSession ? { kind: "agent", id: selectedSession.id } : { kind: "run", id: activeRunId });
     }
     return;
   }
@@ -578,7 +778,11 @@ function ensureSelectedRun(options = {}) {
     if (latestRunId) {
       state.showWelcome = false;
       if (state.uiMode !== "chat") {
-        persistHistorySelection({ kind: "run", id: latestRunId });
+        const latestRunSession = state.agentSessions.find((session) => (session.run_ids || []).includes(latestRunId)) || selectedSession;
+        persistHistorySelection(latestRunSession ? { kind: "agent", id: latestRunSession.id } : { kind: "run", id: latestRunId });
+        if (latestRunSession) {
+          state.selectedAgentSessionId = latestRunSession.id;
+        }
       }
     }
   }
@@ -594,14 +798,132 @@ function shouldRefreshSelectedRunDetails(options = {}) {
 
   return (
     (summary.steps ?? 0) !== (state.selectedRunDetails.steps ?? 0) ||
-    Boolean(summary.error) !== Boolean(state.selectedRunDetails.error) ||
-    Boolean(summary.completed) !== Boolean(state.selectedRunDetails.completed) ||
-    Boolean(summary.cancelled) !== Boolean(state.selectedRunDetails.cancelled) ||
+    (summary.dry_run ?? null) !== (state.selectedRunDetails.dry_run ?? null) ||
+    (summary.max_steps ?? null) !== (state.selectedRunDetails.max_steps ?? null) ||
+    (summary.max_run_seconds ?? null) !== (state.selectedRunDetails.max_run_seconds ?? null) ||
+    (summary.pause_after_action ?? null) !== (state.selectedRunDetails.pause_after_action ?? null) ||
+    (summary.error || null) !== (state.selectedRunDetails.error || null) ||
+    summarizeOptionalBoolean(summary.completed) !== summarizeOptionalBoolean(state.selectedRunDetails.completed) ||
+    summarizeOptionalBoolean(summary.cancelled) !== summarizeOptionalBoolean(state.selectedRunDetails.cancelled) ||
     (summary.cancel_reason || null) !== (state.selectedRunDetails.cancel_reason || null) ||
-    Boolean(summary.requires_human) !== Boolean(state.selectedRunDetails.requires_human) ||
+    summarizeOptionalBoolean(summary.requires_human) !== summarizeOptionalBoolean(state.selectedRunDetails.requires_human) ||
+    (summary.can_resume ?? null) !== (state.selectedRunDetails.can_resume ?? null) ||
+    (summary.resume_mode || null) !== (state.selectedRunDetails.resume_mode || null) ||
     (summary.interruption_kind || null) !== (state.selectedRunDetails.interruption_kind || null) ||
-    (summary.interruption_reason || null) !== (state.selectedRunDetails.interruption_reason || null)
+    (summary.interruption_reason || null) !== (state.selectedRunDetails.interruption_reason || null) ||
+    (summary.desktop_autonomy_mode || null) !== (state.selectedRunDetails.desktop_autonomy_mode || null) ||
+    (summary.complex_task_planning || null) !== (state.selectedRunDetails.complex_task_planning || null) ||
+    (summary.approval_policy || null) !== (state.selectedRunDetails.approval_policy || null) ||
+    (summary.plan_review_policy || null) !== (state.selectedRunDetails.plan_review_policy || null) ||
+    (summary.stage_review_policy || null) !== (state.selectedRunDetails.stage_review_policy || null) ||
+    (summary.replan_on_recoverable_error ?? null) !== (state.selectedRunDetails.replan_on_recoverable_error ?? null) ||
+    (summary.recoverable_error_retry_limit ?? null) !== (state.selectedRunDetails.recoverable_error_retry_limit ?? null) ||
+    hasExecutionBudgetMetadataChanged(summary, state.selectedRunDetails) ||
+    hasExecutionEnvironmentMetadataChanged(summary, state.selectedRunDetails) ||
+    Number(summary.details_updated_at || 0) !== Number(state.selectedRunDetails.details_updated_at || 0) ||
+    shouldRefreshRunDetailsForStateSummary(summary, state.selectedRunDetails)
   );
+}
+
+function hasExecutionBudgetMetadataChanged(summary, details) {
+  if (!summary || !details) return false;
+  const summarySignature = JSON.stringify(stableConfigValue(summarizeOverviewExecutionBudget(summary)));
+  const detailsSignature = JSON.stringify(stableConfigValue(summarizeOverviewExecutionBudget(details)));
+  return summarySignature !== detailsSignature;
+}
+
+function hasExecutionEnvironmentMetadataChanged(summary, details) {
+  if (!summary || !details) return false;
+  const summarySignature = JSON.stringify(stableConfigValue(summarizeOverviewExecutionEnvironment(summary)));
+  const detailsSignature = JSON.stringify(stableConfigValue(summarizeOverviewExecutionEnvironment(details)));
+  return summarySignature !== detailsSignature;
+}
+
+function shouldRefreshRunDetailsForStateSummary(summary, details) {
+  const summarySignature = buildRunStateRefreshSignature(summary);
+  if (!summarySignature) return false;
+  return summarySignature !== buildRunStateRefreshSignature(details);
+}
+
+function buildRunStateRefreshSignature(record) {
+  if (!isObjectRecord(record)) return "";
+  const statePayload = isObjectRecord(record.state) ? record.state : {};
+  const stateCandidate = normalizeRunExecutionStateCandidate(statePayload);
+  const fullCandidate = normalizeRunExecutionStateCandidate(record.execution_state);
+  const executionState =
+    stateCandidate || fullCandidate ? { ...(fullCandidate || {}), ...(stateCandidate || {}) } : null;
+  const taskGraph =
+    isObjectRecord(executionState?.task_graph)
+      ? executionState.task_graph
+      : isObjectRecord(statePayload.task_graph)
+        ? statePayload.task_graph
+        : isObjectRecord(record.task_graph)
+          ? record.task_graph
+          : null;
+  const subgoals = Array.isArray(executionState?.subgoals)
+    ? executionState.subgoals
+    : Array.isArray(statePayload.subgoals)
+      ? statePayload.subgoals
+      : Array.isArray(taskGraph?.subgoals)
+        ? taskGraph.subgoals
+        : [];
+  const planHealth = isObjectRecord(executionState?.plan_health)
+    ? executionState.plan_health
+    : isObjectRecord(statePayload.plan_health)
+      ? statePayload.plan_health
+      : null;
+  const workspaceSummary = isObjectRecord(record.workspace_summary)
+    ? record.workspace_summary
+    : isObjectRecord(executionState?.workspace_summary)
+      ? executionState.workspace_summary
+      : isObjectRecord(statePayload.workspace_summary)
+        ? statePayload.workspace_summary
+        : null;
+  const appContext = isObjectRecord(executionState?.app_context)
+    ? executionState.app_context
+    : isObjectRecord(statePayload.app_context)
+      ? statePayload.app_context
+      : {};
+  const stepProposal = resolveStepProposalCandidate(record, executionState || statePayload);
+  const pendingDecision = resolvePendingDecisionCandidate(
+    record.pending_decision,
+    stateCandidate?.pending_decision,
+    fullCandidate?.pending_decision,
+    executionState?.pending_decision,
+    statePayload.pending_decision
+  );
+  const payload = {
+    current_goal: record.current_goal ?? executionState?.current_goal ?? statePayload.current_goal ?? null,
+    orchestration_phase: record.orchestration_phase ?? executionState?.orchestration_phase ?? statePayload.orchestration_phase ?? null,
+    active_specialist: record.active_specialist ?? executionState?.active_specialist ?? statePayload.active_specialist ?? null,
+    current_surface_kind: record.current_surface_kind ?? executionState?.current_surface_kind ?? statePayload.current_surface_kind ?? null,
+    last_progress_at: record.last_progress_at ?? executionState?.last_progress_at ?? statePayload.last_progress_at ?? null,
+    plan_review_status:
+      record.plan_review_status ?? executionState?.plan_review_status ?? statePayload.plan_review_status ?? appContext.plan_review_status ?? null,
+    stage_review_status:
+      record.stage_review_status ?? executionState?.stage_review_status ?? statePayload.stage_review_status ?? appContext.stage_review_status ?? null,
+    last_replan_reason: record.last_replan_reason ?? executionState?.last_replan_reason ?? statePayload.last_replan_reason ?? null,
+    verification_status: record.verification_status ?? executionState?.verification_status ?? statePayload.verification_status ?? null,
+    recovery_reason: record.recovery_reason ?? executionState?.recovery_reason ?? statePayload.recovery_reason ?? null,
+    handoff_state: summarizeOverviewHandoffState(appContext),
+    last_verification: summarizeOverviewVerification(
+      executionState?.last_verification ?? statePayload.last_verification ?? record.last_verification
+    ),
+    evidence_ledger: summarizeOverviewEvidenceLedger(
+      executionState?.evidence_ledger ?? statePayload.evidence_ledger ?? record.evidence_ledger
+    ),
+    repair_history: summarizeOverviewRepairHistory(executionState?.repair_history ?? statePayload.repair_history ?? record.repair_history),
+    capability_failures: summarizeOverviewCapabilityFailures(
+      executionState?.capability_failures ?? statePayload.capability_failures ?? record.capability_failures
+    ),
+    workspace_summary: summarizeOverviewWorkspaceSummary(workspaceSummary),
+    step_proposal: summarizeOverviewStepProposal(stepProposal),
+    pending_decision: summarizeOverviewPendingDecision(pendingDecision),
+    plan_health: summarizeOverviewPlanHealth(planHealth, subgoals),
+    task_graph: summarizeOverviewTaskGraph(taskGraph),
+  };
+  const hasSignal = Object.values(payload).some((value) => overviewSummaryHasValue(value));
+  return hasSignal ? JSON.stringify(payload) : "";
 }
 
 async function loadRunDetails(runId, options = {}) {
@@ -626,7 +948,40 @@ async function loadRunDetails(runId, options = {}) {
   renderAll();
 }
 
+let renderScheduled = false;
+let renderImmediatePending = false;
+let taskPreviewRequestToken = 0;
+
 function renderAll() {
+  if (renderScheduled) {
+    return;
+  }
+  renderScheduled = true;
+  const flush = () => {
+    renderScheduled = false;
+    renderImmediatePending = false;
+    renderNow();
+  };
+  if (renderImmediatePending) {
+    flush();
+    return;
+  }
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(flush);
+  } else {
+    window.setTimeout(flush, 0);
+  }
+}
+
+function flushPendingRender() {
+  if (renderScheduled) {
+    renderScheduled = false;
+    renderImmediatePending = false;
+    renderNow();
+  }
+}
+
+function renderNow() {
   applyShellState();
   applyStaticCopy();
   applySupplementalStaticCopy();
@@ -1345,7 +1700,7 @@ async function handleStopTask() {
     return;
   }
 
-  if (!state.activeJob || state.activeJob.cancel_requested) {
+  if (!state.activeJob || isBooleanTrue(state.activeJob.cancel_requested)) {
     renderAll();
     return;
   }
@@ -1380,14 +1735,72 @@ async function handleStopTask() {
 }
 
 async function handleJobDecision(jobId, decision) {
-  if (!jobId || !decision) return;
-  const response = await postJson(`/api/jobs/${encodeURIComponent(jobId)}/decision`, { decision });
+  const cleanJobId = normalizeText(jobId);
+  const cleanDecision = normalizeText(decision);
+  if (!cleanJobId || !cleanDecision) return;
+  const activeJobId = normalizeText(state.activeJob?.id || "");
+  if (!activeJobId || activeJobId !== cleanJobId) {
+    elements.submitHint.textContent = tr(
+      "\u8be5\u5ba1\u6279\u8bf7\u6c42\u5df2\u4e0d\u662f\u5f53\u524d\u4efb\u52a1\uff0c\u8bf7\u7b49\u5f85\u754c\u9762\u5237\u65b0\u3002",
+      "This approval request is no longer current; wait for the latest state."
+    );
+    renderAll();
+    return;
+  }
+  if (state.decisionPendingJobId) return;
+  state.decisionPendingJobId = cleanJobId;
+  state.decisionPendingChoice = cleanDecision;
+  elements.submitHint.textContent =
+    cleanDecision === "approve"
+      ? tr("正在提交批准", "Submitting approval")
+      : tr("正在提交驳回", "Submitting rejection");
+  renderAll();
+
+  const response = await postJson(
+    `/api/jobs/${encodeURIComponent(cleanJobId)}/decision`,
+    buildJobDecisionPayload(state.activeJob, cleanDecision)
+  );
   if (!response.ok) {
+    state.decisionPendingJobId = "";
+    state.decisionPendingChoice = "";
     elements.submitHint.textContent = response.payload?.error || tr("操作失败", "The action could not be completed");
     renderAll();
     return;
   }
-  await refreshOverview({ forceDetailRefresh: true });
+  elements.submitHint.textContent =
+    cleanDecision === "approve"
+      ? tr("已批准，继续执行", "Approved; continuing")
+      : tr("已驳回", "Rejected");
+  if (response.payload && typeof response.payload === "object") {
+    const agentSession = findAgentSessionByPendingJobId(cleanJobId);
+    const activated = activateSubmittedJob(response.payload, agentSession);
+    if (activated && agentSession) {
+      persistAgentSessions();
+    }
+  }
+  state.decisionPendingJobId = "";
+  state.decisionPendingChoice = "";
+  renderAll();
+  try {
+    await refreshOverview({ forceDetailRefresh: true });
+  } finally {
+    state.decisionPendingJobId = "";
+    state.decisionPendingChoice = "";
+    renderAll();
+  }
+}
+
+function buildJobDecisionPayload(job, decision) {
+  const cleanDecision = normalizeText(decision);
+  const payload = { decision: cleanDecision };
+  const pendingDecision = getJobPendingDecision(job);
+  if (cleanDecision === "approve" && isBooleanTrue(pendingDecision?.requires_user_presence)) {
+    payload.note = tr(
+      "\u64cd\u4f5c\u5458\u5728\u573a\uff0c\u53ef\u5904\u7406\u7ba1\u7406\u5458\u6216 UAC \u63d0\u793a\u3002",
+      "Operator is present and ready to handle administrator or UAC prompts."
+    );
+  }
+  return payload;
 }
 
 function handleGlobalPointerDown(event) {
@@ -1447,7 +1860,7 @@ function getUiPreferences() {
 }
 
 function isOnboardingComplete() {
-  return Boolean(getUiPreferences().onboarding_completed);
+  return isBooleanTrue(getUiPreferences().onboarding_completed);
 }
 
 function maybeAutoOpenOnboarding() {
@@ -1601,6 +2014,118 @@ function fillSendShortcutOptions() {
     ],
     state.sendShortcut
   );
+}
+
+function autonomyModeOptions() {
+  return [
+    { value: "conservative", label: tr("保守", "Conservative") },
+    { value: "review_first", label: tr("先确认", "Review first") },
+    { value: "autonomous", label: tr("自主", "Autonomous") },
+  ];
+}
+
+function normalizeAutonomyModeValue(mode) {
+  return normalizeText(mode || "conservative").toLowerCase().replace(/[\s-]+/g, "_") || "conservative";
+}
+
+function fallbackAutonomyModePreset(mode) {
+  const normalized = normalizeAutonomyModeValue(mode);
+  if (normalized === "autonomous" || normalized === "high_autonomy") {
+    return {
+      plan_review_policy: "never",
+      approval_policy: "autonomous",
+      stage_review_policy: "never",
+      replan_on_recoverable_error: true,
+      recoverable_error_retry_limit: 4,
+      max_replans_per_run: 5,
+      max_failures_per_subgoal: 5,
+    };
+  }
+  if (normalized === "review_first" || normalized === "supervised" || normalized === "strict") {
+    return {
+      plan_review_policy: "always",
+      approval_policy: "strict",
+      stage_review_policy: "always",
+      replan_on_recoverable_error: true,
+      recoverable_error_retry_limit: 1,
+      max_replans_per_run: 2,
+      max_failures_per_subgoal: 2,
+    };
+  }
+  return {
+    plan_review_policy: "low_risk_auto",
+    approval_policy: "tiered",
+    stage_review_policy: "risk_change",
+    replan_on_recoverable_error: true,
+    recoverable_error_retry_limit: 2,
+    max_replans_per_run: 3,
+    max_failures_per_subgoal: 3,
+  };
+}
+
+function autonomyModePreset(mode) {
+  const normalized = normalizeAutonomyModeValue(mode);
+  const fallbackPreset = fallbackAutonomyModePreset(normalized);
+  const backendPresets = state.meta?.autonomy_mode_presets;
+  const backendPreset =
+    backendPresets && typeof backendPresets === "object" && backendPresets[normalized] && typeof backendPresets[normalized] === "object"
+      ? backendPresets[normalized]
+      : null;
+  return backendPreset ? { ...fallbackPreset, ...backendPreset } : fallbackPreset;
+}
+
+function applyAutonomyModePreset(mode) {
+  const preset = autonomyModePreset(mode);
+  if (elements.autonomyModeSelect) {
+    elements.autonomyModeSelect.value = normalizeAutonomyModeValue(mode);
+    syncCustomSelect(elements.autonomyModeSelect);
+  }
+  if (elements.planReviewPolicySelect) elements.planReviewPolicySelect.value = preset.plan_review_policy;
+  if (elements.approvalPolicySelect) elements.approvalPolicySelect.value = preset.approval_policy;
+  if (elements.stageReviewPolicySelect) elements.stageReviewPolicySelect.value = preset.stage_review_policy;
+  if (elements.replanOnRecoverableError) elements.replanOnRecoverableError.checked = Boolean(preset.replan_on_recoverable_error);
+  if (elements.recoverableRetryLimitInput) elements.recoverableRetryLimitInput.value = preset.recoverable_error_retry_limit;
+  if (elements.maxReplansInput) elements.maxReplansInput.value = preset.max_replans_per_run;
+  if (elements.maxFailuresInput) elements.maxFailuresInput.value = preset.max_failures_per_subgoal;
+  [elements.planReviewPolicySelect, elements.approvalPolicySelect, elements.stageReviewPolicySelect].filter(Boolean).forEach(syncCustomSelect);
+}
+
+function handleAutonomyModeChange() {
+  applyAutonomyModePreset(elements.autonomyModeSelect?.value || "conservative");
+  scheduleRuntimePreferencesSync();
+}
+
+function planningModeOptions() {
+  return [
+    { value: "off", label: tr("关闭", "Off") },
+    { value: "heuristic", label: tr("规则", "Heuristic") },
+    { value: "hybrid", label: tr("混合", "Hybrid") },
+    { value: "model", label: tr("模型", "Model") },
+  ];
+}
+
+function planReviewPolicyOptions() {
+  return [
+    { value: "never", label: tr("从不", "Never") },
+    { value: "low_risk_auto", label: tr("低风险自动", "Low-risk auto") },
+    { value: "always", label: tr("总是", "Always") },
+  ];
+}
+
+function approvalPolicyOptions() {
+  return [
+    { value: "tiered", label: tr("按风险", "Tiered") },
+    { value: "strict", label: tr("每步确认", "Every step") },
+    { value: "autonomous", label: tr("高自主", "High autonomy") },
+  ];
+}
+
+function stageReviewPolicyOptions() {
+  return [
+    { value: "never", label: tr("从不", "Never") },
+    { value: "risk_change", label: tr("风险变化", "Risk change") },
+    { value: "always", label: tr("总是", "Always") },
+  ];
 }
 
 function setSendShortcutMode(mode) {
@@ -2278,6 +2803,22 @@ function buildConfigOverrides() {
     model_api_key: normalizedApiKey || undefined,
     model_auto_discover: Boolean(elements.modelAutoDiscover.checked),
     model_structured_output: elements.structuredOutput.value || undefined,
+    max_steps: elements.maxStepsInput.value ? Number(elements.maxStepsInput.value) : undefined,
+    max_run_seconds: elements.maxRunSecondsInput.value ? Number(elements.maxRunSecondsInput.value) : undefined,
+    pause_after_action: elements.pauseInput.value ? Number(elements.pauseInput.value) : undefined,
+    task_graph_request_timeout: elements.taskGraphRequestTimeoutInput.value ? Number(elements.taskGraphRequestTimeoutInput.value) : undefined,
+    desktop_autonomy_mode: elements.autonomyModeSelect.value || undefined,
+    complex_task_planning: elements.planningModeSelect.value || undefined,
+    plan_review_policy: elements.planReviewPolicySelect.value || undefined,
+    approval_policy: elements.approvalPolicySelect.value || undefined,
+    stage_review_policy: elements.stageReviewPolicySelect.value || undefined,
+    task_workspace_enabled: Boolean(elements.taskWorkspaceEnabled?.checked),
+    max_task_subgoals: elements.maxTaskSubgoalsInput.value ? Number(elements.maxTaskSubgoalsInput.value) : undefined,
+    max_subgoal_retries: elements.maxSubgoalRetriesInput.value ? Number(elements.maxSubgoalRetriesInput.value) : undefined,
+    max_replans_per_run: elements.maxReplansInput.value ? Number(elements.maxReplansInput.value) : undefined,
+    max_failures_per_subgoal: elements.maxFailuresInput.value ? Number(elements.maxFailuresInput.value) : undefined,
+    replan_on_recoverable_error: Boolean(elements.replanOnRecoverableError?.checked),
+    recoverable_error_retry_limit: elements.recoverableRetryLimitInput.value ? Number(elements.recoverableRetryLimitInput.value) : undefined,
     browser_control_mode: "hybrid",
     browser_dom_backend: elements.browserDomBackend.value || undefined,
     browser_dom_timeout: elements.browserDomTimeout.value ? Number(elements.browserDomTimeout.value) : undefined,
@@ -2298,8 +2839,34 @@ function buildConfigOverrides() {
   return Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== undefined && value !== ""));
 }
 
+function buildRunConfigOverrides() {
+  const overrides = { ...buildConfigOverrides() };
+  return overrides;
+}
+
+function buildConfigSignature(value) {
+  return JSON.stringify(stableConfigValue(value || {}));
+}
+
+function stableConfigValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => stableConfigValue(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, stableConfigValue(value[key])])
+    );
+  }
+  return value;
+}
+
 function scheduleRuntimePreferencesSync() {
   if (!state.hydrated) return;
+  if (hasTaskPreviewState()) {
+    clearTaskPreviewAfterConfigChange({ render: true });
+  }
   if (state.runtimePreferencesSyncTimer) {
     window.clearTimeout(state.runtimePreferencesSyncTimer);
   }
@@ -2356,17 +2923,33 @@ function buildStarterSuggestions() {
 
 function buildFollowUpSuggestions(details) {
   const baseTask = normalizeText(details.task || tr("这个任务", "this task"));
-  if (needsHumanVerification(details) || details.error || details.cancelled) {
+  const resumableRunId = canResumeRun(details) ? normalizeText(details.id) : "";
+  if (resumableRunId) {
     return [
       {
-      title: tr("恢复并继续", "Recover and continue"),
-      description: tr("先处理当前中断，再从这里恢复。", "Handle the interruption, then resume from here."),
-      task: tr(
-        `继续刚才的任务：${baseTask}。请先处理当前中断，再从当前状态继续。`,
-        `Continue the previous task: ${baseTask}. Resolve the interruption and resume from the current state.`
-      ),
-      actionLabel: tr("恢复", "Recover"),
-    },
+        title: tr("恢复并继续", "Recover and continue"),
+        description: resumeFollowUpDescription(details),
+        task: tr(
+          `继续刚才的任务：${baseTask}。请先处理当前中断，再从当前状态继续。`,
+          `Continue the previous task: ${baseTask}. Resolve the interruption and resume from the current state.`
+        ),
+        actionLabel: resumeFollowUpActionLabel(details),
+        resumeRunId: resumableRunId,
+      },
+    ];
+  }
+
+  if (needsHumanVerification(details) || details.error || isBooleanTrue(details.cancelled)) {
+    return [
+      {
+        title: tr("恢复并继续", "Recover and continue"),
+        description: tr("先处理当前中断，再作为新任务继续。", "Handle the interruption, then continue as a new task."),
+        task: tr(
+          `继续刚才的任务：${baseTask}。请先处理当前中断，再从当前状态继续。`,
+          `Continue the previous task: ${baseTask}. Resolve the interruption and resume from the current state.`
+        ),
+        actionLabel: tr("恢复", "Recover"),
+      },
     ];
   }
 
@@ -2378,6 +2961,133 @@ function buildFollowUpSuggestions(details) {
       actionLabel: tr("继续任务", "Continue task"),
     },
   ];
+}
+
+function resumeFollowUpDescription(details) {
+  const nextAction = normalizeText(getRunAutonomySummary(details)?.next_action || "").toLowerCase();
+  if (nextAction === "repair") {
+    return tr(
+      "\u4ece\u5df2\u4fdd\u5b58\u7684\u72b6\u6001\u7ee7\u7eed\uff0c\u8ba9 Aoryn \u6267\u884c\u5df2\u6392\u961f\u7684\u4fee\u590d\u8def\u5f84\u3002",
+      "Resume from the saved state and let Aoryn run the queued repair path."
+    );
+  }
+  if (nextAction === "recover_or_replan") {
+    return tr(
+      "\u4ece\u5df2\u4fdd\u5b58\u7684\u72b6\u6001\u7ee7\u7eed\uff0c\u8ba9 Aoryn \u5148\u6062\u590d\u6216\u91cd\u65b0\u89c4\u5212\u4e0b\u4e00\u9636\u6bb5\u3002",
+      "Resume from the saved state so Aoryn can recover or replan the next stage first."
+    );
+  }
+  if (nextAction === "resume_after_user") {
+    return tr(
+      "\u5904\u7406\u5b8c\u4eba\u5de5\u5361\u70b9\u540e\uff0c\u4ece\u5df2\u4fdd\u5b58\u7684\u6267\u884c\u72b6\u6001\u7ee7\u7eed\u3002",
+      "Resume from the saved execution state after the human checkpoint is handled."
+    );
+  }
+  if (nextAction === "approve_plan") {
+    return tr(
+      "\u4ece\u5df2\u4fdd\u5b58\u7684\u72b6\u6001\u7ee7\u7eed\uff0c\u56de\u5230\u5f85\u5ba1\u6838\u7684\u4efb\u52a1\u8ba1\u5212\u3002",
+      "Resume from the saved state and reopen the pending plan review."
+    );
+  }
+  if (nextAction === "approve_stage") {
+    return tr(
+      "\u4ece\u5df2\u4fdd\u5b58\u7684\u72b6\u6001\u7ee7\u7eed\uff0c\u5148\u5ba1\u6838\u91cd\u89c4\u5212\u7684\u9636\u6bb5\u3002",
+      "Resume from the saved state and review the replanned stage before continuing."
+    );
+  }
+  if (nextAction === "approve_step") {
+    return tr(
+      "\u4ece\u5df2\u4fdd\u5b58\u7684\u72b6\u6001\u7ee7\u7eed\uff0c\u5904\u7406\u5f85\u6279\u51c6\u7684\u4e0b\u4e00\u6b65\u64cd\u4f5c\u3002",
+      "Resume from the saved state and handle the pending action approval."
+    );
+  }
+  if (nextAction === "ask_user") {
+    return tr(
+      "\u4ece\u5df2\u4fdd\u5b58\u7684\u72b6\u6001\u7ee7\u7eed\uff0c\u5148\u8865\u5145\u81ea\u52a8\u5316\u9700\u8981\u7684\u6f84\u6e05\u4fe1\u606f\u3002",
+      "Resume from the saved state and answer the clarification before automation continues."
+    );
+  }
+  if (nextAction === "inspect_failure") {
+    return tr(
+      "\u4ece\u5df2\u4fdd\u5b58\u7684\u72b6\u6001\u7ee7\u7eed\uff0c\u5148\u68c0\u67e5\u5931\u8d25\u539f\u56e0\u3002",
+      "Resume from the saved state to inspect the failure before automation continues."
+    );
+  }
+  const mode = normalizeText(details?.resume_mode || "").toLowerCase();
+  if (mode === "manual") {
+    return tr(
+      "处理完人工卡点后，从已保存的执行状态继续。",
+      "Resume from the saved execution state after the human checkpoint is handled."
+    );
+  }
+  if (mode === "plan") {
+    return tr(
+      "使用已保存的任务计划重构执行状态，不重新拆解整条任务。",
+      "Rebuild execution from the saved task plan without replanning the whole task."
+    );
+  }
+  return tr(
+    "使用已保存的执行状态继续，不重新拆解整条任务。",
+    "Resume from the saved execution state without replanning the whole task."
+  );
+}
+
+function resumeFollowUpActionLabel(details) {
+  const nextAction = normalizeText(getRunAutonomySummary(details)?.next_action || "").toLowerCase();
+  if (nextAction === "repair") return tr("\u6062\u590d\u4fee\u590d", "Resume repair");
+  if (nextAction === "recover_or_replan") return tr("\u6062\u590d\u91cd\u89c4\u5212", "Resume replan");
+  if (nextAction === "resume_after_user") return tr("\u5904\u7406\u540e\u6062\u590d", "Resume after handling");
+  if (nextAction === "approve_plan") return tr("\u6062\u590d\u8ba1\u5212\u5ba1\u6838", "Resume plan review");
+  if (nextAction === "approve_stage") return tr("\u6062\u590d\u9636\u6bb5\u5ba1\u6838", "Resume stage review");
+  if (nextAction === "approve_step") return tr("\u6062\u590d\u64cd\u4f5c\u6279\u51c6", "Resume approval");
+  if (nextAction === "ask_user") return tr("\u6062\u590d\u6f84\u6e05", "Resume clarification");
+  if (nextAction === "inspect_failure") return tr("\u6062\u590d\u68c0\u67e5", "Resume inspection");
+  return tr("恢复执行", "Resume run");
+}
+
+function getRunAutonomySummary(details) {
+  const executionState = getRunExecutionState(details);
+  const health = isObjectRecord(executionState?.plan_health)
+    ? executionState.plan_health
+    : isObjectRecord(details?.plan_health)
+      ? details.plan_health
+      : null;
+  if (isObjectRecord(health?.autonomy)) return health.autonomy;
+  if (isObjectRecord(executionState?.autonomy)) return executionState.autonomy;
+  return null;
+}
+
+function canResumeRun(details) {
+  if (!details?.id || isBooleanTrue(details.completed)) return false;
+  const canResume = summarizeOptionalBoolean(details.can_resume);
+  if (canResume !== null) {
+    return canResume;
+  }
+  if (isTerminalRecord(details)) {
+    return hasResumableExecutionState(details);
+  }
+  return Boolean(needsHumanVerification(details) || hasResumableExecutionState(details));
+}
+
+function formatResumeUnavailableReason(details) {
+  if (isBooleanTrue(details?.completed)) {
+    return tr("\u8be5\u8fd0\u884c\u5df2\u5b8c\u6210\uff0c\u65e0\u9700\u6062\u590d", "This run is already complete.");
+  }
+  if (summarizeOptionalBoolean(details?.can_resume) === false) {
+    return tr("\u8be5\u8fd0\u884c\u6ca1\u6709\u53ef\u6062\u590d\u7684\u6267\u884c\u72b6\u6001", "This run has no saved execution state to resume.");
+  }
+  return tr("\u5f53\u524d\u8fd0\u884c\u6682\u65f6\u4e0d\u80fd\u6062\u590d", "This run cannot be resumed right now.");
+}
+
+function hasResumableExecutionState(details) {
+  if (!details || typeof details !== "object") return false;
+  const executionState = details.execution_state && typeof details.execution_state === "object" ? details.execution_state : null;
+  if (executionState?.task_graph && typeof executionState.task_graph === "object") return true;
+  const displayState = details.state && typeof details.state === "object" ? details.state : null;
+  if (displayState?.task_graph && typeof displayState.task_graph === "object") return true;
+  if (Array.isArray(displayState?.subgoals) && displayState.subgoals.length > 0) return true;
+  const plan = details.plan && typeof details.plan === "object" ? details.plan : null;
+  return Array.isArray(plan?.subgoals) && plan.subgoals.length > 0;
 }
 
 function localizePreset(item) {
@@ -2487,6 +3197,8 @@ function renderDetailMetricCard(label, value) {
 function renderActionPill(action) {
   if (!action) return "";
   const type = normalizeText(action.type || action.action || tr("动作", "Action"));
+  const x = Number(action.x);
+  const y = Number(action.y);
   const detail =
     action.text
       ? `text=${truncate(normalizeText(action.text), 18)}`
@@ -2496,9 +3208,19 @@ function renderActionPill(action) {
           ? `keys=${action.keys.join("+")}`
           : action.app
             ? `app=${action.app}`
-            : typeof action.seconds === "number"
-              ? `sec=${action.seconds}`
-              : "";
+            : action.selector
+              ? `selector=${truncate(normalizeText(action.selector), 24)}`
+              : action.label
+                ? truncate(normalizeText(action.label), 24)
+                : action.title
+                  ? `title=${truncate(normalizeText(action.title), 24)}`
+                  : action.url
+                    ? `url=${truncate(normalizeText(action.url), 24)}`
+                    : Number.isFinite(x) && Number.isFinite(y)
+                      ? `@${Math.round(x)},${Math.round(y)}`
+                      : typeof action.seconds === "number"
+                        ? `sec=${action.seconds}`
+                        : "";
 
   return `<span class="action-pill">${escapeHtml(type)}${detail ? `<code>${escapeHtml(detail)}</code>` : ""}</span>`;
 }
@@ -2518,25 +3240,365 @@ function renderTimingSummary(timings) {
 }
 
 function renderExecutionModeChip(dryRun) {
-  return dryRun
+  return isBooleanTrue(dryRun)
     ? `<span class="metric-pill warn">${escapeHtml(tr("演练", "Dry Run"))}</span>`
     : `<span class="metric-pill ok">${escapeHtml(tr("实时", "Live"))}</span>`;
 }
 
 function renderHumanVerificationChip(record) {
   if (!needsHumanVerification(record)) return "";
-  const label = record?.interruption_kind ? translateInterruptionKind(record.interruption_kind) : tr("需处理", "Attention");
+  const result = record?.result && typeof record.result === "object" ? record.result : {};
+  const interruptionKind = record?.interruption_kind || result.interruption_kind || "";
+  const label = interruptionKind ? translateInterruptionKind(interruptionKind) : tr("需处理", "Attention");
   return `<span class="metric-pill warn">${escapeHtml(label)}</span>`;
 }
 
+function renderExecutionLimitChips(active = {}) {
+  const chips = [];
+  const maxSteps = Number(resolveRunBudgetValue(active, "max_steps"));
+  if (Number.isFinite(maxSteps) && maxSteps > 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("最大步数", "Max steps")}: ${Math.round(maxSteps)}`)}</span>`);
+  }
+  const maxRunSeconds = Number(resolveRunBudgetValue(active, "max_run_seconds"));
+  if (Number.isFinite(maxRunSeconds) && maxRunSeconds > 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("运行上限", "Run limit")}: ${formatSecondsLimit(maxRunSeconds)}`)}</span>`);
+  }
+  const pauseAfterAction = Number(resolveRunBudgetValue(active, "pause_after_action"));
+  if (Number.isFinite(pauseAfterAction) && pauseAfterAction > 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("动作间隔", "Action pause")}: ${formatSecondsLimit(pauseAfterAction)}`)}</span>`);
+  }
+  const taskGraphTimeout = Number(resolveRunBudgetValue(active, "task_graph_request_timeout"));
+  if (Number.isFinite(taskGraphTimeout) && taskGraphTimeout > 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u89c4\u5212\u8d85\u65f6", "Plan timeout")}: ${formatSecondsLimit(taskGraphTimeout)}`)}</span>`);
+  }
+  return chips;
+}
+
+function renderAutomationPolicyChips(record = {}) {
+  const chips = [];
+  const autonomyMode = resolveRunPolicyValue(record, "desktop_autonomy_mode");
+  if (autonomyMode) {
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("自主", "Autonomy")}: ${formatAutonomyModeValue(autonomyMode)}`)}</span>`
+    );
+  }
+  const planningMode = resolveRunPolicyValue(record, "complex_task_planning");
+  if (planningMode) {
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("规划", "Planning")}: ${formatPlanningModeValue(planningMode)}`)}</span>`
+    );
+  }
+  const approvalPolicy = resolveRunPolicyValue(record, "approval_policy");
+  if (approvalPolicy) {
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("审批", "Approval")}: ${formatApprovalPolicyValue(approvalPolicy)}`)}</span>`
+    );
+  }
+  const planReviewPolicy = resolveRunPolicyValue(record, "plan_review_policy");
+  if (planReviewPolicy) {
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("\u8ba1\u5212\u590d\u6838", "Plan review")}: ${formatPlanReviewPolicyValue(planReviewPolicy)}`)}</span>`
+    );
+  }
+  const stageReviewPolicy = resolveRunPolicyValue(record, "stage_review_policy");
+  if (stageReviewPolicy) {
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("\u9636\u6bb5\u590d\u6838", "Stage review")}: ${formatStageReviewPolicyValue(stageReviewPolicy)}`)}</span>`
+    );
+  }
+  const maxSubgoals = Number(resolveRunBudgetValue(record, "max_task_subgoals"));
+  if (Number.isFinite(maxSubgoals) && maxSubgoals > 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u5b50\u76ee\u6807", "Subgoals")}: ${Math.round(maxSubgoals)}`)}</span>`);
+  }
+  const maxSubgoalRetries = Number(resolveRunBudgetValue(record, "max_subgoal_retries"));
+  if (Number.isFinite(maxSubgoalRetries) && maxSubgoalRetries >= 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u91cd\u8bd5", "Retries")}: ${Math.round(maxSubgoalRetries)}`)}</span>`);
+  }
+  const maxReplans = Number(resolveRunBudgetValue(record, "max_replans_per_run"));
+  if (Number.isFinite(maxReplans) && maxReplans >= 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u91cd\u89c4\u5212", "Replans")}: ${Math.round(maxReplans)}`)}</span>`);
+  }
+  const maxFailures = Number(resolveRunBudgetValue(record, "max_failures_per_subgoal"));
+  if (Number.isFinite(maxFailures) && maxFailures >= 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u5931\u8d25\u9884\u7b97", "Failures")}: ${Math.round(maxFailures)}`)}</span>`);
+  }
+  const recoveryEnabled = coerceOptionalBool(resolveRunPolicyValue(record, "replan_on_recoverable_error"));
+  const recoveryLimit = Number(resolveRunPolicyValue(record, "recoverable_error_retry_limit"));
+  if (recoveryEnabled !== null || (Number.isFinite(recoveryLimit) && recoveryLimit >= 0)) {
+    const recoveryLabel = recoveryEnabled === false ? tr("off", "off") : tr("on", "on");
+    const recoverySuffix = Number.isFinite(recoveryLimit) && recoveryLimit >= 0 ? ` x${Math.round(recoveryLimit)}` : "";
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("恢复", "Recovery")}: ${recoveryLabel}${recoverySuffix}`)}</span>`
+    );
+  }
+  return chips;
+}
+
+function renderPreviewPolicyChips(budget = {}) {
+  const chips = [];
+  const autonomyMode = normalizeText(budget.desktop_autonomy_mode || "");
+  if (autonomyMode) {
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("\u81ea\u4e3b", "Autonomy")}: ${formatAutonomyModeValue(autonomyMode)}`)}</span>`
+    );
+  }
+  const planningMode = normalizeText(budget.complex_task_planning || "");
+  if (planningMode) {
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("\u89c4\u5212", "Planning")}: ${formatPlanningModeValue(planningMode)}`)}</span>`
+    );
+  }
+  const approvalPolicy = normalizeText(budget.approval_policy || "");
+  if (approvalPolicy) {
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("\u5ba1\u6279", "Approval")}: ${formatApprovalPolicyValue(approvalPolicy)}`)}</span>`
+    );
+  }
+  const planReviewPolicy = normalizeText(budget.plan_review_policy || "");
+  if (planReviewPolicy) {
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("\u8ba1\u5212\u590d\u6838", "Plan review")}: ${formatPlanReviewPolicyValue(planReviewPolicy)}`)}</span>`
+    );
+  }
+  const stageReviewPolicy = normalizeText(budget.stage_review_policy || "");
+  if (stageReviewPolicy) {
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("\u9636\u6bb5\u590d\u6838", "Stage review")}: ${formatStageReviewPolicyValue(stageReviewPolicy)}`)}</span>`
+    );
+  }
+  const maxSubgoals = Number(budget.max_task_subgoals);
+  if (Number.isFinite(maxSubgoals) && maxSubgoals > 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u5b50\u76ee\u6807", "Subgoals")}: ${Math.round(maxSubgoals)}`)}</span>`);
+  }
+  const maxSubgoalRetries = Number(budget.max_subgoal_retries);
+  if (Number.isFinite(maxSubgoalRetries) && maxSubgoalRetries >= 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u91cd\u8bd5", "Retries")}: ${Math.round(maxSubgoalRetries)}`)}</span>`);
+  }
+  const maxReplans = Number(budget.max_replans_per_run);
+  if (Number.isFinite(maxReplans) && maxReplans >= 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u91cd\u89c4\u5212", "Replans")}: ${Math.round(maxReplans)}`)}</span>`);
+  }
+  const maxFailures = Number(budget.max_failures_per_subgoal);
+  if (Number.isFinite(maxFailures) && maxFailures >= 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u5931\u8d25\u9884\u7b97", "Failures")}: ${Math.round(maxFailures)}`)}</span>`);
+  }
+  const taskGraphTimeout = Number(budget.task_graph_request_timeout);
+  if (Number.isFinite(taskGraphTimeout) && taskGraphTimeout > 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u89c4\u5212\u8d85\u65f6", "Plan timeout")}: ${formatSecondsLimit(taskGraphTimeout)}`)}</span>`);
+  }
+  const recoveryEnabled = coerceOptionalBool(budget.replan_on_recoverable_error);
+  const recoveryLimit = Number(budget.recoverable_error_retry_limit);
+  if (recoveryEnabled !== null || (Number.isFinite(recoveryLimit) && recoveryLimit >= 0)) {
+    const recoveryLabel = recoveryEnabled === false ? tr("off", "off") : tr("on", "on");
+    const recoverySuffix = Number.isFinite(recoveryLimit) && recoveryLimit >= 0 ? ` x${Math.round(recoveryLimit)}` : "";
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("\u6062\u590d", "Recovery")}: ${recoveryLabel}${recoverySuffix}`)}</span>`
+    );
+  }
+  return chips;
+}
+
+function renderPreviewEnvironmentChips(environment = {}) {
+  if (!environment || typeof environment !== "object") return [];
+  const chips = [];
+  const browserMode = normalizeText(resolveRunEnvironmentValue(environment, "browser_control_mode") || "");
+  const domBackend = normalizeText(resolveRunEnvironmentValue(environment, "browser_dom_backend") || "");
+  if (browserMode || domBackend) {
+    const browserParts = [browserMode || tr("default", "default"), domBackend].filter(Boolean);
+    chips.push(
+      `<span class="metric-pill">${escapeHtml(`${tr("\u6d4f\u89c8\u5668", "Browser")}: ${browserParts.join(" / ")}`)}</span>`
+    );
+  }
+  const domTimeout = Number(resolveRunEnvironmentValue(environment, "browser_dom_timeout"));
+  if (Number.isFinite(domTimeout) && domTimeout > 0) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("DOM \u8d85\u65f6", "DOM timeout")}: ${formatSecondsLimit(domTimeout)}`)}</span>`);
+  }
+  const browserChannel = normalizeText(resolveRunEnvironmentValue(environment, "browser_channel") || "");
+  const browserHeadless = coerceOptionalBool(resolveRunEnvironmentValue(environment, "browser_headless"));
+  if (browserChannel || browserHeadless === true) {
+    const launchLabel = [browserChannel || tr("default", "default"), browserHeadless === true ? tr("headless", "headless") : ""]
+      .filter(Boolean)
+      .join(" ");
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u542f\u52a8", "Launch")}: ${launchLabel}`)}</span>`);
+  }
+  const cursorEnabled = coerceOptionalBool(resolveRunEnvironmentValue(environment, "cursor_motion_enabled"));
+  const cursorDuration = Number(resolveRunEnvironmentValue(environment, "cursor_motion_duration"));
+  if (cursorEnabled === true) {
+    const cursorLabel = Number.isFinite(cursorDuration) && cursorDuration > 0
+      ? `${tr("on", "on")} ${formatSecondsLimit(cursorDuration)}`
+      : tr("on", "on");
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u6307\u9488", "Pointer")}: ${cursorLabel}`)}</span>`);
+  }
+  const displayOverride = coerceOptionalBool(resolveRunEnvironmentValue(environment, "display_override_enabled"));
+  const displayMonitor = normalizeText(resolveRunEnvironmentValue(environment, "display_override_monitor_device_name") || "");
+  if (displayOverride === true || displayMonitor) {
+    const displayLabel = displayMonitor || tr("manual", "manual");
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("\u663e\u793a", "Display")}: ${displayLabel}`)}</span>`);
+  }
+  const genericLaunchEnabled = coerceOptionalBool(resolveRunEnvironmentValue(environment, "generic_app_launch_enabled"));
+  if (genericLaunchEnabled === false) {
+    chips.push(`<span class="metric-pill warn">${escapeHtml(tr("\u4ec5\u5df2\u77e5\u5e94\u7528", "Known apps only"))}</span>`);
+  }
+  const shellRecipePolicy = normalizeText(resolveRunEnvironmentValue(environment, "shell_recipe_policy") || "");
+  if (shellRecipePolicy) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("Shell", "Shell")}: ${formatShellRecipePolicyValue(shellRecipePolicy)}`)}</span>`);
+  }
+  return chips;
+}
+
+function resolveRunEnvironmentValue(record, key) {
+  if (!record || typeof record !== "object") return undefined;
+  if (record[key] !== undefined && record[key] !== null && record[key] !== "") return record[key];
+  const result = record.result && typeof record.result === "object" ? record.result : null;
+  if (result && result[key] !== undefined && result[key] !== null && result[key] !== "") return result[key];
+  const resultEnvironment = result?.execution_environment && typeof result.execution_environment === "object"
+    ? result.execution_environment
+    : null;
+  if (resultEnvironment && resultEnvironment[key] !== undefined && resultEnvironment[key] !== null && resultEnvironment[key] !== "") {
+    return resultEnvironment[key];
+  }
+  const overrides = record.config_overrides && typeof record.config_overrides === "object" ? record.config_overrides : null;
+  if (overrides && overrides[key] !== undefined && overrides[key] !== null && overrides[key] !== "") return overrides[key];
+  const environment = record.execution_environment && typeof record.execution_environment === "object" ? record.execution_environment : null;
+  return environment ? environment[key] : undefined;
+}
+
+function renderExecutionContextChips(record = {}, executionState = null) {
+  const chips = [];
+  const source = executionState && typeof executionState === "object" ? executionState : {};
+  const surfaceKind = normalizeText(record?.current_surface_kind || source.current_surface_kind || "");
+  if (surfaceKind) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("表面", "Surface")}: ${formatSurfaceKindValue(surfaceKind)}`)}</span>`);
+  }
+  const specialist = normalizeText(record?.active_specialist || source.active_specialist || "");
+  if (specialist) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("专家", "Specialist")}: ${specialist}`)}</span>`);
+  }
+  const lastProgressAt = record?.last_progress_at ?? source.last_progress_at;
+  if (Number.isFinite(Number(lastProgressAt))) {
+    chips.push(`<span class="metric-pill">${escapeHtml(`${tr("进展", "Progress")}: ${formatShortTime(lastProgressAt)}`)}</span>`);
+  }
+  return chips;
+}
+
+function resolveRunPolicyValue(record, key) {
+  if (!record || typeof record !== "object") return undefined;
+  if (record[key] !== undefined && record[key] !== null && record[key] !== "") return record[key];
+  const result = record.result && typeof record.result === "object" ? record.result : null;
+  if (result && result[key] !== undefined && result[key] !== null && result[key] !== "") return result[key];
+  const resultBudget = result?.execution_budget && typeof result.execution_budget === "object" ? result.execution_budget : null;
+  if (resultBudget && resultBudget[key] !== undefined && resultBudget[key] !== null && resultBudget[key] !== "") {
+    return resultBudget[key];
+  }
+  const overrides = record.config_overrides && typeof record.config_overrides === "object" ? record.config_overrides : null;
+  if (overrides && overrides[key] !== undefined && overrides[key] !== null && overrides[key] !== "") return overrides[key];
+  const budget = record.execution_budget && typeof record.execution_budget === "object" ? record.execution_budget : null;
+  return budget ? budget[key] : undefined;
+}
+
+function resolveRunBudgetValue(record, key) {
+  return resolveRunPolicyValue(record, key);
+}
+
+function coerceOptionalBool(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "boolean") return value;
+  const normalized = normalizeText(value).toLowerCase();
+  if (["false", "0", "off", "no"].includes(normalized)) return false;
+  if (["true", "1", "on", "yes"].includes(normalized)) return true;
+  return null;
+}
+
+function boolWithDefault(value, fallback) {
+  const parsed = coerceOptionalBool(value);
+  return parsed === null ? Boolean(fallback) : parsed;
+}
+
+function formatAutonomyModeValue(value) {
+  const normalized = normalizeText(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "review_first") return tr("先确认", "Review first");
+  if (normalized === "autonomous" || normalized === "high_autonomy") return tr("自主", "Autonomous");
+  return tr("保守", "Conservative");
+}
+
+function formatPlanningModeValue(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  if (normalized === "model") return tr("模型", "Model");
+  if (normalized === "hybrid") return tr("混合", "Hybrid");
+  if (normalized === "heuristic") return tr("规则", "Heuristic");
+  if (normalized === "off") return tr("关闭", "Off");
+  return normalizeText(value);
+}
+
+function formatApprovalPolicyValue(value) {
+  const normalized = normalizeText(value).toLowerCase().replace(/[\s_]+/g, " ");
+  if (normalized === "strict" || normalized === "always") return tr("每步确认", "Every step");
+  if (normalized === "autonomous" || normalized === "high autonomy") return tr("高自主", "High autonomy");
+  return tr("按风险", "Tiered");
+}
+
+function formatPlanReviewPolicyValue(value) {
+  const normalized = normalizeText(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "never") return tr("\u4e0d\u590d\u6838", "No review");
+  if (normalized === "always") return tr("\u59cb\u7ec8\u590d\u6838", "Always");
+  if (normalized === "low_risk_auto") return tr("\u4f4e\u98ce\u9669\u81ea\u52a8", "Low-risk auto");
+  return normalizeText(value);
+}
+
+function formatStageReviewPolicyValue(value) {
+  const normalized = normalizeText(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "never") return tr("\u4e0d\u590d\u6838", "No review");
+  if (normalized === "always") return tr("\u59cb\u7ec8\u590d\u6838", "Always");
+  if (normalized === "risk_change") return tr("\u98ce\u9669\u53d8\u5316", "Risk change");
+  return normalizeText(value);
+}
+
+function formatShellRecipePolicyValue(value) {
+  const normalized = normalizeText(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "approval_required") return tr("\u9700\u5ba1\u6279", "Approval required");
+  if (normalized === "autonomous" || normalized === "auto") return tr("\u81ea\u52a8", "Autonomous");
+  if (normalized === "disabled" || normalized === "off") return tr("\u5173\u95ed", "Off");
+  return normalizeText(value).replace(/_/g, " ");
+}
+
+function formatSurfaceKindValue(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  if (normalized === "managed_aoryn_browser") return tr("托管浏览器", "Managed browser");
+  if (normalized === "external_browser_attach") return tr("外部浏览器", "External browser");
+  if (normalized === "safe_mode_desktop") return tr("安全桌面", "Safe desktop");
+  if (normalized === "current_user_desktop") return tr("用户桌面", "User desktop");
+  return normalizeText(value);
+}
+
+function formatSecondsLimit(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return "--";
+  if (seconds >= 3600) {
+    const hours = seconds / 3600;
+    return `${Number.isInteger(hours) ? hours.toFixed(0) : hours.toFixed(1)}h`;
+  }
+  if (seconds >= 60) {
+    const minutes = seconds / 60;
+    return `${Number.isInteger(minutes) ? minutes.toFixed(0) : minutes.toFixed(1)}m`;
+  }
+  return `${Number.isInteger(seconds) ? seconds.toFixed(0) : seconds.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}s`;
+}
+
 function buildRecordState(record) {
-  if (record?.status === "approval") return { label: tr("等待确认", "Awaiting approval"), tone: "warn" };
   if (!record) return { label: tr("未知", "Unknown"), tone: "" };
-  if (record.cancel_requested && !record.cancelled && !record.completed && !record.error) return { label: tr("停止中", "Stopping"), tone: "warn" };
-  if (record.cancelled || record.status === "cancelled") return { label: tr("已取消", "Cancelled"), tone: "warn" };
+  const terminalState = getTerminalRecordState(record);
+  const terminalCancelled = terminalState.cancelled;
+  const terminalFailed = terminalState.failed;
+  const terminalCompleted = terminalState.completed;
+  const terminalResult = terminalState.cancelled || terminalState.failed || terminalState.completed;
+  if (isAwaitingApprovalCheckpoint(record) && !terminalResult) return { label: tr("等待确认", "Awaiting approval"), tone: "warn" };
+  if (getRecordPendingDecision(record) && !terminalResult) return { label: tr("等待确认", "Awaiting approval"), tone: "warn" };
+  if (record.status === "approval" && !terminalResult) return { label: tr("等待确认", "Awaiting approval"), tone: "warn" };
+  if (isBooleanTrue(record.cancel_requested) && !terminalResult) return { label: tr("停止中", "Stopping"), tone: "warn" };
+  if (terminalCancelled) return { label: tr("已取消", "Cancelled"), tone: "warn" };
   if (needsHumanVerification(record) || record.status === "attention") return { label: tr("需处理", "Attention"), tone: "warn" };
-  if (record.error || record.status === "failed") return { label: tr("失败", "Failed"), tone: "bad" };
-  if (record.completed || record.status === "completed") return { label: tr("已完成", "Done"), tone: "ok" };
+  if (terminalFailed) return { label: tr("失败", "Failed"), tone: "bad" };
+  if (terminalCompleted) return { label: tr("已完成", "Done"), tone: "ok" };
   if (record.status === "queued") return { label: tr("等待", "Queued"), tone: "" };
   return { label: tr("执行中", "Running"), tone: "ok" };
 }
@@ -2546,7 +3608,92 @@ function renderRunState(record) {
 }
 
 function needsHumanVerification(record) {
-  return Boolean(record?.requires_human || record?.interruption_kind || record?.interruption_reason);
+  if (!record || typeof record !== "object") return false;
+  if (isTerminalRecord(record)) return false;
+  if (isAwaitingApprovalCheckpoint(record)) return true;
+  if (normalizeText(record.resume_mode).toLowerCase() === "manual") return true;
+  const result = record.result && typeof record.result === "object" ? record.result : null;
+  if (
+    isBooleanTrue(record.requires_human) ||
+    record.interruption_kind ||
+    record.interruption_reason ||
+    isBooleanTrue(result?.requires_human) ||
+    result?.interruption_kind ||
+    result?.interruption_reason
+  ) {
+    return true;
+  }
+  if (hasPendingHandoffContext(record.handoff_state)) return true;
+  const statePayload = record.state && typeof record.state === "object" ? record.state : null;
+  if (hasPendingHandoffContext(statePayload?.app_context)) return true;
+  const executionState = record.execution_state && typeof record.execution_state === "object" ? record.execution_state : null;
+  return hasPendingHandoffContext(executionState?.app_context);
+}
+
+function getTerminalRecordState(record) {
+  const result = record?.result && typeof record.result === "object" ? record.result : {};
+  return {
+    cancelled: isBooleanTrue(record?.cancelled) || isBooleanTrue(result.cancelled) || record?.status === "cancelled",
+    failed: Boolean(record?.error || result.error || record?.status === "failed"),
+    completed: isBooleanTrue(record?.completed) || isBooleanTrue(result.completed) || record?.status === "completed",
+  };
+}
+
+function isTerminalRecord(record) {
+  const terminalState = getTerminalRecordState(record);
+  return terminalState.cancelled || terminalState.failed || terminalState.completed;
+}
+
+function getRecordPendingDecision(record) {
+  if (!record || typeof record !== "object") return null;
+  const executionState = record.execution_state && typeof record.execution_state === "object" ? record.execution_state : null;
+  const statePayload = record.state && typeof record.state === "object" ? record.state : null;
+  return resolvePendingDecisionCandidate(
+    record.pending_decision,
+    executionState?.pending_decision,
+    statePayload?.pending_decision
+  );
+}
+
+function getRecordOrchestrationPhase(record) {
+  if (!record || typeof record !== "object") return "";
+  const result = record.result && typeof record.result === "object" ? record.result : null;
+  const resultExecutionState =
+    result?.execution_state && typeof result.execution_state === "object" ? result.execution_state : null;
+  const resultState = result?.state && typeof result.state === "object" ? result.state : null;
+  const executionState = record.execution_state && typeof record.execution_state === "object" ? record.execution_state : null;
+  const statePayload = record.state && typeof record.state === "object" ? record.state : null;
+  return normalizeText(
+    record.orchestration_phase ||
+      result?.orchestration_phase ||
+      executionState?.orchestration_phase ||
+      statePayload?.orchestration_phase ||
+      resultExecutionState?.orchestration_phase ||
+      resultState?.orchestration_phase ||
+      ""
+  ).toLowerCase();
+}
+
+function isAwaitingApprovalCheckpoint(record) {
+  return getRecordOrchestrationPhase(record) === "awaiting_approval";
+}
+
+function getJobPendingDecision(job) {
+  if (!job || typeof job !== "object") return null;
+  const result = job.result && typeof job.result === "object" ? job.result : null;
+  return getRecordPendingDecision(result) || getRecordPendingDecision(job);
+}
+
+function hasPendingHandoffContext(context) {
+  if (!context || typeof context !== "object") return false;
+  const resumeStatus = normalizeText(context.manual_resume_status).toLowerCase();
+  if (["resumed", "complete", "completed", "cleared"].includes(resumeStatus)) return false;
+  return Boolean(
+    normalizeText(context.human_handoff_kind) ||
+      normalizeText(context.human_handoff_reason) ||
+      normalizeText(context.human_handoff_summary) ||
+      normalizeText(context.standard_recovery_kind).toLowerCase() === "requires_user"
+  );
 }
 
 function translateInterruptionKind(kind) {
@@ -2582,6 +3729,14 @@ function statusTone(status) {
   return "";
 }
 
+function formatTaskBusyMessage() {
+  return tr("\u5df2\u6709\u4efb\u52a1\u6b63\u5728\u6267\u884c", "A task is already running");
+}
+
+function hasPendingTaskRequest() {
+  return Boolean(state.pendingTask || state.resumePendingRunId || getAgentSessionPendingTask(getSelectedAgentSession()));
+}
+
 function getConversationContext() {
   if (state.activeJob) return { type: "active", active: state.activeJob };
   if (state.pendingTask) return { type: "pending", task: state.pendingTask };
@@ -2593,17 +3748,37 @@ function getConversationContext() {
 function clearPendingTaskIfObserved() {
   if (!state.pendingTask) return;
   if (state.activeJob) {
-    state.pendingTask = null;
     return;
   }
 
   const pending = normalizeText(state.pendingTask);
-  const matchedRun = state.runs.find((run) => normalizeText(run.task) === pending);
+  const pendingSession =
+    getSelectedAgentSession() ||
+    state.agentSessions.find((item) => normalizeText(item.pending_task || "") === pending) ||
+    null;
+  const pendingSessionUpdatedAt = Number(pendingSession?.updated_at || pendingSession?.created_at || 0);
+  const matchedRun = state.runs.find((run) => {
+    if (normalizeText(run.task) !== pending || state.agentRunSessionMap?.[run.id]) return false;
+    if (!pendingSessionUpdatedAt) return true;
+    return getRunActivityTimestamp(run) + 2 >= pendingSessionUpdatedAt;
+  });
   if (matchedRun) {
     state.pendingTask = null;
     state.selectedRunId = matchedRun.id;
     state.showWelcome = false;
-    persistHistorySelection({ kind: "run", id: matchedRun.id });
+    const session =
+      pendingSession || ensureAgentSession(matchedRun.task || pending);
+    if (!session.run_ids.includes(matchedRun.id)) {
+      session.run_ids.push(matchedRun.id);
+    }
+    state.agentRunSessionMap[matchedRun.id] = session.id;
+    session.pending_task = "";
+    session.pending_job_id = "";
+    session.updated_at = Number(matchedRun.finished_at || matchedRun.started_at || matchedRun.created_at || Math.floor(Date.now() / 1000));
+    state.selectedAgentSessionId = session.id;
+    persistHistorySelection({ kind: "agent", id: session.id });
+    persistAgentSessions();
+    persistAgentRunSessionMap();
   }
 }
 
@@ -2793,10 +3968,12 @@ function cleanRunTitle(value) {
 function runSummary(details) {
   if (details.error) return normalizeText(details.error);
   if (details.cancel_reason) return normalizeText(details.cancel_reason);
+  if (getRecordPendingDecision(details)) return tr("正在等待人工确认。", "Waiting for approval.");
+  if (isAwaitingApprovalCheckpoint(details)) return tr("正在等待人工确认。", "Waiting for approval.");
   if (details.interruption_reason) return normalizeText(details.interruption_reason);
-  if (details.cancelled) return tr("任务在完成前被停止。", "The run was stopped before completion.");
+  if (isBooleanTrue(details.cancelled)) return tr("任务在完成前被停止。", "The run was stopped before completion.");
   if (needsHumanVerification(details)) return tr("当前需要人工处理。", "This run currently needs attention.");
-  if (details.completed) return tr("任务已完成。", "The run has finished.");
+  if (isBooleanTrue(details.completed)) return tr("任务已完成。", "The run has finished.");
   return tr("任务尚未结束。", "The run is still open.");
 }
 
@@ -2923,6 +4100,7 @@ function buildOverviewSignature(payload) {
   const runs = Array.isArray(payload.runs) ? payload.runs : [];
 
   return JSON.stringify({
+    meta_contract: summarizeOverviewMeta(payload.meta || null),
     active_job: summarizeOverviewJob(payload.active_job || null),
     jobs: jobs.slice(0, 8).map((job) => summarizeOverviewJob(job)),
     runs: runs.slice(0, 12).map((run) => summarizeOverviewRun(run)),
@@ -2930,69 +4108,655 @@ function buildOverviewSignature(payload) {
   });
 }
 
+function summarizeOverviewMeta(meta) {
+  if (!meta || typeof meta !== "object") return null;
+  return stableConfigValue({
+    chat_launch_id: meta.chat_launch_id ?? null,
+    defaults: meta.defaults || {},
+    autonomy_mode_presets: meta.autonomy_mode_presets || {},
+    planner_modes: meta.planner_modes || [],
+    model_providers: meta.model_providers || [],
+    structured_output_modes: meta.structured_output_modes || [],
+    browser_control_modes: meta.browser_control_modes || [],
+    browser_dom_backends: meta.browser_dom_backends || [],
+    browser_channels: meta.browser_channels || [],
+  });
+}
+
+const OVERVIEW_EXECUTION_BUDGET_KEYS = [
+  "task_graph_request_timeout",
+  "max_steps",
+  "max_run_seconds",
+  "pause_after_action",
+  "desktop_autonomy_mode",
+  "approval_policy",
+  "complex_task_planning",
+  "plan_review_policy",
+  "max_task_subgoals",
+  "max_subgoal_retries",
+  "stage_review_policy",
+  "max_replans_per_run",
+  "max_failures_per_subgoal",
+  "replan_on_recoverable_error",
+  "recoverable_error_retry_limit",
+];
+
+const OVERVIEW_EXECUTION_BUDGET_BOOLEAN_KEYS = new Set(["replan_on_recoverable_error"]);
+
+function summarizeOverviewExecutionBudget(record) {
+  const summary = {};
+  for (const key of OVERVIEW_EXECUTION_BUDGET_KEYS) {
+    const value = resolveRunBudgetValue(record, key);
+    summary[key] = OVERVIEW_EXECUTION_BUDGET_BOOLEAN_KEYS.has(key)
+      ? summarizeOptionalBoolean(value)
+      : value ?? null;
+  }
+  return summary;
+}
+
+const OVERVIEW_EXECUTION_ENVIRONMENT_KEYS = [
+  "browser_control_mode",
+  "browser_dom_backend",
+  "browser_dom_timeout",
+  "browser_headless",
+  "browser_channel",
+  "browser_executable_path",
+  "cursor_motion_enabled",
+  "cursor_motion_duration",
+  "display_override_enabled",
+  "display_override_monitor_device_name",
+  "display_override_dpi_scale",
+  "display_override_work_area_left",
+  "display_override_work_area_top",
+  "display_override_work_area_width",
+  "display_override_work_area_height",
+  "generic_app_launch_enabled",
+  "shell_recipe_policy",
+];
+
+const OVERVIEW_EXECUTION_ENVIRONMENT_BOOLEAN_KEYS = new Set([
+  "browser_headless",
+  "cursor_motion_enabled",
+  "display_override_enabled",
+  "generic_app_launch_enabled",
+]);
+
+function summarizeOverviewExecutionEnvironment(record) {
+  const summary = {};
+  for (const key of OVERVIEW_EXECUTION_ENVIRONMENT_KEYS) {
+    const value = resolveRunEnvironmentValue(record, key);
+    summary[key] = OVERVIEW_EXECUTION_ENVIRONMENT_BOOLEAN_KEYS.has(key)
+      ? summarizeOptionalBoolean(value)
+      : value ?? null;
+  }
+  return summary;
+}
+
 function summarizeOverviewJob(job) {
   if (!job || typeof job !== "object") return null;
   const result = job.result && typeof job.result === "object" ? job.result : {};
+  const fullExecutionState = normalizeRunExecutionStateCandidate(result.execution_state);
+  const summaryExecutionState = normalizeRunExecutionStateCandidate(result.state);
   const executionState =
-    result.execution_state && typeof result.execution_state === "object" ? result.execution_state : {};
-  const pendingDecision =
-    result.pending_decision && typeof result.pending_decision === "object" ? result.pending_decision : null;
+    fullExecutionState || summaryExecutionState
+      ? { ...(fullExecutionState || {}), ...(summaryExecutionState || {}) }
+      : {};
+  const pendingDecision = resolvePendingDecisionCandidate(
+    result.pending_decision,
+    summaryExecutionState?.pending_decision,
+    fullExecutionState?.pending_decision,
+    executionState.pending_decision
+  );
+  const planHealth =
+    executionState.plan_health && typeof executionState.plan_health === "object" ? executionState.plan_health : null;
+  const workspaceSummary =
+    result.workspace_summary && typeof result.workspace_summary === "object"
+      ? result.workspace_summary
+      : executionState.workspace_summary && typeof executionState.workspace_summary === "object"
+        ? executionState.workspace_summary
+        : null;
+  const appContext =
+    executionState.app_context && typeof executionState.app_context === "object" ? executionState.app_context : {};
+  const stepProposal = resolveStepProposalCandidate(result, executionState);
+  const terminalState = getTerminalRecordState({ ...job, result });
+  const terminalResult = terminalState.cancelled || terminalState.failed || terminalState.completed;
+  const executionBudget = summarizeOverviewExecutionBudget(job);
+  const executionEnvironment = summarizeOverviewExecutionEnvironment(job);
 
   return {
     id: job.id ?? null,
     status: job.status ?? null,
     task: job.task ?? null,
+    started_at: job.started_at ?? null,
+    resume_run_id: job.resume_run_id ?? null,
+    max_steps: job.max_steps ?? null,
+    pause_after_action: job.pause_after_action ?? null,
+    max_run_seconds: job.max_run_seconds ?? job.config_overrides?.max_run_seconds ?? null,
+    dry_run: summarizeOptionalBoolean(result.dry_run ?? job.dry_run),
+    desktop_autonomy_mode: resolveRunPolicyValue(job, "desktop_autonomy_mode") ?? null,
+    complex_task_planning: resolveRunPolicyValue(job, "complex_task_planning") ?? null,
+    approval_policy: resolveRunPolicyValue(job, "approval_policy") ?? null,
+    plan_review_policy: resolveRunPolicyValue(job, "plan_review_policy") ?? null,
+    stage_review_policy: resolveRunPolicyValue(job, "stage_review_policy") ?? null,
+    replan_on_recoverable_error: resolveRunPolicyValue(job, "replan_on_recoverable_error") ?? null,
+    recoverable_error_retry_limit: resolveRunPolicyValue(job, "recoverable_error_retry_limit") ?? null,
+    execution_budget: executionBudget,
+    execution_environment: executionEnvironment,
+    ...executionBudget,
+    ...executionEnvironment,
     updated_at: job.status === "running" ? null : job.updated_at ?? null,
-    cancel_requested: Boolean(job.cancel_requested),
-    cancelled: Boolean(job.cancelled),
-    requires_human: Boolean(job.requires_human),
-    interruption_kind: job.interruption_kind ?? null,
-    interruption_reason: job.interruption_reason ?? null,
+    cancel_requested: summarizeOptionalBoolean(job.cancel_requested) ?? false,
+    cancelled: summarizeAnyBoolean(job.cancelled, result.cancelled),
+    completed: summarizeAnyBoolean(result.completed, job.completed),
+    error: result.error ?? job.error ?? null,
+    cancel_reason: result.cancel_reason ?? job.cancel_reason ?? null,
+    requires_human: terminalResult
+      ? false
+      : summarizeAnyBoolean(job.requires_human, result.requires_human, pendingDecision ? true : null),
+    interruption_kind: job.interruption_kind ?? result.interruption_kind ?? null,
+    interruption_reason: job.interruption_reason ?? result.interruption_reason ?? null,
     run_id: result.run_id ?? null,
+    result_started_at: result.started_at ?? null,
+    steps: result.steps ?? null,
     finished_at: result.finished_at ?? null,
     latest_summary: result.latest_summary ?? null,
     current_goal: result.current_goal ?? executionState.current_goal ?? null,
     chosen_capability: result.chosen_capability ?? executionState.chosen_capability ?? null,
+    orchestration_phase: result.orchestration_phase ?? executionState.orchestration_phase ?? null,
+    active_specialist: result.active_specialist ?? executionState.active_specialist ?? null,
+    current_surface_kind: result.current_surface_kind ?? executionState.current_surface_kind ?? null,
+    last_progress_at: result.last_progress_at ?? executionState.last_progress_at ?? null,
+    plan_review_status: result.plan_review_status ?? executionState.plan_review_status ?? appContext.plan_review_status ?? null,
+    stage_review_status: result.stage_review_status ?? executionState.stage_review_status ?? appContext.stage_review_status ?? null,
+    last_replan_reason: result.last_replan_reason ?? executionState.last_replan_reason ?? null,
     verification_status: result.verification_status ?? executionState.verification_status ?? null,
     recovery_reason: result.recovery_reason ?? executionState.recovery_reason ?? null,
+    handoff_state: summarizeOverviewHandoffState(appContext),
+    last_verification: summarizeOverviewVerification(executionState.last_verification),
+    evidence_ledger: summarizeOverviewEvidenceLedger(executionState.evidence_ledger),
+    repair_history: summarizeOverviewRepairHistory(executionState.repair_history),
+    capability_failures: summarizeOverviewCapabilityFailures(executionState.capability_failures),
+    plan_source: appContext.plan_source ?? null,
+    workspace_summary: summarizeOverviewWorkspaceSummary(workspaceSummary),
+    plan_health: summarizeOverviewPlanHealth(planHealth, executionState.subgoals),
+    initial_task_graph: summarizeOverviewTaskGraph(job.initial_task_graph),
     latest_screenshot: result.latest_screenshot ?? null,
+    latest_timings: summarizeOverviewTimings(result.latest_timings),
     latest_actions: Array.isArray(result.latest_actions)
       ? result.latest_actions.slice(0, 4).map((action) => summarizeOverviewAction(action))
       : [],
+    step_proposal: summarizeOverviewStepProposal(stepProposal),
+    live_pointer: summarizeOverviewLivePointer(result.live_pointer),
+    live_pointer_trail: summarizeOverviewLivePointerTrail(result.live_pointer_trail),
     live_action: result.live_action ? summarizeOverviewAction(result.live_action) : null,
-    pending_decision: pendingDecision
-      ? {
-          summary: pendingDecision.summary ?? null,
-          reason: pendingDecision.reason ?? null,
-        }
-      : null,
+    pending_decision: terminalResult ? null : summarizeOverviewPendingDecision(pendingDecision),
   };
+}
+
+function summarizeOverviewPlanHealth(health, fallbackSubgoals = []) {
+  const source = health && typeof health === "object" ? health : {};
+  const counts = source.counts && typeof source.counts === "object" ? source.counts : {};
+  const hasCountsSignal = Object.values(counts).some(
+    (value) => value !== null && value !== undefined && normalizeText(value) !== ""
+  );
+  const hasBlockedReason = Boolean(normalizeText(source.blocked_reason || ""));
+  const hasNextSubgoalId = Boolean(normalizeText(source.next_subgoal_id || ""));
+  const autonomy = summarizeAutonomyReadiness(source.autonomy);
+  const items = Array.isArray(source.items)
+    ? source.items
+    : Array.isArray(fallbackSubgoals)
+      ? fallbackSubgoals
+      : [];
+  if (!hasCountsSignal && !items.length && !autonomy && !hasBlockedReason && !hasNextSubgoalId) return null;
+  return {
+    counts: {
+      total: hasCountsSignal || items.length ? counts.total ?? items.length : null,
+      completed: counts.completed ?? null,
+      pending: counts.pending ?? null,
+      in_progress: counts.in_progress ?? null,
+      blocked: counts.blocked ?? null,
+      failed: counts.failed ?? null,
+      ready: counts.ready ?? null,
+      exhausted: counts.exhausted ?? null,
+    },
+    next_subgoal_id: source.next_subgoal_id ?? null,
+    blocked_reason: source.blocked_reason ?? null,
+    autonomy,
+    items: items.slice(0, 8).map((item) => summarizeOverviewPlanItem(item)),
+  };
+}
+
+function summarizeAutonomyReadiness(source) {
+  if (!source || typeof source !== "object") return null;
+  const summary = {
+    status: source.status ?? null,
+    can_continue: summarizeOptionalBoolean(source.can_continue),
+    requires_review: summarizeOptionalBoolean(source.requires_review),
+    requires_user: summarizeOptionalBoolean(source.requires_user),
+    next_action: source.next_action ?? null,
+    next_subgoal_id: source.next_subgoal_id ?? null,
+    blockers: Array.isArray(source.blockers) ? source.blockers.slice(0, 4) : [],
+    warnings: Array.isArray(source.warnings) ? source.warnings.slice(0, 4) : [],
+  };
+  const hasSignal = Boolean(
+    normalizeText(summary.status || "") ||
+      summary.can_continue !== null ||
+      summary.requires_review !== null ||
+      summary.requires_user !== null ||
+      normalizeText(summary.next_action || "") ||
+      normalizeText(summary.next_subgoal_id || "") ||
+      summary.blockers.length ||
+      summary.warnings.length
+  );
+  return hasSignal ? summary : null;
+}
+
+function summarizeOptionalBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return null;
+    if (["true", "1", "yes", "y", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "n", "off"].includes(normalized)) return false;
+  }
+  return Boolean(value);
+}
+
+function summarizeAnyBoolean(...values) {
+  return values.some((value) => summarizeOptionalBoolean(value) === true);
+}
+
+function isBooleanTrue(value) {
+  return summarizeOptionalBoolean(value) === true;
+}
+
+function summarizeOverviewPlanItem(item) {
+  if (!item || typeof item !== "object") return null;
+  return {
+    id: item.id ?? null,
+    title: item.title ?? null,
+    status: item.status ?? null,
+    ready: summarizeOptionalBoolean(item.ready) ?? false,
+    is_next: summarizeOptionalBoolean(item.is_next) ?? false,
+    exhausted: summarizeOptionalBoolean(item.exhausted) ?? false,
+    attempts: item.attempts ?? null,
+    retry_remaining: item.retry_remaining ?? null,
+    capability_preference: item.capability_preference ?? item.capability ?? null,
+    risk_level: item.risk_level ?? null,
+  };
+}
+
+function summarizeOverviewTaskGraph(taskGraph) {
+  if (!taskGraph || typeof taskGraph !== "object") return null;
+  const subgoals = Array.isArray(taskGraph.subgoals) ? taskGraph.subgoals : [];
+  return {
+    task: taskGraph.task ?? null,
+    subgoals: subgoals.slice(0, 8).map((item) => summarizeOverviewPlanItem(item)),
+  };
+}
+
+function resolveStepProposalCandidate(progress = {}, executionState = {}) {
+  if (isObjectRecord(progress?.step_proposal)) return progress.step_proposal;
+  if (isObjectRecord(executionState?.step_proposal)) return executionState.step_proposal;
+  if (isObjectRecord(executionState?.last_step)) return executionState.last_step;
+  return null;
 }
 
 function summarizeOverviewAction(action) {
   if (!action || typeof action !== "object") return null;
-  return {
-    type: action.type ?? null,
-    label: action.label ?? action.text ?? action.selector ?? action.url ?? null,
+  const numericKeys = ["x", "y", "width", "height", "end_x", "end_y", "relative_x", "relative_y", "clicks", "seconds", "amount"];
+  const compact = {
+    type: action.type ?? action.action ?? null,
+    label: action.label ?? action.text ?? action.selector ?? action.title ?? action.app ?? action.url ?? null,
+    text: action.text ?? null,
+    selector: action.selector ?? null,
+    title: action.title ?? null,
+    app: action.app ?? null,
+    key: action.key ?? null,
+    keys: Array.isArray(action.keys) ? action.keys.slice(0, 6) : [],
+    button: action.button ?? null,
     status: action.status ?? null,
     phase: action.phase ?? null,
+    risk_level: action.risk_level ?? null,
+    target_scope: action.target_scope ?? null,
+    recipe: action.recipe ?? null,
+    url: action.url ?? null,
   };
+  numericKeys.forEach((key) => {
+    const value = Number(action[key]);
+    if (Number.isFinite(value)) {
+      compact[key] = Number(value.toFixed(4));
+    }
+  });
+  return {
+    ...compact,
+  };
+}
+
+function summarizeOverviewPendingDecision(decision) {
+  if (!decision || typeof decision !== "object") return null;
+  const payload = {
+    id: decision.id ?? null,
+    decision_type: decision.decision_type ?? null,
+    summary: decision.summary ?? null,
+    reason: decision.reason ?? null,
+    risk_level: decision.risk_level ?? null,
+    approval_policy: decision.approval_policy ?? null,
+    requires_user_presence: summarizeOptionalBoolean(decision.requires_user_presence),
+    operator_hint: decision.operator_hint ?? null,
+    actions: Array.isArray(decision.actions)
+      ? decision.actions.slice(0, 4).map((action) => summarizeOverviewAction(action)).filter(Boolean)
+      : [],
+  };
+  return overviewSummaryHasValue(payload) ? payload : null;
+}
+
+function resolvePendingDecisionCandidate(...candidates) {
+  for (const candidate of candidates) {
+    if (summarizeOverviewPendingDecision(candidate)) return candidate;
+  }
+  return null;
+}
+
+function overviewSummaryHasValue(value) {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.some((item) => overviewSummaryHasValue(item));
+  if (typeof value === "object") return Object.values(value).some((item) => overviewSummaryHasValue(item));
+  return true;
+}
+
+function summarizeOverviewHandoffState(context) {
+  if (!isObjectRecord(context)) return null;
+  const payload = {
+    human_handoff_kind: context.human_handoff_kind ?? null,
+    human_handoff_summary: context.human_handoff_summary ?? null,
+    human_handoff_reason: context.human_handoff_reason ?? null,
+    manual_resume_status: context.manual_resume_status ?? null,
+    manual_resume_reason: context.manual_resume_reason ?? null,
+    manual_resumed_at: context.manual_resumed_at ?? null,
+    standard_recovery_kind: context.standard_recovery_kind ?? null,
+    recovery_reason: context.recovery_reason ?? null,
+  };
+  const compact = Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value != null && value !== "" && !(Array.isArray(value) && !value.length))
+  );
+  return Object.keys(compact).length ? compact : null;
+}
+
+function summarizeOverviewStepProposal(proposal) {
+  if (!proposal || typeof proposal !== "object") return null;
+  return {
+    intent: proposal.intent ?? null,
+    capability: proposal.capability ?? null,
+    risk_level: proposal.risk_level ?? null,
+    target_scope: proposal.target_scope ?? null,
+    surface_kind: proposal.surface_kind ?? null,
+    requires_approval: summarizeOptionalBoolean(proposal.requires_approval) ?? false,
+    completes_subgoal: summarizeOptionalBoolean(proposal.completes_subgoal) ?? false,
+    current_focus: proposal.current_focus ?? null,
+    progress_signals: Array.isArray(proposal.progress_signals) ? proposal.progress_signals.slice(0, 4) : [],
+    repair_strategy: Array.isArray(proposal.repair_strategy) ? proposal.repair_strategy.slice(0, 4) : [],
+    remaining_steps: Array.isArray(proposal.remaining_steps) ? proposal.remaining_steps.slice(0, 4) : [],
+    actions: Array.isArray(proposal.actions)
+      ? proposal.actions.slice(0, 4).map((action) => summarizeOverviewAction(action)).filter(Boolean)
+      : [],
+  };
+}
+
+function summarizeOverviewTimings(timings) {
+  if (!timings || typeof timings !== "object") return null;
+  const keys = ["total", "capture_initial", "plan", "execute", "capture_after", "verify", "persist"];
+  const compact = {};
+  keys.forEach((key) => {
+    const value = Number(timings[key]);
+    if (Number.isFinite(value)) {
+      compact[key] = Number(value.toFixed(3));
+    }
+  });
+  return Object.keys(compact).length ? compact : null;
+}
+
+function summarizeOverviewLivePointer(point) {
+  if (!point || typeof point !== "object") return null;
+  const normX = Number(point.norm_x);
+  const normY = Number(point.norm_y);
+  if (!Number.isFinite(normX) || !Number.isFinite(normY)) return null;
+  const updatedAt = Number(point.updated_at);
+  return {
+    norm_x: Number(normX.toFixed(4)),
+    norm_y: Number(normY.toFixed(4)),
+    phase: point.phase ?? null,
+    updated_at: Number.isFinite(updatedAt) ? Number(updatedAt.toFixed(3)) : null,
+  };
+}
+
+function summarizeOverviewLivePointerTrail(trail) {
+  if (!Array.isArray(trail)) return [];
+  return trail.slice(-6).map((point) => summarizeOverviewLivePointer(point)).filter(Boolean);
+}
+
+function summarizeOverviewWorkspaceSummary(summary) {
+  if (!summary || typeof summary !== "object") return null;
+  const facts = Array.isArray(summary.facts)
+    ? summary.facts.slice(-4).map((item) => summarizeOverviewWorkspaceItem(item)).filter(Boolean)
+    : [];
+  const sources = Array.isArray(summary.sources)
+    ? summary.sources.slice(-4).map((item) => summarizeOverviewWorkspaceItem(item)).filter(Boolean)
+    : [];
+  const evidence = Array.isArray(summary.evidence)
+    ? summary.evidence.slice(-4).map((item) => summarizeOverviewWorkspaceItem(item)).filter(Boolean)
+    : [];
+  const notes = Array.isArray(summary.notes) ? summary.notes.slice(-4).map((item) => normalizeText(item)).filter(Boolean) : [];
+  if (!facts.length && !sources.length && !evidence.length && !notes.length) return null;
+  return { facts, sources, evidence, notes };
+}
+
+function summarizeOverviewWorkspaceItem(item) {
+  if (!item || typeof item !== "object") return null;
+  return {
+    key: item.key ?? null,
+    title: item.title ?? null,
+    value: item.value ?? null,
+    url: item.url ?? null,
+    status: item.status ?? null,
+    specialist: item.specialist ?? null,
+  };
+}
+
+function summarizeOverviewVerification(verification) {
+  if (!verification || typeof verification !== "object") return null;
+  const evidence = Array.isArray(verification.evidence)
+    ? verification.evidence.slice(0, 4).map((item) => summarizeOverviewEvidenceItem(item)).filter(Boolean)
+    : [];
+  const payload = {
+    success: verification.success ?? null,
+    status: verification.status ?? null,
+    failure_kind: verification.failure_kind ?? null,
+    message: verification.message ?? null,
+    verified_at: verification.verified_at ?? null,
+    evidence,
+  };
+  return Object.values(payload).some((value) => {
+    if (Array.isArray(value)) return value.length > 0;
+    return value != null && value !== "";
+  })
+    ? payload
+    : null;
+}
+
+function summarizeOverviewEvidenceLedger(ledger) {
+  if (!Array.isArray(ledger)) return [];
+  return ledger.slice(-6).map((item) => summarizeOverviewEvidenceItem(item)).filter(Boolean);
+}
+
+function summarizeOverviewEvidenceItem(item) {
+  if (!item || typeof item !== "object") return null;
+  const nested = Array.isArray(item.evidence)
+    ? item.evidence.slice(0, 3).map((entry) => summarizeOverviewEvidenceItem(entry)).filter(Boolean)
+    : [];
+  const payload = {
+    subgoal_id: item.subgoal_id ?? null,
+    capability: item.capability ?? null,
+    kind: item.kind ?? null,
+    status: item.status ?? null,
+    scope: item.scope ?? null,
+    satisfied: item.satisfied ?? null,
+    title: item.title ?? null,
+    value: item.value ?? null,
+    message: item.message ?? null,
+    detail: item.detail ?? null,
+    selector: item.selector ?? null,
+    url: item.url ?? null,
+    verified_at: item.verified_at ?? null,
+    evidence: nested,
+  };
+  return Object.values(payload).some((value) => {
+    if (Array.isArray(value)) return value.length > 0;
+    return value != null && value !== "";
+  })
+    ? payload
+    : null;
+}
+
+function summarizeOverviewRepairHistory(history) {
+  if (!Array.isArray(history)) return [];
+  return history
+    .filter((item) => item && typeof item === "object")
+    .slice(-6)
+    .map((item) => ({
+      mode: item.mode ?? item.kind ?? null,
+      subgoal_id: item.subgoal_id ?? null,
+      failure_kind: item.failure_kind ?? item.standard_failure_kind ?? null,
+      capability: item.capability ?? null,
+      message: item.message ?? item.reason ?? null,
+      step: item.step ?? null,
+      created_at: item.created_at ?? item.recorded_at ?? null,
+    }));
+}
+
+function summarizeOverviewCapabilityFailures(failures) {
+  if (!failures || typeof failures !== "object" || Array.isArray(failures)) return [];
+  return Object.entries(failures)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(0, 8)
+    .map(([target, values]) => ({
+      target,
+      failures: Array.isArray(values) ? values.slice(-4).map((item) => normalizeText(item)).filter(Boolean) : [],
+    }))
+    .filter((item) => item.failures.length);
 }
 
 function summarizeOverviewRun(run) {
   if (!run || typeof run !== "object") return null;
+  const statePayload = run.state && typeof run.state === "object" ? run.state : {};
+  const fullExecutionState = normalizeRunExecutionStateCandidate(run.execution_state);
+  const summaryExecutionState = normalizeRunExecutionStateCandidate(statePayload);
+  const executionState =
+    fullExecutionState || summaryExecutionState
+      ? { ...(fullExecutionState || {}), ...(summaryExecutionState || {}) }
+      : {};
+  const planHealth =
+    executionState.plan_health && typeof executionState.plan_health === "object"
+      ? executionState.plan_health
+      : statePayload.plan_health && typeof statePayload.plan_health === "object"
+        ? statePayload.plan_health
+        : null;
+  const taskGraph =
+    executionState.task_graph && typeof executionState.task_graph === "object"
+      ? executionState.task_graph
+      : statePayload.task_graph && typeof statePayload.task_graph === "object"
+        ? statePayload.task_graph
+      : run.task_graph && typeof run.task_graph === "object"
+        ? run.task_graph
+        : null;
+  const appContext =
+    executionState.app_context && typeof executionState.app_context === "object"
+      ? executionState.app_context
+      : statePayload.app_context && typeof statePayload.app_context === "object"
+        ? statePayload.app_context
+        : {};
+  const workspaceSummary =
+    run.workspace_summary && typeof run.workspace_summary === "object"
+      ? run.workspace_summary
+      : executionState.workspace_summary && typeof executionState.workspace_summary === "object"
+        ? executionState.workspace_summary
+        : statePayload.workspace_summary && typeof statePayload.workspace_summary === "object"
+          ? statePayload.workspace_summary
+          : null;
+  const pendingDecision = resolvePendingDecisionCandidate(
+    run.pending_decision,
+    summaryExecutionState?.pending_decision,
+    fullExecutionState?.pending_decision,
+    executionState.pending_decision,
+    statePayload.pending_decision
+  );
+  const fallbackSubgoals = Array.isArray(executionState.subgoals)
+    ? executionState.subgoals
+    : Array.isArray(statePayload.subgoals)
+      ? statePayload.subgoals
+      : Array.isArray(taskGraph?.subgoals)
+        ? taskGraph.subgoals
+        : null;
+  const stepProposal = resolveStepProposalCandidate(run, executionState) || resolveStepProposalCandidate({}, statePayload);
+  const terminalState = getTerminalRecordState(run);
+  const terminalResult = terminalState.cancelled || terminalState.failed || terminalState.completed;
+  const executionBudget = summarizeOverviewExecutionBudget(run);
+  const executionEnvironment = summarizeOverviewExecutionEnvironment(run);
   return {
     id: run.id ?? null,
     steps: run.steps ?? null,
-    completed: Boolean(run.completed),
-    cancelled: Boolean(run.cancelled),
+    dry_run: summarizeOptionalBoolean(run.dry_run),
+    max_steps: run.max_steps ?? null,
+    max_run_seconds: run.max_run_seconds ?? null,
+    pause_after_action: run.pause_after_action ?? null,
+    completed: summarizeOptionalBoolean(run.completed) ?? false,
+    cancelled: summarizeOptionalBoolean(run.cancelled) ?? false,
     cancel_reason: run.cancel_reason ?? null,
-    requires_human: Boolean(run.requires_human),
+    requires_human: terminalResult ? false : summarizeOptionalBoolean(run.requires_human) ?? false,
+    can_resume: summarizeOptionalBoolean(run.can_resume),
+    resume_mode: run.resume_mode ?? null,
     interruption_kind: run.interruption_kind ?? null,
     interruption_reason: run.interruption_reason ?? null,
     error: run.error ?? null,
+    desktop_autonomy_mode: run.desktop_autonomy_mode ?? null,
+    complex_task_planning: run.complex_task_planning ?? null,
+    approval_policy: run.approval_policy ?? null,
+    plan_review_policy: run.plan_review_policy ?? null,
+    stage_review_policy: run.stage_review_policy ?? null,
+    replan_on_recoverable_error: run.replan_on_recoverable_error ?? null,
+    recoverable_error_retry_limit: run.recoverable_error_retry_limit ?? null,
+    execution_budget: executionBudget,
+    execution_environment: executionEnvironment,
+    ...executionBudget,
+    ...executionEnvironment,
+    current_goal: run.current_goal ?? executionState.current_goal ?? statePayload.current_goal ?? null,
+    orchestration_phase: run.orchestration_phase ?? executionState.orchestration_phase ?? statePayload.orchestration_phase ?? null,
+    active_specialist: run.active_specialist ?? executionState.active_specialist ?? statePayload.active_specialist ?? null,
+    current_surface_kind: run.current_surface_kind ?? executionState.current_surface_kind ?? statePayload.current_surface_kind ?? null,
+    last_progress_at: run.last_progress_at ?? executionState.last_progress_at ?? statePayload.last_progress_at ?? null,
+    plan_review_status:
+      run.plan_review_status ?? executionState.plan_review_status ?? statePayload.plan_review_status ?? appContext.plan_review_status ?? null,
+    stage_review_status:
+      run.stage_review_status ?? executionState.stage_review_status ?? statePayload.stage_review_status ?? appContext.stage_review_status ?? null,
+    last_replan_reason: run.last_replan_reason ?? executionState.last_replan_reason ?? statePayload.last_replan_reason ?? null,
+    verification_status: run.verification_status ?? executionState.verification_status ?? statePayload.verification_status ?? null,
+    recovery_reason: run.recovery_reason ?? executionState.recovery_reason ?? statePayload.recovery_reason ?? null,
+    handoff_state: summarizeOverviewHandoffState(appContext),
+    last_verification: summarizeOverviewVerification(executionState.last_verification ?? statePayload.last_verification),
+    evidence_ledger: summarizeOverviewEvidenceLedger(executionState.evidence_ledger ?? statePayload.evidence_ledger),
+    repair_history: summarizeOverviewRepairHistory(executionState.repair_history ?? statePayload.repair_history),
+    capability_failures: summarizeOverviewCapabilityFailures(executionState.capability_failures ?? statePayload.capability_failures),
+    workspace_summary: summarizeOverviewWorkspaceSummary(workspaceSummary),
+    step_proposal: summarizeOverviewStepProposal(stepProposal),
+    pending_decision: terminalResult ? null : summarizeOverviewPendingDecision(pendingDecision),
+    plan_health: summarizeOverviewPlanHealth(planHealth, fallbackSubgoals),
+    task_graph: summarizeOverviewTaskGraph(taskGraph),
+    state_signature: buildRunStateRefreshSignature(run) || null,
     started_at: run.started_at ?? null,
     finished_at: run.finished_at ?? null,
+    details_updated_at: run.details_updated_at ?? null,
   };
 }
 
@@ -3468,6 +5232,45 @@ function loadChatSessions() {
   }
 }
 
+function loadAgentSessions() {
+  try {
+    const raw = window.localStorage.getItem(AGENT_SESSIONS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => ({
+        id: String(item?.id || "").trim(),
+        title: normalizeText(item?.title || ""),
+        created_at: Number(item?.created_at || 0) || Math.floor(Date.now() / 1000),
+        updated_at: Number(item?.updated_at || 0) || Math.floor(Date.now() / 1000),
+        run_ids: Array.isArray(item?.run_ids) ? item.run_ids.map((runId) => normalizeText(runId)).filter(Boolean) : [],
+        pending_task: normalizeText(item?.pending_task || ""),
+        pending_job_id: normalizeText(item?.pending_job_id || ""),
+      }))
+      .filter((item) => item.id)
+      .sort((left, right) => Number(right.updated_at || 0) - Number(left.updated_at || 0));
+  } catch {
+    return [];
+  }
+}
+
+function loadAgentRunSessionMap() {
+  try {
+    const raw = window.localStorage.getItem(AGENT_RUN_SESSION_MAP_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([runId, sessionId]) => [normalizeText(runId), normalizeText(sessionId)])
+        .filter(([runId, sessionId]) => runId && sessionId)
+    );
+  } catch {
+    return {};
+  }
+}
+
 function persistChatSessions() {
   safeStorageSet(CHAT_SESSIONS_STORAGE_KEY, JSON.stringify(state.chatSessions.slice(0, 24)));
   writeSessionStorage(ACTIVE_CHAT_SESSION_SESSION_KEY, state.selectedChatSessionId || null);
@@ -3475,9 +5278,17 @@ function persistChatSessions() {
   clearLegacyActiveChatSessionStorage();
 }
 
+function persistAgentSessions() {
+  safeStorageSet(AGENT_SESSIONS_STORAGE_KEY, JSON.stringify(state.agentSessions.slice(0, 24)));
+}
+
+function persistAgentRunSessionMap() {
+  safeStorageSet(AGENT_RUN_SESSION_MAP_STORAGE_KEY, JSON.stringify(state.agentRunSessionMap || {}));
+}
+
 function normalizeHistorySelection(raw) {
   if (!raw || typeof raw !== "object") return null;
-  const kind = raw.kind === "chat" || raw.kind === "run" ? raw.kind : null;
+  const kind = raw.kind === "chat" || raw.kind === "run" || raw.kind === "agent" ? raw.kind : null;
   const id = normalizeText(raw.id || "");
   if (!kind || !id) return null;
   return { kind, id };
@@ -3519,6 +5330,46 @@ function findLatestNonEmptyChatSessionId() {
   );
 }
 
+function findLatestNonEmptyAgentSessionId() {
+  return (
+    state.agentSessions.find(
+      (session) => (Array.isArray(session.run_ids) && session.run_ids.length) || getAgentSessionPendingTask(session)
+    )?.id || null
+  );
+}
+
+function findLatestPendingAgentSession() {
+  return state.agentSessions.find((session) => getAgentSessionPendingTask(session)) || null;
+}
+
+function getAgentSessionPendingJob(session) {
+  const pendingJobId = normalizeText(session?.pending_job_id || "");
+  if (!pendingJobId) return null;
+  if (normalizeText(state.activeJob?.id || "") === pendingJobId) {
+    return state.activeJob;
+  }
+  return (state.jobs || []).find((job) => normalizeText(job?.id || "") === pendingJobId) || null;
+}
+
+function isAgentSessionPendingJobOrphaned(session) {
+  const pendingJobId = normalizeText(session?.pending_job_id || "");
+  return Boolean(pendingJobId && state.connected && !getAgentSessionPendingJob(session));
+}
+
+function getAgentSessionPendingTask(session, options = {}) {
+  const allowOrphan = Boolean(options.allowOrphan);
+  const pendingJobId = normalizeText(session?.pending_job_id || "");
+  const pendingJob = pendingJobId ? getAgentSessionPendingJob(session) : null;
+  if (pendingJob && isTerminalRecord(pendingJob)) return "";
+  if (pendingJobId && !pendingJob && state.connected && !allowOrphan) return "";
+  const pendingTask = normalizeText(session?.pending_task || "");
+  if (pendingTask) return pendingTask;
+  if (!pendingJobId) return "";
+  const jobTask = normalizeText(pendingJob?.task || pendingJob?.result?.task || "");
+  if (jobTask) return jobTask;
+  return normalizeText(session?.title || "");
+}
+
 function restoreInitialHistorySelection(options = {}) {
   if (state.historySelectionRestored) return;
 
@@ -3527,6 +5378,17 @@ function restoreInitialHistorySelection(options = {}) {
   if (!savedSelection) {
     if (state.uiMode === "chat" && !getSelectedChatSession()) {
       state.selectedChatSessionId = findLatestNonEmptyChatSessionId();
+    }
+    if (state.uiMode !== "chat" && !getSelectedAgentSession()) {
+      const fallbackSession = findLatestPendingAgentSession();
+      if (fallbackSession) {
+        state.selectedAgentSessionId = fallbackSession.id;
+        if (!state.activeJob) {
+          state.pendingTask = getAgentSessionPendingTask(fallbackSession) || state.pendingTask;
+        }
+        state.showWelcome = false;
+        persistHistorySelection({ kind: "agent", id: fallbackSession.id });
+      }
     }
     return;
   }
@@ -3557,11 +5419,43 @@ function restoreInitialHistorySelection(options = {}) {
     return;
   }
 
+  if (savedSelection.kind === "agent") {
+    const savedSession = state.agentSessions.find(
+      (session) => session.id === savedSelection.id && ((session.run_ids || []).length || getAgentSessionPendingTask(session))
+    );
+    state.uiMode = "agent";
+    safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
+    if (savedSession) {
+      state.selectedAgentSessionId = savedSelection.id;
+      if (!state.activeJob) {
+        state.pendingTask = getAgentSessionPendingTask(savedSession) || state.pendingTask;
+      }
+      state.showWelcome = false;
+      return;
+    }
+    persistHistorySelection(null);
+    state.selectedAgentSessionId = null;
+    state.selectedRunId = null;
+    state.selectedRunDetails = null;
+    state.loadingRunDetails = false;
+    state.showWelcome = true;
+    return;
+  }
+
   const hasSavedRun = state.runs.some((run) => run.id === savedSelection.id);
   state.uiMode = "agent";
   safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
 
   if (hasSavedRun) {
+    const containingSession = state.agentSessions.find((session) => (session.run_ids || []).includes(savedSelection.id)) || null;
+    if (containingSession) {
+      state.selectedAgentSessionId = containingSession.id;
+      state.selectedRunId = getAgentSessionLatestRunId(containingSession) || savedSelection.id;
+      state.showWelcome = false;
+      state.loadingRunDetails = true;
+      persistHistorySelection({ kind: "agent", id: containingSession.id });
+      return;
+    }
     state.selectedRunId = savedSelection.id;
     state.showWelcome = false;
     state.loadingRunDetails = true;
@@ -3629,8 +5523,272 @@ function generateChatMessageId() {
   return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function generateAgentSessionId() {
+  if (window.crypto?.randomUUID) {
+    return `agent-${window.crypto.randomUUID().slice(0, 12)}`;
+  }
+  return `agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function getSelectedChatSession() {
   return state.chatSessions.find((item) => item.id === state.selectedChatSessionId) || null;
+}
+
+function getSelectedAgentSession() {
+  return state.agentSessions.find((item) => item.id === state.selectedAgentSessionId) || null;
+}
+
+function getAgentSessionRuns(session) {
+  if (!session) return [];
+  const runMap = new Map((state.runs || []).map((run) => [run.id, run]));
+  return (session.run_ids || [])
+    .map((runId) => runMap.get(runId))
+    .filter(Boolean)
+    .sort((left, right) => Number(left.started_at || left.created_at || 0) - Number(right.started_at || right.created_at || 0));
+}
+
+function getAgentSessionLatestRunId(session) {
+  return getAgentSessionRuns(session).slice(-1)[0]?.id || null;
+}
+
+function getRunActivityTimestamp(run) {
+  return Math.max(
+    Number(run?.finished_at || 0),
+    Number(run?.started_at || 0),
+    Number(run?.created_at || 0)
+  );
+}
+
+function ensureAgentSession(seedText = "") {
+  let session = getSelectedAgentSession();
+  if (session) {
+    persistHistorySelection({ kind: "agent", id: session.id });
+    return session;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  session = {
+    id: generateAgentSessionId(),
+    title: normalizeText(seedText || ""),
+    created_at: now,
+    updated_at: now,
+    run_ids: [],
+    pending_task: "",
+    pending_job_id: "",
+  };
+  state.agentSessions = [session, ...state.agentSessions];
+  state.selectedAgentSessionId = session.id;
+  persistHistorySelection({ kind: "agent", id: session.id });
+  persistAgentSessions();
+  return session;
+}
+
+function activatePreviewAgentSession(task) {
+  const session = ensureAgentSession(task);
+  const cleanTask = normalizeText(task || "");
+  if (session && cleanTask && !(session.run_ids || []).length && !getAgentSessionPendingTask(session)) {
+    session.title = cleanTask;
+    session.updated_at = Math.floor(Date.now() / 1000);
+  }
+  state.selectedAgentSessionId = session?.id || state.selectedAgentSessionId;
+  state.selectedRunId = null;
+  state.selectedRunDetails = null;
+  state.loadingRunDetails = false;
+  state.showWelcome = false;
+  state.uiMode = "agent";
+  safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
+  if (session?.id) {
+    persistHistorySelection({ kind: "agent", id: session.id });
+  }
+  persistAgentSessions();
+  return session;
+}
+
+function pruneEmptyAgentSessions() {
+  const previousSelectedAgentSessionId = state.selectedAgentSessionId;
+  state.agentSessions = state.agentSessions.filter(
+    (session) => (session.run_ids || []).length || getAgentSessionPendingTask(session)
+  );
+  if (state.selectedAgentSessionId && !getSelectedAgentSession()) {
+    state.selectedAgentSessionId = null;
+    if (
+      state.historySelection?.kind === "agent" &&
+      (!state.historySelection.id || state.historySelection.id === previousSelectedAgentSessionId)
+    ) {
+      persistHistorySelection(null);
+    }
+    if (!state.selectedRunId && !state.selectedRunDetails && !state.pendingTask && !state.activeJob) {
+      state.showWelcome = true;
+      state.loadingRunDetails = false;
+    }
+  }
+}
+
+function syncAgentSessionsWithRuns() {
+  const runMap = new Map((state.runs || []).map((run) => [run.id, run]));
+  const hasPendingJobSessions = (state.agentSessions || []).some((session) => normalizeText(session.pending_job_id || ""));
+  if (runMap.size === 0 && (state.agentSessions || []).length && !state.activeJob && !state.pendingTask && !hasPendingJobSessions) {
+    return;
+  }
+
+  const beforeSessions = JSON.stringify(state.agentSessions || []);
+  const beforeMap = JSON.stringify(state.agentRunSessionMap || {});
+  const validSessionIds = new Set((state.agentSessions || []).map((session) => session.id));
+  const nextMap = {};
+
+  for (const [runId, sessionId] of Object.entries(state.agentRunSessionMap || {})) {
+    if (runMap.has(runId) && validSessionIds.has(sessionId)) {
+      nextMap[runId] = sessionId;
+    }
+  }
+
+  state.agentSessions = (state.agentSessions || []).map((session) => ({
+    ...session,
+    run_ids: Array.from(new Set((session.run_ids || []).filter((runId) => runMap.has(runId)))),
+    pending_job_id: normalizeText(session.pending_job_id || ""),
+    pending_task: normalizeText(session.pending_task || ""),
+  }));
+
+  for (const session of state.agentSessions) {
+    for (const runId of session.run_ids || []) {
+      nextMap[runId] = session.id;
+    }
+  }
+
+  const activeRunId = normalizeText(state.activeJob?.result?.run_id || "");
+  const activeJobId = normalizeText(state.activeJob?.id || "");
+  if (activeRunId && activeJobId && runMap.has(activeRunId)) {
+    const pendingSession = state.agentSessions.find((session) => normalizeText(session.pending_job_id || "") === activeJobId);
+    if (pendingSession) {
+      nextMap[activeRunId] = pendingSession.id;
+    }
+  }
+
+  const unassignedRuns = (state.runs || [])
+    .filter((run) => !nextMap[run.id])
+    .slice()
+    .sort((left, right) => Number(left.started_at || left.created_at || 0) - Number(right.started_at || right.created_at || 0));
+
+  const pendingSessions = state.agentSessions
+    .filter((session) => {
+      if (!normalizeText(session.pending_job_id || "")) return false;
+      const pendingJob = getAgentSessionPendingJob(session);
+      return !pendingJob || !isTerminalRecord(pendingJob);
+    })
+    .slice()
+    .sort((left, right) => Number(left.updated_at || left.created_at || 0) - Number(right.updated_at || right.created_at || 0));
+
+  for (const session of pendingSessions) {
+    const pendingTask = getAgentSessionPendingTask(session, { allowOrphan: true });
+    const sessionUpdatedAt = Number(session.updated_at || session.created_at || 0);
+    const candidateRun =
+      unassignedRuns.find((run) => {
+        if (nextMap[run.id]) return false;
+        const runActivityAt = getRunActivityTimestamp(run);
+        if (runActivityAt + 2 < sessionUpdatedAt) return false;
+        if (pendingTask && normalizeText(run.task || "") !== pendingTask) return false;
+        return true;
+      }) ||
+      unassignedRuns.find((run) => {
+        if (nextMap[run.id]) return false;
+        const runActivityAt = getRunActivityTimestamp(run);
+        return runActivityAt + 2 >= sessionUpdatedAt;
+      });
+    if (candidateRun) {
+      nextMap[candidateRun.id] = session.id;
+    }
+  }
+
+  for (const run of unassignedRuns) {
+    if (nextMap[run.id]) continue;
+    const timestamp = Number(run.started_at || run.created_at || Math.floor(Date.now() / 1000));
+    const session = {
+      id: generateAgentSessionId(),
+      title: normalizeText(run.task || ""),
+      created_at: timestamp,
+      updated_at: Number(run.finished_at || run.started_at || run.created_at || timestamp),
+      run_ids: [run.id],
+      pending_task: "",
+      pending_job_id: "",
+    };
+    state.agentSessions.push(session);
+    nextMap[run.id] = session.id;
+  }
+
+  state.agentSessions = state.agentSessions
+    .map((session) => {
+      const runIds = Object.entries(nextMap)
+        .filter(([, sessionId]) => sessionId === session.id)
+        .map(([runId]) => runId)
+        .sort((left, right) => {
+          const leftRun = runMap.get(left);
+          const rightRun = runMap.get(right);
+          return Number(leftRun?.started_at || leftRun?.created_at || 0) - Number(rightRun?.started_at || rightRun?.created_at || 0);
+        });
+      const latestRun = runIds.length ? runMap.get(runIds[runIds.length - 1]) : null;
+      const pendingTask = getAgentSessionPendingTask(session, { allowOrphan: true });
+      const pendingJobId = normalizeText(session.pending_job_id || "");
+      const pendingJob = pendingJobId ? getAgentSessionPendingJob(session) : null;
+      const pendingJobTerminal = Boolean(pendingJob && isTerminalRecord(pendingJob));
+      const pendingJobOrphaned = isAgentSessionPendingJobOrphaned(session);
+      const pendingRunAssigned = runIds.some((runId) => {
+        const run = runMap.get(runId);
+        if (!run) return false;
+        const runActivityAt = getRunActivityTimestamp(run);
+        const sessionUpdatedAt = Number(session.updated_at || session.created_at || 0);
+        if (runActivityAt + 2 < sessionUpdatedAt) return false;
+        if (pendingTask && normalizeText(run.task || "") !== pendingTask) return false;
+        return true;
+      });
+      const hasExplicitPending = Boolean(pendingJobId || normalizeText(session.pending_task || ""));
+      const shouldKeepPending = hasExplicitPending && !pendingJobTerminal && !pendingJobOrphaned && !pendingRunAssigned;
+      return {
+        ...session,
+        run_ids: runIds,
+        pending_task: shouldKeepPending ? pendingTask : "",
+        pending_job_id: shouldKeepPending ? pendingJobId : "",
+        title: session.title || normalizeText(latestRun?.task || pendingTask || ""),
+        updated_at: Math.max(
+          Number(session.updated_at || session.created_at || 0),
+          Number(latestRun?.finished_at || latestRun?.started_at || latestRun?.created_at || 0)
+        ),
+      };
+    })
+    .filter((session) => session.run_ids.length || getAgentSessionPendingTask(session))
+    .sort((left, right) => Number(right.updated_at || 0) - Number(left.updated_at || 0));
+
+  state.agentRunSessionMap = nextMap;
+  if (state.pendingTask && !state.activeJob) {
+    const pendingTask = normalizeText(state.pendingTask);
+    const hasPendingSession = state.agentSessions.some(
+      (session) => normalizeText(getAgentSessionPendingTask(session)) === pendingTask
+    );
+    if (!hasPendingSession) {
+      state.pendingTask = null;
+    }
+  }
+  if (state.selectedAgentSessionId && !getSelectedAgentSession()) {
+    state.selectedAgentSessionId = null;
+    if (state.historySelection?.kind === "agent") {
+      persistHistorySelection(null);
+    }
+    if (!state.selectedRunId && !state.selectedRunDetails && !state.pendingTask && !state.activeJob) {
+      state.showWelcome = true;
+      state.loadingRunDetails = false;
+    }
+  }
+  if (!state.selectedAgentSessionId && !state.showWelcome) {
+    const latestSessionId = findLatestNonEmptyAgentSessionId();
+    if (latestSessionId) {
+      state.selectedAgentSessionId = latestSessionId;
+    } else if (!state.selectedRunId && !state.selectedRunDetails && !state.pendingTask && !state.activeJob) {
+      state.showWelcome = true;
+      state.loadingRunDetails = false;
+    }
+  }
+  if (beforeSessions !== JSON.stringify(state.agentSessions || []) || beforeMap !== JSON.stringify(state.agentRunSessionMap || {})) {
+    persistAgentSessions();
+    persistAgentRunSessionMap();
+  }
 }
 
 function ensureChatSession(seedText = "") {
@@ -3714,15 +5872,22 @@ function looksLikeAgentTaskForUi(text) {
 }
 
 function buildSidebarHistoryItems() {
-  const runItems = state.runs.map((run) => ({
-    kind: "run",
-    id: run.id,
-    updatedAt: Number(run.finished_at || run.started_at || run.created_at || 0),
-    title: normalizeText(run.task || ""),
-    label: buildSidebarHistoryTitle(run.task),
-    active: state.uiMode !== "chat" && !state.showWelcome && state.selectedRunId === run.id,
-    task: run.task,
-  }));
+  const agentItems = state.agentSessions
+    .filter((session) => (session.run_ids || []).length || getAgentSessionPendingTask(session))
+    .map((session) => {
+      const runs = getAgentSessionRuns(session);
+      const latestRun = runs[runs.length - 1] || null;
+      const task = latestRun?.task || getAgentSessionPendingTask(session) || session.title || "";
+      return {
+        kind: "agent",
+        id: session.id,
+        updatedAt: Number(session.updated_at || latestRun?.finished_at || latestRun?.started_at || latestRun?.created_at || 0),
+        title: normalizeText(task),
+        label: buildSidebarHistoryTitle(task),
+        active: state.uiMode !== "chat" && !state.showWelcome && state.selectedAgentSessionId === session.id,
+        task,
+      };
+    });
   const chatItems = state.chatSessions
     .filter((session) => (session.messages || []).length)
     .map((session) => ({
@@ -3735,7 +5900,7 @@ function buildSidebarHistoryItems() {
       task: session.title,
     }));
 
-  return [...chatItems, ...runItems].sort((left, right) => right.updatedAt - left.updatedAt);
+  return [...chatItems, ...agentItems].sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
 function renderTopbar() {
@@ -3804,7 +5969,9 @@ function renderSidebarRuns() {
       const targetAttr =
         item.kind === "chat"
           ? `data-chat-session-id="${escapeHtml(item.id)}"`
-          : `data-run-id="${escapeHtml(item.id)}"`;
+          : item.kind === "agent"
+            ? `data-agent-session-id="${escapeHtml(item.id)}"`
+            : `data-run-id="${escapeHtml(item.id)}"`;
       return `
         <button
           class="history-item history-item--${item.kind}${item.active ? " active" : ""}"
@@ -3823,6 +5990,13 @@ function renderSidebarRuns() {
 }
 
 function renderMixedHistoryBadge(item) {
+  if (item.kind === "agent") {
+    return `
+      <span class="history-item__badge history-item__badge--agent" aria-hidden="true">
+        <i></i>
+      </span>
+    `;
+  }
   if (item.kind !== "chat") {
     return renderHistoryBadge(item.task);
   }
@@ -3845,8 +6019,11 @@ function renderMixedHistoryBadge(item) {
 function getAgentConversationContext() {
   if (state.activeJob) return { type: "active", active: state.activeJob };
   if (state.pendingTask) return { type: "pending", task: state.pendingTask };
+  const selectedPendingTask = getAgentSessionPendingTask(getSelectedAgentSession());
+  if (selectedPendingTask) return { type: "pending", task: selectedPendingTask };
   if (state.loadingRunDetails && state.selectedRunId && !state.selectedRunDetails) return { type: "loading" };
   if (!state.showWelcome && state.selectedRunDetails) return { type: "run", details: state.selectedRunDetails };
+  if (!state.showWelcome && getSelectedAgentSession()) return { type: "session" };
   return { type: "welcome" };
 }
 
@@ -3879,15 +6056,17 @@ function setConversationLayoutContext(value) {
 function buildWelcomeRecentItems() {
   const recentItems = [];
 
-  for (const run of state.runs || []) {
-    const title = cleanRunTitle(run.task || run.id || "");
+  for (const session of state.agentSessions || []) {
+    const runs = getAgentSessionRuns(session);
+    const latestRun = runs[runs.length - 1] || null;
+    const title = cleanRunTitle(latestRun?.task || getAgentSessionPendingTask(session) || session.title || "");
     if (!title) continue;
     recentItems.push({
-      key: `run-${run.id || title}`,
+      key: `agent-${session.id || title}`,
       kind: tr("Agent", "Agent"),
       title,
-      meta: formatShortTime(run.created_at || run.started_at || run.finished_at),
-      timestamp: Number(run.created_at || run.started_at || run.finished_at || 0),
+      meta: formatShortTime(session.updated_at || latestRun?.created_at || latestRun?.started_at || latestRun?.finished_at),
+      timestamp: Number(session.updated_at || latestRun?.created_at || latestRun?.started_at || latestRun?.finished_at || 0),
     });
   }
 
@@ -4009,23 +6188,53 @@ function renderWelcomeMessage() {
   `;
 }
 
+function renderAgentSessionConversation(session, context) {
+  const messages = [];
+  const sessionRuns = getAgentSessionRuns(session);
+  const selectedDetailsId = state.selectedRunDetails?.id || null;
+  const activeRunId = normalizeText(context?.active?.result?.run_id || "");
+
+  for (const run of sessionRuns) {
+    if (activeRunId && run.id === activeRunId) {
+      continue;
+    }
+    const record = selectedDetailsId === run.id ? state.selectedRunDetails : run;
+    messages.push(renderUserMessage(record.task || session?.title || ""));
+    messages.push(...renderCompletedConversation(record));
+  }
+
+  if (context.type === "pending") {
+    messages.push(renderUserMessage(context.task || session?.pending_task || ""));
+    messages.push(renderPendingMessage(context.task || session?.pending_task || ""));
+  } else if (context.type === "active") {
+    messages.push(renderUserMessage(context.active.task || session?.pending_task || ""));
+    messages.push(renderRunningMessage(context.active));
+  } else if (context.type === "loading") {
+    messages.push(renderLoadingMessage());
+  } else if (context.type === "run" && (!sessionRuns.length || selectedDetailsId !== sessionRuns[sessionRuns.length - 1]?.id)) {
+    messages.push(renderUserMessage(context.details.task || session?.title || ""));
+    messages.push(...renderCompletedConversation(context.details));
+  }
+
+  return messages;
+}
+
 function renderAgentChat() {
   const context = getAgentConversationContext();
+  const session = getSelectedAgentSession();
   const messages = [];
+  let previewMessage = "";
 
   if (context.type === "welcome") {
     messages.push(renderWelcomeMessage());
-  } else if (context.type === "pending") {
-    messages.push(renderUserMessage(context.task));
-    messages.push(renderPendingMessage(context.task));
-  } else if (context.type === "loading") {
-    messages.push(renderLoadingMessage());
-  } else if (context.type === "active") {
-    messages.push(renderUserMessage(context.active.task || ""));
-    messages.push(renderRunningMessage(context.active));
-  } else if (context.type === "run") {
-    messages.push(renderUserMessage(context.details.task || ""));
-    messages.push(...renderCompletedConversation(context.details));
+  } else {
+    messages.push(...renderAgentSessionConversation(session, context));
+  }
+  if (!["active", "pending", "loading"].includes(context.type)) {
+    previewMessage = renderTaskPreviewMessage();
+    if (previewMessage) {
+      messages.push(previewMessage);
+    }
   }
 
   elements.chatStream.innerHTML = messages.join("");
@@ -4033,7 +6242,7 @@ function renderAgentChat() {
   renderComposerSuggestions(context);
   renderComposerState(context);
 
-  if (context.type === "active" || context.type === "pending") {
+  if (context.type === "active" || context.type === "pending" || previewMessage) {
     window.requestAnimationFrame(() => {
       elements.chatScroll.scrollTop = elements.chatScroll.scrollHeight;
     });
@@ -4140,12 +6349,18 @@ function handleHistoryClick(event) {
     return;
   }
 
+  const agentButton = event.target.closest("[data-agent-session-id]");
+  if (agentButton) {
+    selectAgentSession(agentButton.dataset.agentSessionId);
+    return;
+  }
+
   const runButton = event.target.closest("[data-run-id]");
   if (!runButton) return;
   selectRun(runButton.dataset.runId, { manualSelection: true });
 }
 
-function handleInteractiveClick(event) {
+async function handleInteractiveClick(event) {
   const lightboxTrigger = event.target.closest("[data-lightbox-src]");
   if (lightboxTrigger) {
     openLightbox(lightboxTrigger.dataset.lightboxSrc, lightboxTrigger.dataset.lightboxCaption);
@@ -4161,6 +6376,49 @@ function handleInteractiveClick(event) {
   const startAgentTrigger = event.target.closest("[data-start-agent-task]");
   if (startAgentTrigger) {
     prefillTask(startAgentTrigger.dataset.startAgentTask || "");
+    return;
+  }
+
+  const submitPreviewTrigger = event.target.closest("[data-submit-preview-task]");
+  if (submitPreviewTrigger) {
+    const previewTask = normalizeText(submitPreviewTrigger.dataset.submitPreviewTask || state.taskPreviewTask || "");
+    if (previewTask) {
+      const previewValidation = getPreviewTaskGraphValidation(previewTask);
+      if (!previewValidation.ok) {
+        const message = formatPreviewValidationReason(previewValidation.reason, previewValidation);
+        state.taskPreviewStartError = message;
+        state.taskPreviewError = state.taskPreview ? "" : message;
+        elements.submitHint.textContent = message;
+        renderAll();
+        return;
+      }
+      await submitAgentTask(previewTask, { previewReviewed: previewRequiresReview(state.taskPreview) });
+    }
+    return;
+  }
+
+  const previewTrigger = event.target.closest("[data-preview-task]");
+  if (previewTrigger) {
+    const previewTask = normalizeText(previewTrigger.dataset.previewTask || state.taskPreviewTask || "");
+    if (previewTask) {
+      elements.taskInput.value = previewTask;
+    }
+    await handlePreviewTask();
+    return;
+  }
+
+  const jobDecisionTrigger = event.target.closest("[data-job-decision]");
+  if (jobDecisionTrigger) {
+    await handleJobDecision(
+      jobDecisionTrigger.dataset.jobId || "",
+      jobDecisionTrigger.dataset.jobDecision || ""
+    );
+    return;
+  }
+
+  const resumeRunTrigger = event.target.closest("[data-resume-run-id]");
+  if (resumeRunTrigger) {
+    await resumeRun(resumeRunTrigger.dataset.resumeRunId || "");
     return;
   }
 
@@ -4222,6 +6480,140 @@ async function handleSubmit(event) {
   await submitAgentTask(text);
 }
 
+function clearTaskPreview({ render = false } = {}) {
+  taskPreviewRequestToken += 1;
+  state.taskPreview = null;
+  state.taskPreviewTask = "";
+  state.taskPreviewConfigSignature = "";
+  state.taskPreviewLoading = false;
+  state.taskPreviewError = "";
+  state.taskPreviewStartError = "";
+  if (render) {
+    renderAll();
+  }
+}
+
+function hasTaskPreviewState() {
+  return Boolean(
+    state.taskPreview ||
+      state.taskPreviewTask ||
+      state.taskPreviewLoading ||
+      state.taskPreviewError ||
+      state.taskPreviewStartError
+  );
+}
+
+function clearTaskPreviewAfterConfigChange({ render = true } = {}) {
+  const hadPreview = hasTaskPreviewState();
+  clearTaskPreview({ render });
+  if (hadPreview && elements.submitHint) {
+    elements.submitHint.textContent = tr(
+      "\u914d\u7f6e\u5df2\u53d8\u66f4\uff0c\u8bf7\u5237\u65b0\u89c4\u5212\u9884\u89c8",
+      "Settings changed; refresh the plan preview."
+    );
+  }
+}
+
+function handleTaskInputChange() {
+  const currentTask = elements.taskInput.value.trim();
+  if (!state.taskPreviewTask) return;
+  if (currentTask === state.taskPreviewTask) return;
+  clearTaskPreview({ render: true });
+}
+
+function handleRunLimitChange() {
+  if (hasTaskPreviewState()) {
+    clearTaskPreviewAfterConfigChange({ render: true });
+  }
+}
+
+async function handlePreviewTask() {
+  if (state.uiMode === "chat") {
+    elements.submitHint.textContent = tr("\u5148\u5207\u5230 Agent \u6a21\u5f0f\u518d\u9884\u89c8\u89c4\u5212", "Switch to Agent mode to preview a plan");
+    return;
+  }
+  if (state.activeJob || hasPendingTaskRequest()) {
+    elements.submitHint.textContent = formatTaskBusyMessage();
+    return;
+  }
+  if (!isConfigHydrated()) {
+    elements.submitHint.textContent = getConfigLoadingMessage();
+    return;
+  }
+  if (state.taskPreviewLoading) {
+    elements.submitHint.textContent = formatTaskPreviewComposerHint();
+    renderAll();
+    return;
+  }
+
+  const task = elements.taskInput.value.trim();
+  if (!task) {
+    elements.submitHint.textContent = tr("\u5148\u8f93\u5165\u4efb\u52a1", "Enter a task");
+    return;
+  }
+
+  const requestToken = taskPreviewRequestToken + 1;
+  const configOverrides = buildRunConfigOverrides();
+  activatePreviewAgentSession(task);
+  taskPreviewRequestToken = requestToken;
+  state.taskPreview = null;
+  state.taskPreviewTask = task;
+  state.taskPreviewConfigSignature = buildConfigSignature(configOverrides);
+  state.taskPreviewLoading = true;
+  state.taskPreviewError = "";
+  state.taskPreviewStartError = "";
+  elements.submitHint.textContent = tr("\u6b63\u5728\u751f\u6210\u89c4\u5212\u9884\u89c8", "Generating plan preview");
+  renderAll();
+
+  const response = await postJson("/api/tasks/preview", {
+    task,
+    config_overrides: configOverrides,
+  });
+  if (requestToken !== taskPreviewRequestToken) return;
+
+  state.taskPreviewLoading = false;
+  if (!response.ok) {
+    state.taskPreview = null;
+    state.taskPreviewError =
+      response.payload?.error || tr("\u65e0\u6cd5\u751f\u6210\u89c4\u5212\u9884\u89c8", "Could not generate the plan preview");
+    state.taskPreviewStartError = "";
+    elements.submitHint.textContent = state.taskPreviewError;
+    renderAll();
+    return;
+  }
+
+  state.taskPreview = response.payload || null;
+  state.taskPreviewTask = normalizeText(response.payload?.task || task);
+  state.taskPreviewConfigSignature = buildConfigSignature(configOverrides);
+  state.taskPreviewError = "";
+  state.taskPreviewStartError = "";
+  elements.submitHint.textContent = formatPreviewReadyHint(state.taskPreviewTask);
+  renderAll();
+}
+
+function formatPreviewReadyHint(task) {
+  const validation = getPreviewTaskGraphValidation(task);
+  if (!validation.ok) {
+    return formatPreviewValidationReason(validation.reason, validation);
+  }
+  if (previewRequiresReview(state.taskPreview)) {
+    return tr("\u89c4\u5212\u5df2\u751f\u6210\uff0c\u542f\u52a8\u524d\u9700\u8981\u6279\u51c6", "Plan preview ready; approval is required before starting.");
+  }
+  return tr("\u89c4\u5212\u9884\u89c8\u5df2\u5c31\u7eea", "Plan preview ready");
+}
+
+function formatTaskPreviewComposerHint() {
+  if (state.taskPreviewLoading) {
+    return tr("\u6b63\u5728\u751f\u6210\u89c4\u5212\u9884\u89c8", "Generating plan preview");
+  }
+  if (state.taskPreviewError) return state.taskPreviewError;
+  if (state.taskPreviewStartError) return state.taskPreviewStartError;
+  if (state.taskPreview) {
+    return formatPreviewReadyHint(state.taskPreviewTask || state.taskPreview.task || "");
+  }
+  return "";
+}
+
 async function submitChatMessage(text) {
   const session = ensureChatSession(text);
   appendChatMessage(session.id, { role: "user", content: text });
@@ -4254,27 +6646,73 @@ async function submitChatMessage(text) {
   renderAll();
 }
 
-async function submitAgentTask(taskText) {
+async function submitAgentTask(taskText, options = {}) {
+  const cleanTask = taskText.trim();
+  if (state.activeJob || hasPendingTaskRequest()) {
+    elements.submitHint.textContent = formatTaskBusyMessage();
+    renderAll();
+    return;
+  }
+  if (state.taskPreviewLoading) {
+    elements.submitHint.textContent = formatTaskPreviewComposerHint();
+    renderAll();
+    return;
+  }
+  const configOverrides = buildRunConfigOverrides();
+  const previewValidation = getPreviewTaskGraphValidation(cleanTask);
+  if (previewValidation.reason === "autonomy_blocked" || previewValidation.reason === "start_blocked") {
+    const message = formatPreviewValidationReason(previewValidation.reason, previewValidation);
+    state.taskPreviewStartError = message;
+    state.taskPreviewError = state.taskPreview ? "" : message;
+    elements.submitHint.textContent = message;
+    renderAll();
+    return;
+  }
+  const existingPreviewStartError = normalizeText(state.taskPreviewStartError || "");
+  if (existingPreviewStartError && state.taskPreview && previewValidation.reason !== "task_mismatch") {
+    elements.submitHint.textContent = existingPreviewStartError;
+    renderAll();
+    return;
+  }
+  state.taskPreviewStartError = "";
+  const previewTaskGraph = previewValidation.ok ? previewValidation.graph : null;
   const payload = {
-    task: taskText.trim(),
+    task: cleanTask,
     planner_mode: "auto",
     dry_run: false,
     max_steps: elements.maxStepsInput.value ? Number(elements.maxStepsInput.value) : null,
     pause_after_action: elements.pauseInput.value ? Number(elements.pauseInput.value) : null,
-    config_overrides: buildConfigOverrides(),
+    config_overrides: configOverrides,
   };
+  if (previewTaskGraph) {
+    payload.task_graph = previewTaskGraph;
+    const previewSignature = getPreviewTaskGraphSignatureForTask(cleanTask);
+    if (previewSignature) {
+      payload.task_graph_signature = previewSignature;
+      if (options.previewReviewed) {
+        payload.task_graph_review_status = "approved";
+        payload.task_graph_review_signature = previewSignature;
+      }
+    }
+  }
 
   if (!payload.task) {
     elements.submitHint.textContent = tr("先输入任务", "Enter a task");
     return;
   }
 
+  const agentSession = ensureAgentSession(payload.task);
+  agentSession.pending_task = payload.task;
+  agentSession.updated_at = Math.floor(Date.now() / 1000);
+  state.selectedAgentSessionId = agentSession.id;
   state.pendingTask = payload.task;
   state.showWelcome = false;
   state.autoFollowLatest = true;
   state.selectedRunId = null;
   state.selectedRunDetails = null;
   clearHistorySelection("run");
+  persistHistorySelection({ kind: "agent", id: agentSession.id });
+  persistAgentSessions();
   if (state.uiMode !== "agent") {
     setUiMode("agent");
   }
@@ -4282,15 +6720,313 @@ async function submitAgentTask(taskText) {
 
   const response = await postJson("/api/tasks", payload);
   if (!response.ok) {
-    state.pendingTask = null;
-    elements.submitHint.textContent = response.payload?.error || tr("任务提交失败", "Task submission failed");
+    const errorMessage = response.payload?.error || tr("任务提交失败", "Task submission failed");
+    clearAgentRequestPendingState(agentSession);
+    if (state.taskPreview) {
+      state.taskPreviewStartError = errorMessage;
+      state.taskPreviewError = "";
+    }
+    elements.submitHint.textContent = errorMessage;
     renderAll();
     return;
   }
 
+  const responseJobId = normalizeText(response.payload?.id || "");
+  if (!responseJobId) {
+    const errorMessage = response.payload?.error || tr(
+      "\u672c\u5730\u670d\u52a1\u6ca1\u6709\u8fd4\u56de\u53ef\u8ddf\u8e2a\u7684\u4efb\u52a1 ID\u3002",
+      "Task submission did not return a trackable job id."
+    );
+    clearAgentRequestPendingState(agentSession);
+    if (state.taskPreview) {
+      state.taskPreviewStartError = errorMessage;
+      state.taskPreviewError = "";
+    }
+    elements.submitHint.textContent = errorMessage;
+    renderAll();
+    return;
+  }
+
+  clearTaskPreview();
+  agentSession.pending_job_id = responseJobId;
+  const activated = activateSubmittedJob(response.payload, agentSession);
+  persistAgentSessions();
   elements.taskInput.value = "";
-  elements.submitHint.textContent = tr("任务已发送", "Queued");
+  elements.submitHint.textContent = activated ? formatAgentJobState(response.payload).label : tr("\u4efb\u52a1\u5df2\u53d1\u9001", "Queued");
+  renderAll();
   await refreshOverview({ forceLatest: true });
+}
+
+async function resumeRun(runId) {
+  const cleanRunId = normalizeText(runId);
+  if (!cleanRunId) return;
+
+  if (state.activeJob || hasPendingTaskRequest()) {
+    elements.submitHint.textContent = formatTaskBusyMessage();
+    return;
+  }
+
+  if (!isConfigHydrated()) {
+    elements.submitHint.textContent = getConfigLoadingMessage();
+    return;
+  }
+
+  const details =
+    state.selectedRunDetails?.id === cleanRunId
+      ? state.selectedRunDetails
+      : state.runs.find((run) => run.id === cleanRunId) || null;
+  if (details && !canResumeRun(details)) {
+    elements.submitHint.textContent = formatResumeUnavailableReason(details);
+    renderAll();
+    return;
+  }
+  const task = normalizeText(details?.task || cleanRunId);
+  const configOverrides = buildRunConfigOverrides();
+  clearTaskPreview();
+
+  let agentSession = state.agentSessions.find((session) => (session.run_ids || []).includes(cleanRunId)) || null;
+  const now = Math.floor(Date.now() / 1000);
+  if (!agentSession) {
+    agentSession = {
+      id: generateAgentSessionId(),
+      title: task,
+      created_at: now,
+      updated_at: now,
+      run_ids: [cleanRunId],
+      pending_task: "",
+      pending_job_id: "",
+    };
+    state.agentSessions = [agentSession, ...state.agentSessions];
+  } else if (!agentSession.run_ids.includes(cleanRunId)) {
+    agentSession.run_ids.push(cleanRunId);
+  }
+
+  state.agentRunSessionMap[cleanRunId] = agentSession.id;
+  agentSession.pending_task = task;
+  agentSession.updated_at = now;
+  state.selectedAgentSessionId = agentSession.id;
+  state.pendingTask = task;
+  state.resumePendingRunId = cleanRunId;
+  state.showWelcome = false;
+  state.autoFollowLatest = true;
+  state.selectedRunId = cleanRunId;
+  state.uiMode = "agent";
+  safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
+  persistHistorySelection({ kind: "agent", id: agentSession.id });
+  persistAgentSessions();
+  persistAgentRunSessionMap();
+  elements.submitHint.textContent = tr("正在恢复执行", "Resuming run");
+  renderAll();
+
+  const response = await postJson(`/api/runs/${encodeURIComponent(cleanRunId)}/resume`, {
+    max_steps: elements.maxStepsInput.value ? Number(elements.maxStepsInput.value) : null,
+    pause_after_action: elements.pauseInput.value ? Number(elements.pauseInput.value) : null,
+    config_overrides: configOverrides,
+  });
+  if (!response.ok) {
+    clearAgentRequestPendingState(agentSession);
+    elements.submitHint.textContent = response.payload?.error || tr("恢复执行失败", "Resume failed");
+    renderAll();
+    return;
+  }
+
+  const responseJobId = normalizeText(response.payload?.id || "");
+  if (!responseJobId) {
+    clearAgentRequestPendingState(agentSession);
+    elements.submitHint.textContent = response.payload?.error || tr(
+      "\u672c\u5730\u670d\u52a1\u6ca1\u6709\u8fd4\u56de\u53ef\u8ddf\u8e2a\u7684\u6062\u590d\u4efb\u52a1 ID\u3002",
+      "Resume did not return a trackable job id."
+    );
+    renderAll();
+    return;
+  }
+
+  agentSession.pending_job_id = responseJobId;
+  const activated = activateSubmittedJob(response.payload, agentSession);
+  state.resumePendingRunId = "";
+  persistAgentSessions();
+  elements.submitHint.textContent = activated
+    ? formatAgentJobState(response.payload).label
+    : tr("\u5df2\u6062\u590d\uff0c\u7ee7\u7eed\u6267\u884c", "Resumed; continuing");
+  renderAll();
+  await refreshOverview({ forceLatest: true });
+}
+
+function getPreviewTaskGraphForTask(task) {
+  const validation = getPreviewTaskGraphValidation(task);
+  return validation.ok ? validation.graph : null;
+}
+
+function getPreviewTaskGraphSignatureForTask(task) {
+  const validation = getPreviewTaskGraphValidation(task);
+  return validation.ok ? validation.signature : "";
+}
+
+function getPreviewTaskGraphValidation(task) {
+  const cleanTask = normalizeText(task);
+  if (!cleanTask || !state.taskPreview || typeof state.taskPreview !== "object") {
+    return { ok: false, reason: "missing_preview", graph: null, signature: "" };
+  }
+  const previewTask = normalizeText(state.taskPreview.task || state.taskPreviewTask || "");
+  if (previewTask !== cleanTask) {
+    return { ok: false, reason: "task_mismatch", graph: null, signature: "" };
+  }
+  if (state.taskPreviewConfigSignature !== buildConfigSignature(buildRunConfigOverrides())) {
+    return { ok: false, reason: "config_mismatch", graph: null, signature: "" };
+  }
+  const signature = normalizeText(state.taskPreview.task_graph_signature || "");
+  if (!signature) {
+    return { ok: false, reason: "missing_signature", graph: null, signature: "" };
+  }
+  const graph = state.taskPreview.task_graph;
+  if (!graph || typeof graph !== "object" || !Array.isArray(graph.subgoals) || !graph.subgoals.length) {
+    return { ok: false, reason: "missing_graph", graph: null, signature };
+  }
+  const backendBlocker = previewBackendStartBlocker(state.taskPreview);
+  if (backendBlocker) {
+    return { ok: false, reason: "start_blocked", graph: null, signature, message: backendBlocker };
+  }
+  const autonomyBlocker = previewStartBlocker(state.taskPreview);
+  if (autonomyBlocker) {
+    return { ok: false, reason: "autonomy_blocked", graph: null, signature, message: autonomyBlocker };
+  }
+  return { ok: true, reason: "", graph, signature };
+}
+
+function getPreviewPlanHealth(preview) {
+  if (!preview || typeof preview !== "object") return null;
+  if (preview.plan_health && typeof preview.plan_health === "object") return preview.plan_health;
+  if (preview.summary?.plan_health && typeof preview.summary.plan_health === "object") {
+    return preview.summary.plan_health;
+  }
+  return null;
+}
+
+function previewRequiresReview(preview) {
+  if (!preview || typeof preview !== "object") return false;
+  if (isBooleanTrue(preview.requires_review)) return true;
+  const planHealth = getPreviewPlanHealth(preview);
+  const autonomy = planHealth?.autonomy && typeof planHealth.autonomy === "object" ? planHealth.autonomy : null;
+  if (!autonomy) return false;
+  const status = normalizeText(autonomy.status || "").toLowerCase();
+  const nextAction = normalizeText(autonomy.next_action || "").toLowerCase();
+  return (
+    status === "review_required" ||
+    nextAction.startsWith("approve_") ||
+    summarizeOptionalBoolean(autonomy.requires_review) === true
+  );
+}
+
+function previewStartBlocker(preview) {
+  if (!preview || typeof preview !== "object" || previewRequiresReview(preview)) return "";
+  const planHealth = getPreviewPlanHealth(preview);
+  const autonomy = planHealth?.autonomy && typeof planHealth.autonomy === "object" ? planHealth.autonomy : null;
+  if (!autonomy) return "";
+  const status = normalizeText(autonomy.status || "").toLowerCase();
+  const nextAction = normalizeText(autonomy.next_action || "").toLowerCase();
+  const canContinue = summarizeOptionalBoolean(autonomy.can_continue);
+  const requiresUser = summarizeOptionalBoolean(autonomy.requires_user);
+  const blockers = Array.isArray(autonomy.blockers) ? autonomy.blockers.map(normalizeText).filter(Boolean) : [];
+  const firstBlocker = blockers[0] || "";
+  if (status === "needs_clarification" || nextAction === "ask_user" || requiresUser === true) {
+    return firstBlocker || tr(
+      "\u8bf7\u5148\u8865\u5145\u4efb\u52a1\u76ee\u6807\u6216\u76ee\u6807\u4f4d\u7f6e\uff0c\u518d\u5f00\u59cb\u6267\u884c\u3002",
+      "Clarify the task before starting."
+    );
+  }
+  if (status === "blocked" || nextAction === "recover_or_replan" || nextAction === "inspect_failure" || canContinue === false) {
+    return firstBlocker || formatAutonomyActionLabel(nextAction) || tr(
+      "\u5f53\u524d\u9884\u89c8\u8fd8\u4e0d\u80fd\u76f4\u63a5\u542f\u52a8\uff0c\u8bf7\u5237\u65b0\u89c4\u5212\u6216\u8c03\u6574\u4efb\u52a1\u3002",
+      "The preview is not ready to start; refresh the plan or adjust the task."
+    );
+  }
+  return "";
+}
+
+function previewBackendStartBlocker(preview) {
+  if (!preview || typeof preview !== "object" || previewRequiresReview(preview)) return "";
+  const backendBlocker = normalizeText(preview.start_blocker || "");
+  if (backendBlocker) return backendBlocker;
+  if (summarizeOptionalBoolean(preview.can_start) === false) {
+    return tr(
+      "\u5f53\u524d\u9884\u89c8\u8fd8\u4e0d\u80fd\u76f4\u63a5\u542f\u52a8\uff0c\u8bf7\u5237\u65b0\u89c4\u5212\u6216\u8c03\u6574\u4efb\u52a1\u3002",
+      "The preview is not ready to start; refresh the plan or adjust the task."
+    );
+  }
+  return "";
+}
+
+function formatPreviewValidationReason(reason, validation = null) {
+  if (reason === "start_blocked") {
+    return normalizeText(validation?.message || "") || tr(
+      "\u5f53\u524d\u9884\u89c8\u8fd8\u4e0d\u80fd\u76f4\u63a5\u542f\u52a8\uff0c\u8bf7\u5237\u65b0\u89c4\u5212\u6216\u8c03\u6574\u4efb\u52a1\u3002",
+      "The preview is not ready to start; refresh the plan or adjust the task."
+    );
+  }
+  if (reason === "autonomy_blocked") {
+    return normalizeText(validation?.message || "") || tr(
+      "\u8be5\u9884\u89c8\u9700\u8981\u5148\u5904\u7406\u81ea\u4e3b\u89c4\u5212\u5361\u70b9\u3002",
+      "The preview needs an autonomy checkpoint before starting."
+    );
+  }
+  if (reason === "config_mismatch") {
+    return tr("\u89c4\u5212\u914d\u7f6e\u5df2\u53d8\u66f4\uff0c\u8bf7\u5237\u65b0\u9884\u89c8", "Planning settings changed; refresh the preview before starting.");
+  }
+  if (reason === "task_mismatch") {
+    return tr("\u4efb\u52a1\u5185\u5bb9\u5df2\u53d8\u66f4\uff0c\u8bf7\u5237\u65b0\u9884\u89c8", "Task text changed; refresh the preview before starting.");
+  }
+  if (reason === "missing_graph") {
+    return tr("\u9884\u89c8\u4e2d\u6ca1\u6709\u53ef\u6267\u884c\u89c4\u5212\uff0c\u8bf7\u91cd\u65b0\u751f\u6210", "The preview has no executable plan; refresh it before starting.");
+  }
+  return tr("\u8bf7\u5148\u5237\u65b0\u89c4\u5212\u9884\u89c8\u518d\u5f00\u59cb", "Refresh the plan preview before starting.");
+}
+
+async function clearHistoryRecords() {
+  if (state.activeJob || hasPendingTaskRequest()) {
+    window.alert(tr(
+      "\u6709\u4efb\u52a1\u6b63\u5728\u8fd0\u884c\uff0c\u6682\u65f6\u4e0d\u80fd\u6e05\u7a7a\u5386\u53f2\u8bb0\u5f55\u3002",
+      "A task is still running, so history cannot be cleared yet."
+    ));
+    return;
+  }
+  const confirmed = window.confirm(
+    tr(
+      "确定要清空所有历史记录吗？这会删除本地运行记录和聊天记录，且无法撤销。",
+      "Clear all history? This removes local runs and chat history and cannot be undone."
+    )
+  );
+  if (!confirmed) return;
+
+  const response = await postJson("/api/history/clear", {});
+  if (!response.ok) {
+    window.alert(response.payload?.error || tr("清空历史记录失败。", "Failed to clear history."));
+    return;
+  }
+
+  state.chatSessions = [];
+  state.agentSessions = [];
+  state.agentRunSessionMap = {};
+  state.selectedChatSessionId = null;
+  state.selectedAgentSessionId = null;
+  state.runs = [];
+  state.jobs = [];
+  state.selectedRunId = null;
+  state.selectedRunDetails = null;
+  state.loadingRunDetails = false;
+  state.pendingTask = null;
+  state.resumePendingRunId = "";
+  state.autoFollowLatest = false;
+  state.showWelcome = true;
+  clearHistorySelection();
+  persistChatSessions();
+  persistAgentSessions();
+  persistAgentRunSessionMap();
+  clearLegacyActiveChatSessionStorage();
+  writeSessionStorage(ACTIVE_CHAT_SESSION_SESSION_KEY, null);
+  safeStorageSet(OVERVIEW_CACHE_KEY, null);
+  closeSidebar();
+  renderAll();
+  await refreshOverview({ forceDetailRefresh: true });
 }
 
 function handleGlobalKeydown(event) {
@@ -4346,6 +7082,12 @@ function setUiMode(mode) {
 function startNewTask() {
   closeSidebar();
   closeDrawer();
+  if (state.uiMode !== "chat" && hasPendingTaskRequest()) {
+    elements.submitHint.textContent = formatTaskBusyMessage();
+    renderAll();
+    return;
+  }
+  clearTaskPreview();
 
   if (state.uiMode === "chat") {
     if (state.chatPending) {
@@ -4362,13 +7104,16 @@ function startNewTask() {
     return;
   }
 
+  pruneEmptyAgentSessions();
+  state.selectedAgentSessionId = null;
   state.showWelcome = true;
   state.selectedRunId = null;
   state.selectedRunDetails = null;
   state.loadingRunDetails = false;
   state.pendingTask = null;
+  state.resumePendingRunId = "";
   state.autoFollowLatest = false;
-  clearHistorySelection("run");
+  clearHistorySelection("agent");
   if (state.uiMode !== "agent") {
     state.uiMode = "agent";
     safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
@@ -4380,6 +7125,7 @@ function startNewTask() {
 }
 
 function prefillChatMessage(text) {
+  clearTaskPreview();
   elements.taskInput.value = String(text || "");
   if (state.uiMode !== "chat") {
     setUiMode("chat");
@@ -4397,6 +7143,7 @@ function prefillChatMessage(text) {
 
 function prefillTask(task) {
   const nextTask = String(task || "").trim();
+  clearTaskPreview();
   if (nextTask) {
     elements.taskInput.value = nextTask;
   }
@@ -4420,6 +7167,14 @@ function prefillTask(task) {
 }
 
 function selectRun(runId, options = {}) {
+  if (hasPendingTaskRequest()) {
+    elements.submitHint.textContent = formatTaskBusyMessage();
+    renderAll();
+    return;
+  }
+  clearTaskPreview();
+  const containingSession = state.agentSessions.find((session) => (session.run_ids || []).includes(runId)) || null;
+  state.selectedAgentSessionId = containingSession?.id || state.selectedAgentSessionId;
   state.showWelcome = false;
   state.selectedRunId = runId;
   state.selectedRunDetails = null;
@@ -4428,7 +7183,7 @@ function selectRun(runId, options = {}) {
   state.pendingTask = null;
   state.uiMode = options.keepMode === "developer" ? "developer" : "agent";
   safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
-  persistHistorySelection({ kind: "run", id: runId });
+  persistHistorySelection(containingSession ? { kind: "agent", id: containingSession.id } : { kind: "run", id: runId });
   if (options.openDrawer) {
     state.drawerOpen = true;
   }
@@ -4437,10 +7192,37 @@ function selectRun(runId, options = {}) {
   loadRunDetails(runId, { background: false });
 }
 
+function selectAgentSession(sessionId) {
+  const session = state.agentSessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  if (hasPendingTaskRequest()) {
+    elements.submitHint.textContent = formatTaskBusyMessage();
+    renderAll();
+    return;
+  }
+  clearTaskPreview();
+  state.selectedAgentSessionId = session.id;
+  state.showWelcome = false;
+  state.pendingTask = getAgentSessionPendingTask(session) || null;
+  state.selectedRunId = getAgentSessionLatestRunId(session);
+  state.selectedRunDetails = null;
+  state.loadingRunDetails = Boolean(state.selectedRunId);
+  state.autoFollowLatest = true;
+  state.uiMode = "agent";
+  safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
+  persistHistorySelection({ kind: "agent", id: session.id });
+  closeSidebar();
+  renderAll();
+  if (state.selectedRunId) {
+    loadRunDetails(state.selectedRunId, { background: false });
+  }
+}
+
 function selectChatSession(sessionId) {
   if (state.chatPending && state.selectedChatSessionId !== sessionId) {
     stopActiveChatReply();
   }
+  clearTaskPreview();
   state.selectedChatSessionId = sessionId;
   state.uiMode = "chat";
   safeStorageSet(UI_MODE_STORAGE_KEY, state.uiMode);
@@ -4584,12 +7366,16 @@ function applyStaticCopy() {
   elements.newTaskButton?.setAttribute("aria-label", t("sidebar.newTask"));
   elements.sidebarBrandButton?.setAttribute("aria-label", sidebarToggleLabel);
   elements.sidebarBrandButton?.setAttribute("title", sidebarToggleLabel);
+  elements.mobileMenuButton?.setAttribute("aria-label", t("topbar.menu"));
+  elements.mobileMenuButton?.setAttribute("title", t("topbar.menu"));
   elements.closeSettingsButton?.setAttribute("aria-label", closeLabel);
   elements.closeDrawerButton?.setAttribute("aria-label", closeLabel);
   elements.settingsButton?.setAttribute("aria-label", t("topbar.settings"));
   elements.settingsButton?.setAttribute("title", t("topbar.settings"));
   elements.refreshRunsButton?.setAttribute("aria-label", t("common.refresh"));
   elements.refreshRunsButton?.setAttribute("title", t("common.refresh"));
+  elements.clearHistoryButton?.setAttribute("aria-label", tr("清空历史记录", "Clear history"));
+  elements.clearHistoryButton?.setAttribute("title", tr("清空历史记录", "Clear history"));
   elements.submitButton?.setAttribute("aria-label", t("chat.send"));
   elements.submitButton?.setAttribute("title", t("chat.send"));
   elements.stopButton?.setAttribute("aria-label", t("chat.stop"));
@@ -5007,7 +7793,7 @@ function formatChatPendingElapsed(startedAt) {
 function renderAssistantAvatar() {
   return `
     <div class="assistant-avatar" aria-hidden="true">
-      <img class="assistant-avatar__image" src="/assets/icons/logo-mark.png?v=${APP_ASSET_VERSION}" alt="" />
+      <img class="assistant-avatar__image" src="/assets/icons/aoryn-mark.png?v=${APP_ASSET_VERSION}" alt="" />
     </div>
   `;
 }
@@ -5167,6 +7953,582 @@ function renderAgentRunActionPreview(actions = []) {
   });
 }
 
+function renderAgentStepProposal(proposal = null) {
+  if (!isObjectRecord(proposal)) return "";
+  const intent = normalizeText(proposal.intent || proposal.current_focus || "");
+  const capability = normalizeText(proposal.capability || "");
+  const riskLevel = normalizeText(proposal.risk_level || "");
+  const targetScope = normalizeText(proposal.target_scope || "");
+  const surfaceKind = normalizeText(proposal.surface_kind || "");
+  const actions = Array.isArray(proposal.actions) ? proposal.actions.slice(0, 4).filter(isObjectRecord) : [];
+  const signals = [
+    ...(Array.isArray(proposal.progress_signals) ? proposal.progress_signals : []),
+    ...(Array.isArray(proposal.repair_strategy) ? proposal.repair_strategy : []),
+    ...(Array.isArray(proposal.remaining_steps) ? proposal.remaining_steps : []),
+  ]
+    .map((item) => normalizeText(item))
+    .filter(Boolean)
+    .slice(0, 4);
+  const details = [
+    capability ? `${tr("Capability", "Capability")}: ${capability}` : "",
+    riskLevel ? `${tr("Risk", "Risk")}: ${riskLevel}` : "",
+    targetScope ? `${tr("Scope", "Scope")}: ${targetScope}` : "",
+    surfaceKind ? `${tr("Surface", "Surface")}: ${formatSurfaceKindValue(surfaceKind)}` : "",
+    proposal.requires_approval ? tr("Requires approval", "Requires approval") : "",
+    proposal.completes_subgoal ? tr("Completes goal", "Completes goal") : "",
+  ].filter(Boolean);
+  if (!intent && !details.length && !actions.length && !signals.length) return "";
+
+  const signalMarkup = signals.length
+    ? `<div class="assistant-run__action-row">${signals
+        .map((item) => `<span class="action-pill">${escapeHtml(truncate(item, 72))}</span>`)
+        .join("")}</div>`
+    : "";
+  const actionMarkup = actions.length
+    ? `<div class="assistant-run__action-row">${actions.map(renderActionPill).join("")}</div>`
+    : "";
+
+  return renderAgentRunSection({
+    label: tr("\u4e0b\u4e00\u6b65", "Next step"),
+    title: intent || tr("\u5019\u9009\u6267\u884c\u6b65\u9aa4", "Candidate execution step"),
+    description: details.join(" | "),
+    modifier: "status",
+    body: `${signalMarkup}${actionMarkup}`,
+  });
+}
+
+function renderStepVerificationSummary(verification = null, error = "") {
+  const source = isObjectRecord(verification) ? verification : {};
+  const status = normalizeText(source.status || (error ? "failed" : ""));
+  const failureKind = normalizeText(source.failure_kind || "");
+  const message = normalizeText(source.message || error || "");
+  const evidence = Array.isArray(source.evidence) ? source.evidence.slice(0, 3).filter(isObjectRecord) : [];
+  if (!status && !failureKind && !message && !evidence.length) return "";
+  const evidenceLabels = evidence
+    .map((item) =>
+      normalizeText(item.title || item.kind || item.status || item.value || item.detail || item.selector || "")
+    )
+    .filter(Boolean)
+    .slice(0, 3);
+  const pills = [
+    status ? `${tr("Verification", "Verification")}: ${status}` : "",
+    failureKind ? `${tr("Failure", "Failure")}: ${failureKind}` : "",
+    message ? `${tr("Reason", "Reason")}: ${truncate(message, 72)}` : "",
+    ...evidenceLabels.map((item) => `${tr("Evidence", "Evidence")}: ${truncate(item, 48)}`),
+  ].filter(Boolean);
+  return pills.length
+    ? `<div class="action-row">${pills.map((item) => `<span class="action-pill">${escapeHtml(item)}</span>`).join("")}</div>`
+    : "";
+}
+
+function timelineStepStatusMeta(step = {}) {
+  const rawStatus = normalizeText(step.verification?.status || (step.error ? "failed" : "success")).toLowerCase();
+  if (rawStatus === "partial_progress") {
+    return {
+      token: "partial_progress",
+      tone: "warn",
+      label: tr("\u90e8\u5206\u8fdb\u5c55", "Partial progress"),
+    };
+  }
+  if (rawStatus === "failed" || step.error) {
+    return {
+      token: "failed",
+      tone: "bad",
+      label: tr("\u5931\u8d25", "Failed"),
+    };
+  }
+  return {
+    token: rawStatus || "success",
+    tone: "ok",
+    label: rawStatus && rawStatus !== "success" ? rawStatus : tr("\u5b8c\u6210", "OK"),
+  };
+}
+
+function renderTimelinePlanningTrace(step = {}) {
+  const proposal = isObjectRecord(step.step_proposal) ? renderAgentStepProposal(step.step_proposal) : "";
+  const verification = renderStepVerificationSummary(step.verification, step.error || "");
+  if (!proposal && !verification) return "";
+  return `<div class="timeline-item__planning">${proposal}${verification}</div>`;
+}
+
+function getRunExecutionState(details) {
+  const summaryState = normalizeRunExecutionStateCandidate(details?.state);
+  const fullState = normalizeRunExecutionStateCandidate(details?.execution_state);
+  const timeline = Array.isArray(details?.timeline) ? details.timeline : [];
+  const stateStep = [...timeline].reverse().find((step) => step?.state && typeof step.state === "object");
+  const timelineState = normalizeRunExecutionStateCandidate(stateStep?.state);
+  const mergedState =
+    summaryState || fullState || timelineState
+      ? { ...(timelineState || {}), ...(fullState || {}), ...(summaryState || {}) }
+      : null;
+  return (
+    [mergedState, summaryState, fullState, timelineState].find(hasRenderableRunPlanState) ||
+    mergedState ||
+    summaryState ||
+    fullState ||
+    timelineState ||
+    null
+  );
+}
+
+function normalizeRunExecutionStateCandidate(source) {
+  if (!isObjectRecord(source)) return null;
+  const taskGraph = isObjectRecord(source.task_graph) ? source.task_graph : null;
+  const health = isObjectRecord(source.plan_health) ? source.plan_health : null;
+  const directSubgoals = Array.isArray(source.subgoals) ? source.subgoals.filter(isObjectRecord) : [];
+  const healthItems = Array.isArray(health?.items) ? health.items.filter(isObjectRecord) : [];
+  const graphSubgoals = Array.isArray(taskGraph?.subgoals) ? taskGraph.subgoals.filter(isObjectRecord) : [];
+  const subgoals = directSubgoals.length ? directSubgoals : healthItems.length ? healthItems : graphSubgoals;
+  if (!subgoals.length) return source;
+
+  const nextSubgoal = selectRunDisplaySubgoal(source, subgoals, health);
+  const nextSubgoalId =
+    normalizeText(health?.next_subgoal_id || source.current_subgoal?.id || nextSubgoal?.id || "") || null;
+  const items = subgoals.map((item) => {
+    const explicitReady = summarizeOptionalBoolean(item.ready);
+    const explicitIsNext = summarizeOptionalBoolean(item.is_next);
+    const explicitExhausted = summarizeOptionalBoolean(item.exhausted);
+    const inferredReady = Boolean(
+      nextSubgoalId && item.id === nextSubgoalId && normalizeText(item.status).toLowerCase() !== "completed"
+    );
+    const inferredIsNext = Boolean(nextSubgoalId && item.id === nextSubgoalId);
+    return {
+      ...item,
+      ready: explicitReady ?? inferredReady,
+      is_next: explicitIsNext ?? inferredIsNext,
+      exhausted: explicitExhausted ?? false,
+    };
+  });
+  const planHealth = {
+    ...(health || {}),
+    counts: isObjectRecord(health?.counts) ? health.counts : buildRunDisplayPlanCounts(items),
+    next_subgoal_id: health?.next_subgoal_id || nextSubgoalId,
+    items,
+  };
+
+  return {
+    ...source,
+    task: source.task || taskGraph?.task,
+    intent: source.intent || taskGraph?.intent || null,
+    dependencies: source.dependencies || taskGraph?.dependencies || {},
+    completion_summary: source.completion_summary || taskGraph?.completion_summary || null,
+    current_goal: source.current_goal || nextSubgoal?.title || null,
+    current_subgoal: isObjectRecord(source.current_subgoal) ? source.current_subgoal : nextSubgoal,
+    subgoals: items,
+    plan_health: planHealth,
+  };
+}
+
+function hasRenderableRunPlanState(candidate) {
+  if (!isObjectRecord(candidate)) return false;
+  const health = isObjectRecord(candidate.plan_health) ? candidate.plan_health : null;
+  return (
+    (Array.isArray(candidate.subgoals) && candidate.subgoals.length > 0) ||
+    (Array.isArray(health?.items) && health.items.length > 0)
+  );
+}
+
+function isObjectRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function selectRunDisplaySubgoal(source, subgoals, health = null) {
+  const appContext = isObjectRecord(source.app_context) ? source.app_context : {};
+  const currentSubgoal = isObjectRecord(source.current_subgoal) ? source.current_subgoal : {};
+  const preferredId = normalizeText(health?.next_subgoal_id || currentSubgoal.id || appContext.active_subgoal_id || "");
+  if (preferredId) {
+    const preferred = subgoals.find((item) => item.id === preferredId);
+    if (preferred) return preferred;
+  }
+  return (
+    subgoals.find((item) => summarizeOptionalBoolean(item.is_next) === true) ||
+    subgoals.find((item) => normalizeText(item.status).toLowerCase() === "in_progress") ||
+    subgoals.find((item) => !["completed", "failed"].includes(normalizeText(item.status).toLowerCase())) ||
+    null
+  );
+}
+
+function buildRunDisplayPlanCounts(items) {
+  const counts = {
+    total: items.length,
+    completed: 0,
+    pending: 0,
+    in_progress: 0,
+    blocked: 0,
+    failed: 0,
+    ready: 0,
+    exhausted: 0,
+  };
+  items.forEach((item) => {
+    const status = normalizeText(item.status || "pending").toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(counts, status)) {
+      counts[status] += 1;
+    }
+    if (summarizeOptionalBoolean(item.ready) === true && status !== "completed") {
+      counts.ready += 1;
+    }
+    if (summarizeOptionalBoolean(item.exhausted) === true) {
+      counts.exhausted += 1;
+    }
+  });
+  return counts;
+}
+
+function renderAgentPlanHealth(executionState = null) {
+  if (!executionState || typeof executionState !== "object") return "";
+  const health = executionState.plan_health && typeof executionState.plan_health === "object" ? executionState.plan_health : {};
+  const autonomy = health.autonomy || executionState.autonomy;
+  const blockedReason = normalizeText(health.blocked_reason || executionState.recovery_reason || "");
+  const autonomyMarkup = renderAutonomyReadiness(autonomy) || (blockedReason ? renderAutonomyReadiness({ status: "blocked", blockers: [blockedReason] }) : "");
+  const rawItems = Array.isArray(health.items)
+    ? health.items
+    : Array.isArray(executionState.subgoals)
+      ? executionState.subgoals
+      : [];
+  const items = rawItems
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({
+      ...item,
+      ready: summarizeOptionalBoolean(item.ready) ?? false,
+      is_next: summarizeOptionalBoolean(item.is_next) ?? false,
+      exhausted: summarizeOptionalBoolean(item.exhausted) ?? false,
+    }));
+  if (!items.length) {
+    if (!autonomyMarkup) return "";
+    const status = autonomyReadinessStatus(autonomy) || (blockedReason ? "blocked" : "");
+    const nextAction = formatAutonomyActionLabel(autonomy?.next_action);
+    return renderAgentRunSection({
+      label: tr("瑙勫垝", "Plan"),
+      title: formatAutonomyStatusLabel(status),
+      description: blockedReason || nextAction || tr("\u5df2\u5bf9\u9f50\u5f53\u524d\u6267\u884c\u72b6\u6001", "Aligned with the current execution state."),
+      modifier: "plan",
+      body: `<div class="assistant-run__plan-health">${autonomyMarkup}</div>`,
+    });
+  }
+
+  const counts = health.counts && typeof health.counts === "object" ? health.counts : {};
+  const total = coerceNonNegativeInteger(counts.total, items.length);
+  const completed = coerceNonNegativeInteger(
+    counts.completed,
+    items.filter((item) => item.status === "completed").length
+  );
+  const blocked = coerceNonNegativeInteger(
+    counts.blocked,
+    items.filter((item) => item.status === "blocked" || item.status === "failed").length
+  );
+  const ready = coerceNonNegativeInteger(
+    counts.ready,
+    items.filter((item) => item.ready && item.status !== "completed").length
+  );
+  const nextId =
+    normalizeText(health.next_subgoal_id || executionState.current_subgoal?.id || "") ||
+    normalizeText(items.find((item) => item.is_next)?.id || "");
+  const nextItem = items.find((item) => item.id === nextId) || items.find((item) => item.status !== "completed") || null;
+  const visibleItems = items.slice(0, 5);
+  const overflowCount = Math.max(0, items.length - visibleItems.length);
+  const title = nextItem
+    ? `${tr("下一目标", "Next goal")}: ${nextItem.title || nextItem.id}`
+    : tr("计划已完成", "Plan complete");
+  const description = blockedReason || `${completed}/${total} ${tr("已完成", "completed")} · ${ready} ${tr("可执行", "ready")} · ${blocked} ${tr("阻塞", "blocked")}`;
+
+  return renderAgentRunSection({
+    label: tr("规划", "Plan"),
+    title,
+    description,
+    modifier: "plan",
+    body: `
+      <div class="assistant-run__plan-health" data-next-subgoal="${escapeHtml(nextId)}">
+        ${autonomyMarkup}
+        <div class="assistant-run__plan-meter" aria-hidden="true">
+          <span style="width: ${escapeHtml(String(total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0))}%"></span>
+        </div>
+        <div class="assistant-run__plan-stats">
+          <span>${escapeHtml(`${completed}/${total}`)}</span>
+          <span>${escapeHtml(`${ready} ${tr("ready", "ready")}`)}</span>
+          <span>${escapeHtml(`${blocked} ${tr("blocked", "blocked")}`)}</span>
+        </div>
+        <ol class="assistant-run__plan-list">
+          ${visibleItems.map((item, index) => renderAgentPlanNode(item, { index, nextId })).join("")}
+          ${
+            overflowCount
+              ? `<li class="assistant-run__plan-more">${escapeHtml(`+${overflowCount} ${tr("更多目标", "more goals")}`)}</li>`
+              : ""
+          }
+        </ol>
+      </div>
+    `,
+  });
+}
+
+function renderAgentWorkspaceSummary(executionState = null) {
+  const summary = executionState?.workspace_summary;
+  if (!summary || typeof summary !== "object") return "";
+  const facts = Array.isArray(summary.facts) ? summary.facts : [];
+  const sources = Array.isArray(summary.sources) ? summary.sources : [];
+  const evidence = Array.isArray(summary.evidence) ? summary.evidence : [];
+  const notes = Array.isArray(summary.notes) ? summary.notes : [];
+  const items = [
+    ...facts.map((item) => normalizeText(item?.value || item?.title || item?.key || "")),
+    ...sources.map((item) => normalizeText(item?.title || item?.url || item?.key || "")),
+    ...evidence.map((item) => normalizeText(item?.title || item?.status || item?.value || "")),
+    ...notes.map((item) => normalizeText(item)),
+  ]
+    .filter(Boolean)
+    .slice(-6);
+  if (!items.length) return "";
+
+  return renderAgentRunSection({
+    label: tr("工作区", "Workspace"),
+    title: tr("执行上下文", "Execution context"),
+    description: tr("这次运行沉淀的事实、来源和证据会保留在这里。", "Facts, sources, and evidence captured during this run stay here."),
+    modifier: "status",
+    body: `<div class="assistant-run__action-row">${items
+      .map((item) => `<span class="action-pill">${escapeHtml(truncate(item, 72))}</span>`)
+      .join("")}</div>`,
+  });
+}
+
+function renderAgentRecoverySummary(executionState = null) {
+  if (!executionState || typeof executionState !== "object") return "";
+  const repairs = Array.isArray(executionState.repair_history) ? executionState.repair_history : [];
+  const capabilityFailures =
+    executionState.capability_failures && typeof executionState.capability_failures === "object"
+      ? executionState.capability_failures
+      : {};
+  const lastVerification = isObjectRecord(executionState.last_verification) ? executionState.last_verification : null;
+  const evidenceLedger = Array.isArray(executionState.evidence_ledger) ? executionState.evidence_ledger : [];
+  const handoffState = summarizeOverviewHandoffState(
+    isObjectRecord(executionState.app_context) ? executionState.app_context : {}
+  );
+  const repairItems = repairs
+    .filter((item) => item && typeof item === "object")
+    .slice(-4)
+    .map((item) => {
+      const mode = normalizeText(item.mode || item.kind || tr("恢复", "Recovery"));
+      const target = normalizeText(item.subgoal_id || item.capability || "");
+      const reason = normalizeText(item.message || item.reason || item.failure_kind || item.standard_failure_kind || "");
+      return [mode, target, reason].filter(Boolean).join(" | ");
+    })
+    .filter(Boolean);
+  const failureItems = Object.entries(capabilityFailures)
+    .slice(0, 4)
+    .map(([target, values]) => {
+      const latest = Array.isArray(values) ? values.slice(-2).map((item) => normalizeText(item)).filter(Boolean).join(", ") : "";
+      return latest ? `${target}: ${latest}` : "";
+    })
+    .filter(Boolean);
+  const reasonItems = [
+    normalizeText(executionState.last_replan_reason || ""),
+    normalizeText(executionState.recovery_reason || ""),
+  ].filter(Boolean);
+  const handoffItems = handoffState
+    ? [
+        normalizeText(handoffState.human_handoff_kind || "")
+          ? `${tr("接力", "Handoff")}: ${normalizeText(handoffState.human_handoff_kind)}`
+          : "",
+        normalizeText(handoffState.standard_recovery_kind || "")
+          ? `${tr("恢复类型", "Recovery")}: ${normalizeText(handoffState.standard_recovery_kind)}`
+          : "",
+        normalizeText(handoffState.manual_resume_status || "")
+          ? `${tr("继续", "Resume")}: ${normalizeText(handoffState.manual_resume_status)}`
+          : "",
+        normalizeText(
+          handoffState.manual_resume_reason ||
+            handoffState.human_handoff_reason ||
+            handoffState.human_handoff_summary ||
+            handoffState.recovery_reason ||
+            ""
+        )
+          ? `${tr("原因", "Reason")}: ${truncate(
+              normalizeText(
+                handoffState.manual_resume_reason ||
+                  handoffState.human_handoff_reason ||
+                  handoffState.human_handoff_summary ||
+                  handoffState.recovery_reason ||
+                  ""
+              ),
+              72
+            )}`
+          : "",
+      ].filter(Boolean)
+    : [];
+  const verificationItems = lastVerification
+    ? [
+        normalizeText(lastVerification.status || "")
+          ? `${tr("Verification", "Verification")}: ${normalizeText(lastVerification.status)}`
+          : "",
+        normalizeText(lastVerification.failure_kind || "")
+          ? `${tr("Failure", "Failure")}: ${normalizeText(lastVerification.failure_kind)}`
+          : "",
+        normalizeText(lastVerification.message || "")
+          ? `${tr("Reason", "Reason")}: ${truncate(normalizeText(lastVerification.message), 72)}`
+          : "",
+      ].filter(Boolean)
+    : [];
+  const evidenceItems = evidenceLedger
+    .slice(-3)
+    .filter(isObjectRecord)
+    .map((item) => {
+      const label = normalizeText(item.kind || item.status || item.scope || item.title || item.value || item.selector || "");
+      return label ? `${tr("Evidence", "Evidence")}: ${truncate(label, 48)}` : "";
+    })
+    .filter(Boolean);
+  const items = [...repairItems, ...failureItems, ...handoffItems, ...verificationItems, ...evidenceItems, ...reasonItems].slice(-10);
+  if (!items.length) return "";
+
+  return renderAgentRunSection({
+    label: tr("恢复", "Recovery"),
+    title: tr("恢复轨迹", "Recovery trace"),
+    description: tr("自动修复、重试和重规划的关键痕迹会保留在这里。", "Repair, retry, and replanning attempts are summarized here."),
+    modifier: "status",
+    body: `<div class="assistant-run__action-row">${items
+      .map((item) => `<span class="action-pill">${escapeHtml(truncate(item, 84))}</span>`)
+      .join("")}</div>`,
+  });
+}
+
+function renderAutonomyReadiness(autonomy) {
+  if (!autonomy || typeof autonomy !== "object") return "";
+  const blockers = Array.isArray(autonomy.blockers) ? autonomy.blockers.map(normalizeText).filter(Boolean) : [];
+  const warnings = Array.isArray(autonomy.warnings) ? autonomy.warnings.map(normalizeText).filter(Boolean) : [];
+  const details = [...blockers.slice(0, 2), ...warnings.slice(0, 1)].join(" | ");
+  const nextAction = formatAutonomyActionLabel(autonomy.next_action);
+  const status = autonomyReadinessStatus(autonomy, { blockers, warnings });
+  if (!status && !details && !nextAction) return "";
+  const tone = autonomyStatusTone(status);
+  const primaryText = details || nextAction || tr("\u5df2\u5bf9\u9f50\u5f53\u524d\u6267\u884c\u72b6\u6001", "Aligned with the current execution state.");
+  const nextActionMarkup =
+    details && nextAction
+      ? `<p class="assistant-run__autonomy-next">${escapeHtml(`${tr("\u4e0b\u4e00\u6b65", "Next")}: ${nextAction}`)}</p>`
+      : "";
+  return `
+    <div class="assistant-run__autonomy ${tone}">
+      <div class="assistant-run__autonomy-head">
+        <span>${escapeHtml(tr("\u81ea\u4e3b\u72b6\u6001", "Autonomy"))}</span>
+        <strong>${escapeHtml(formatAutonomyStatusLabel(status))}</strong>
+      </div>
+      <p>${escapeHtml(primaryText)}</p>
+      ${nextActionMarkup}
+    </div>
+  `;
+}
+
+function autonomyReadinessStatus(autonomy, { blockers = null, warnings = null } = {}) {
+  if (!autonomy || typeof autonomy !== "object") return "";
+  const explicit = normalizeText(autonomy.status || "");
+  if (explicit) return explicit;
+  const action = normalizeText(autonomy.next_action || "").toLowerCase();
+  if (summarizeOptionalBoolean(autonomy.requires_review) === true || action.startsWith("approve_")) {
+    return "review_required";
+  }
+  if (summarizeOptionalBoolean(autonomy.requires_user) === true) {
+    return action === "ask_user" ? "needs_clarification" : "waiting_user";
+  }
+  if (action === "done") return "complete";
+  if (action === "repair" || action === "recover_or_replan") return "recovering";
+  const blockerItems = Array.isArray(blockers)
+    ? blockers
+    : Array.isArray(autonomy.blockers)
+      ? autonomy.blockers.map(normalizeText).filter(Boolean)
+      : [];
+  if (blockerItems.length || summarizeOptionalBoolean(autonomy.can_continue) === false) {
+    return "blocked";
+  }
+  if (summarizeOptionalBoolean(autonomy.can_continue) === true || action === "execute") {
+    return "ready";
+  }
+  const warningItems = Array.isArray(warnings)
+    ? warnings
+    : Array.isArray(autonomy.warnings)
+      ? autonomy.warnings.map(normalizeText).filter(Boolean)
+      : [];
+  return warningItems.length || action ? "ready" : "";
+}
+
+function formatAutonomyStatusLabel(status) {
+  const normalized = normalizeText(status).toLowerCase();
+  if (normalized === "complete") return tr("\u5df2\u5b8c\u6210", "Complete");
+  if (normalized === "review_required") return tr("\u9700\u590d\u6838", "Review required");
+  if (normalized === "waiting_user") return tr("\u7b49\u5f85\u7528\u6237", "Waiting for user");
+  if (normalized === "needs_clarification") return tr("\u9700\u8865\u5145\u8bf4\u660e", "Needs clarification");
+  if (normalized === "blocked") return tr("\u5df2\u963b\u585e", "Blocked");
+  if (normalized === "recovering") return tr("\u6b63\u5728\u6062\u590d", "Recovering");
+  return tr("\u53ef\u81ea\u4e3b\u7ee7\u7eed", "Ready to continue");
+}
+
+function formatAutonomyActionLabel(action) {
+  const normalized = normalizeText(action).toLowerCase();
+  if (normalized === "execute") return tr("\u6267\u884c\u4e0b\u4e00\u6b65", "Ready to execute the next step.");
+  if (normalized === "resume_after_user") return tr("\u7528\u6237\u5b8c\u6210\u540e\u7ee7\u7eed", "Resume after the user step.");
+  if (normalized === "approve_plan") return tr("\u5ba1\u6838\u8ba1\u5212\u540e\u5f00\u59cb", "Review the plan before starting.");
+  if (normalized === "approve_stage") return tr("\u5ba1\u6838\u91cd\u89c4\u5212\u9636\u6bb5", "Review the replanned stage.");
+  if (normalized === "approve_step") return tr("\u6279\u51c6\u4e0b\u4e00\u4e2a\u52a8\u4f5c", "Approve the next action.");
+  if (normalized === "ask_user") return tr("\u9700\u8981\u4f60\u8865\u5145\u76ee\u6807", "Clarification is needed.");
+  if (normalized === "recover_or_replan") return tr("\u9700\u8981\u6062\u590d\u6216\u91cd\u89c4\u5212", "Recovery or replanning is needed.");
+  if (normalized === "repair") return tr("\u6b63\u5728\u5c1d\u8bd5\u4fee\u590d", "Repair is queued.");
+  if (normalized === "inspect_failure") return tr("\u68c0\u67e5\u5931\u8d25\u539f\u56e0", "Inspect the failure.");
+  if (normalized === "done") return tr("\u8ba1\u5212\u5df2\u5b8c\u6210", "The plan is complete.");
+  return "";
+}
+
+function autonomyStatusTone(status) {
+  const normalized = normalizeText(status).toLowerCase();
+  if (normalized === "ready" || normalized === "complete") return "ok";
+  if (normalized === "recovering") return "info";
+  if (normalized === "blocked" || normalized === "needs_clarification") return "bad";
+  return "warn";
+}
+
+function renderAgentPlanNode(item, { index = 0, nextId = "" } = {}) {
+  const status = normalizeText(item.status || "pending") || "pending";
+  const isNext = Boolean(item.is_next || (nextId && item.id === nextId));
+  const retryRemaining = item.retry_remaining == null ? "" : coerceNonNegativeInteger(item.retry_remaining, 0);
+  const capability = normalizeText(item.capability_preference || item.capability || "");
+  const tone = planStatusTone(status, Boolean(item.exhausted));
+  return `
+    <li class="assistant-run__plan-node${isNext ? " is-next" : ""}${item.exhausted ? " is-exhausted" : ""}">
+      <span class="assistant-run__plan-index">${escapeHtml(String(index + 1))}</span>
+      <div class="assistant-run__plan-copy">
+        <strong>${escapeHtml(item.title || item.id || tr("未命名目标", "Untitled goal"))}</strong>
+        <span>${escapeHtml(
+          [
+            formatPlanStatusLabel(status),
+            capability,
+            retryRemaining !== "" ? `${tr("重试", "retry")}: ${retryRemaining}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        )}</span>
+      </div>
+      <span class="assistant-run__plan-state ${tone}">${escapeHtml(isNext ? tr("Next", "Next") : formatPlanStatusLabel(status))}</span>
+    </li>
+  `;
+}
+
+function coerceNonNegativeInteger(value, fallback = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return Math.max(0, Number(fallback) || 0);
+  return Math.max(0, Math.round(number));
+}
+
+function formatPlanStatusLabel(status) {
+  const normalized = normalizeText(status).toLowerCase();
+  if (normalized === "completed") return tr("完成", "Done");
+  if (normalized === "in_progress") return tr("进行中", "Active");
+  if (normalized === "blocked") return tr("阻塞", "Blocked");
+  if (normalized === "failed") return tr("失败", "Failed");
+  return tr("待执行", "Pending");
+}
+
+function planStatusTone(status, exhausted = false) {
+  if (exhausted) return "warn";
+  const normalized = normalizeText(status).toLowerCase();
+  if (normalized === "completed") return "ok";
+  if (normalized === "in_progress") return "info";
+  if (normalized === "blocked" || normalized === "failed") return "warn";
+  return "muted";
+}
+
 function renderAgentRunStepPreview(details, steps = []) {
   if (!steps.length) return "";
   const timelineButton = details?.id
@@ -5216,15 +8578,22 @@ function renderAgentRunFollowUps(items = []) {
       <div class="assistant-run__followups">
         ${items
           .map(
-            (item) => `
-              <article class="assistant-run__followup-card">
-                <span class="assistant-run__followup-label">${escapeHtml(item.title)}</span>
-                <p>${escapeHtml(item.description)}</p>
-                <button class="primary-button" type="button" data-prefill-task="${escapeHtml(item.task)}">
-                  ${escapeHtml(item.actionLabel)}
-                </button>
-              </article>
-            `
+            (item) => {
+              const resumeRunId = normalizeText(item.resumeRunId || "");
+              const isResumePending = Boolean(resumeRunId && state.resumePendingRunId === resumeRunId);
+              const actionAttributes = resumeRunId
+                ? `data-resume-run-id="${escapeHtml(resumeRunId)}"`
+                : `data-prefill-task="${escapeHtml(item.task)}"`;
+              return `
+                <article class="assistant-run__followup-card">
+                  <span class="assistant-run__followup-label">${escapeHtml(item.title)}</span>
+                  <p>${escapeHtml(item.description)}</p>
+                  <button class="primary-button" type="button" ${actionAttributes}${isResumePending ? " disabled" : ""}>
+                    ${escapeHtml(isResumePending ? tr("恢复中", "Resuming") : item.actionLabel)}
+                  </button>
+                </article>
+              `;
+            }
           )
           .join("")}
       </div>
@@ -5277,6 +8646,212 @@ function renderAgentRunCard({
       ${dock}
     </article>
   `);
+}
+
+function renderTaskPreviewMessage() {
+  const task = normalizeText(state.taskPreviewTask || state.taskPreview?.task || "");
+  if (state.taskPreviewLoading) {
+    const loadingSection = renderAgentRunSection({
+      label: tr("\u89c4\u5212", "Plan"),
+      title: tr("\u6b63\u5728\u62c6\u89e3\u4efb\u52a1", "Splitting the task"),
+      description: tr(
+        "\u6b63\u5728\u6839\u636e\u5f53\u524d\u914d\u7f6e\u751f\u6210\u53ef\u6267\u884c\u5b50\u76ee\u6807\u3002",
+        "Generating executable subgoals from the current configuration."
+      ),
+      modifier: "status",
+      body: `
+        <div class="assistant-run__callout">
+          <span class="assistant-run__live-dot assistant-run__live-dot--soft" aria-hidden="true"></span>
+          <div>
+            <strong>${escapeHtml(tr("\u89c4\u5212\u4e2d", "Planning"))}</strong>
+            <p>${escapeHtml(task || tr("\u7b49\u5f85\u4efb\u52a1\u5185\u5bb9", "Waiting for the task text"))}</p>
+          </div>
+        </div>
+      `,
+    });
+    return renderAgentRunCard({
+      eyebrow: tr("Agent \u9884\u89c8", "Agent preview"),
+      title: cleanRunTitle(task || tr("\u89c4\u5212\u9884\u89c8", "Plan preview")),
+      summary: tr("\u5c1a\u672a\u6267\u884c\uff0c\u5148\u770b Aoryn \u6253\u7b97\u600e\u4e48\u505a\u3002", "Nothing has run yet; this shows what Aoryn plans to do."),
+      stateLabel: tr("\u751f\u6210\u4e2d", "Planning"),
+      stateTone: "warn",
+      metrics: [renderMetricCard(tr("\u6a21\u5f0f", "Mode"), tr("\u9884\u89c8", "Preview"))],
+      timeline: loadingSection,
+      variant: "loading",
+    });
+  }
+
+  if (state.taskPreviewError) {
+    const errorSection = renderAgentRunSection({
+      label: tr("\u89c4\u5212", "Plan"),
+      title: tr("\u9884\u89c8\u5931\u8d25", "Preview failed"),
+      description: state.taskPreviewError,
+      modifier: "status",
+      body: `
+        <div class="assistant-run__callout">
+          <div>
+            <strong>${escapeHtml(tr("\u53ef\u4ee5\u8c03\u6574\u4efb\u52a1\u518d\u8bd5", "Adjust the task and try again"))}</strong>
+            <p>${escapeHtml(task)}</p>
+          </div>
+        </div>
+      `,
+    });
+    return renderAgentRunCard({
+      eyebrow: tr("Agent \u9884\u89c8", "Agent preview"),
+      title: cleanRunTitle(task || tr("\u89c4\u5212\u9884\u89c8", "Plan preview")),
+      summary: state.taskPreviewError,
+      stateLabel: tr("\u5931\u8d25", "Failed"),
+      stateTone: "bad",
+      metrics: [renderMetricCard(tr("\u6a21\u5f0f", "Mode"), tr("\u9884\u89c8", "Preview"))],
+      timeline: errorSection,
+      dock: renderAgentRunDock([
+        `<button class="secondary-button" type="button" data-preview-task="${escapeHtml(task)}">${escapeHtml(tr("\u91cd\u8bd5", "Retry"))}</button>`,
+      ]),
+      variant: "attention",
+    });
+  }
+
+  const preview = state.taskPreview;
+  if (!preview || typeof preview !== "object") return "";
+  const graph = preview.task_graph && typeof preview.task_graph === "object" ? preview.task_graph : {};
+  const intent = preview.intent && typeof preview.intent === "object" ? preview.intent : graph.intent || {};
+  const executionBudget = preview.execution_budget && typeof preview.execution_budget === "object" ? preview.execution_budget : {};
+  const executionEnvironment =
+    preview.execution_environment && typeof preview.execution_environment === "object" ? preview.execution_environment : {};
+  const planHealth = preview.plan_health && typeof preview.plan_health === "object"
+    ? preview.plan_health
+    : preview.summary?.plan_health || {};
+  const subgoals = Array.isArray(graph.subgoals)
+    ? graph.subgoals
+    : Array.isArray(planHealth.items)
+      ? planHealth.items
+      : [];
+  const counts = planHealth.counts && typeof planHealth.counts === "object" ? planHealth.counts : {};
+  const total = coerceNonNegativeInteger(counts.total, subgoals.length);
+  const nextId = normalizeText(planHealth.next_subgoal_id || "");
+  const nextItem = (Array.isArray(planHealth.items) ? planHealth.items : subgoals).find((item) => item?.id === nextId) || subgoals[0] || null;
+  const riskLevel = normalizeText(preview.risk_level || intent.risk_level || "low").toLowerCase() || "low";
+  const capabilityPreview = Array.from(
+    new Set(
+      subgoals
+        .map((item) => normalizeText(item.capability_preference || item.capability || ""))
+        .filter(Boolean)
+    )
+  )
+    .slice(0, 3)
+    .join(" | ");
+  const requiresReview = previewRequiresReview(preview);
+  const previewValidation = getPreviewTaskGraphValidation(preview.task || task);
+  const previewStartError = normalizeText(state.taskPreviewStartError || "");
+  const canStartPreview = previewValidation.ok && !previewStartError;
+  const previewNeedsInput = previewValidation.reason === "autonomy_blocked";
+  const previewValidationMessage = previewStartError || (canStartPreview ? "" : formatPreviewValidationReason(previewValidation.reason, previewValidation));
+  const displayPlanHealth = decoratePreviewPlanHealth(planHealth, previewValidation, previewValidationMessage);
+  const executionState = {
+    current_subgoal: nextItem,
+    plan_health: displayPlanHealth,
+    subgoals,
+  };
+  const fallbackPlanSection = renderAgentRunSection({
+    label: tr("\u89c4\u5212", "Plan"),
+    title: nextItem?.title || tr("\u5df2\u751f\u6210\u89c4\u5212", "Plan generated"),
+    description: tr("\u8fd9\u662f\u63d0\u4ea4\u524d\u7684\u9759\u6001\u9884\u89c8\uff0c\u5c1a\u672a\u6267\u884c\u684c\u9762\u64cd\u4f5c\u3002", "This is a static preview before submission; no desktop actions have run."),
+    modifier: "plan",
+    body: `
+      <div class="assistant-run__callout">
+        <div>
+          <strong>${escapeHtml(nextItem?.title || cleanRunTitle(preview.task || task))}</strong>
+          <p>${escapeHtml(capabilityPreview || formatPreviewRiskLabel(riskLevel))}</p>
+        </div>
+      </div>
+    `,
+  });
+  const planSection = renderAgentPlanHealth(executionState) || fallbackPlanSection;
+  const reviewLabel = requiresReview
+    ? tr("\u9700\u590d\u6838", "Review")
+    : tr("\u53ef\u6267\u884c", "Ready");
+  const startActionLabel = requiresReview
+    ? tr("\u6279\u51c6\u5e76\u5f00\u59cb", "Approve and start")
+    : tr("\u5f00\u59cb\u6267\u884c", "Start run");
+  const budgetLabel = formatPreviewBudgetLabel(executionBudget);
+  const pauseSeconds = Number(executionBudget.pause_after_action);
+  const previewPolicyChips = renderPreviewPolicyChips(executionBudget);
+  const previewEnvironmentChips = renderPreviewEnvironmentChips(executionEnvironment);
+  return renderAgentRunCard({
+    eyebrow: tr("Agent \u9884\u89c8", "Agent preview"),
+    title: cleanRunTitle(preview.task || task),
+    summary: previewValidationMessage || tr("\u6267\u884c\u524d\u5148\u68c0\u67e5\u5b50\u76ee\u6807\u3001\u98ce\u9669\u548c\u80fd\u529b\u9009\u62e9\u3002", "Review subgoals, risk, and capability choices before execution."),
+    stateLabel: canStartPreview ? reviewLabel : previewNeedsInput ? tr("\u9700\u8865\u5145", "Needs input") : tr("\u9700\u5237\u65b0", "Needs refresh"),
+    stateTone: canStartPreview ? (requiresReview ? "warn" : "ok") : "warn",
+    metrics: [
+      renderMetricCard(tr("\u76ee\u6807", "Goals"), String(total)),
+      renderMetricCard(tr("\u98ce\u9669", "Risk"), formatPreviewRiskLabel(riskLevel)),
+      renderMetricCard(tr("\u9884\u7b97", "Budget"), budgetLabel || "--"),
+      renderMetricCard(tr("\u7c7b\u578b", "Type"), normalizeText(intent.task_type || graph.task_type || tr("\u901a\u7528", "General"))),
+    ],
+    chips: [
+      capabilityPreview ? `<span class="metric-pill">${escapeHtml(capabilityPreview)}</span>` : "",
+      ...previewPolicyChips,
+      ...previewEnvironmentChips,
+      Number.isFinite(pauseSeconds) && pauseSeconds > 0
+        ? `<span class="metric-pill">${escapeHtml(`${tr("\u52a8\u4f5c\u95f4\u9694", "Action pause")}: ${formatSecondsLimit(pauseSeconds)}`)}</span>`
+        : "",
+      isBooleanTrue(preview.ambiguous) ? `<span class="metric-pill">${escapeHtml(tr("\u542b\u6a21\u7cca\u70b9", "Ambiguous"))}</span>` : "",
+      requiresReview ? `<span class="metric-pill">${escapeHtml(tr("\u6267\u884c\u524d\u5c06\u7b49\u5f85\u786e\u8ba4", "Approval before execution"))}</span>` : "",
+      previewValidationMessage ? `<span class="metric-pill">${escapeHtml(previewNeedsInput ? tr("\u9700\u8865\u5145", "Needs input") : tr("\u9700\u5237\u65b0", "Needs refresh"))}</span>` : "",
+    ],
+    timeline: planSection,
+    dock: renderAgentRunDock([
+      `<button class="secondary-button" type="button" data-preview-task="${escapeHtml(preview.task || task)}">${escapeHtml(tr("\u5237\u65b0\u9884\u89c8", "Refresh preview"))}</button>`,
+      canStartPreview
+        ? `<button class="primary-button" type="button" data-submit-preview-task="${escapeHtml(preview.task || task)}">${escapeHtml(startActionLabel)}</button>`
+        : "",
+    ]),
+    variant: "preview",
+  });
+}
+
+function decoratePreviewPlanHealth(planHealth, validation, message) {
+  if (!message || validation?.ok) return planHealth;
+  const nextHealth = isObjectRecord(planHealth) ? { ...planHealth } : {};
+  const existingAutonomy = isObjectRecord(nextHealth.autonomy) ? nextHealth.autonomy : {};
+  const existingBlockers = Array.isArray(existingAutonomy.blockers)
+    ? existingAutonomy.blockers.map(normalizeText).filter(Boolean)
+    : [];
+  const blockers = [message, ...existingBlockers.filter((item) => item !== message)];
+  const needsInput = validation?.reason === "autonomy_blocked";
+  nextHealth.blocked_reason = normalizeText(nextHealth.blocked_reason || "") || message;
+  nextHealth.autonomy = {
+    ...existingAutonomy,
+    status: needsInput ? "needs_clarification" : "blocked",
+    can_continue: false,
+    requires_review: false,
+    requires_user: needsInput,
+    next_action: needsInput ? "ask_user" : "recover_or_replan",
+    blockers,
+  };
+  return nextHealth;
+}
+
+function formatPreviewRiskLabel(riskLevel) {
+  const normalized = normalizeText(riskLevel).toLowerCase();
+  if (normalized === "critical") return tr("\u4e25\u91cd", "Critical");
+  if (normalized === "high") return tr("\u9ad8", "High");
+  if (normalized === "medium") return tr("\u4e2d", "Medium");
+  return tr("\u4f4e", "Low");
+}
+
+function formatPreviewBudgetLabel(budget = {}) {
+  const maxSteps = Number(budget.max_steps);
+  const maxRunSeconds = Number(budget.max_run_seconds);
+  const parts = [];
+  if (Number.isFinite(maxSteps) && maxSteps > 0) {
+    parts.push(`${Math.round(maxSteps)} ${tr("\u6b65", "steps")}`);
+  }
+  if (Number.isFinite(maxRunSeconds) && maxRunSeconds > 0) {
+    parts.push(formatSecondsLimit(maxRunSeconds));
+  }
+  return parts.join(" / ");
 }
 
 function renderPendingMessage(task) {
@@ -5342,8 +8917,28 @@ function renderLoadingMessage() {
 
 function renderRunningMessage(active) {
   const progress = active.result || {};
-  const executionState = progress.execution_state || {};
-  const pendingDecision = progress.pending_decision || executionState.pending_decision || null;
+  const progressExecutionState = normalizeRunExecutionStateCandidate(progress.execution_state);
+  const progressSummaryState = normalizeRunExecutionStateCandidate(progress.state);
+  const progressState =
+    progressExecutionState || progressSummaryState
+      ? { ...(progressExecutionState || {}), ...(progressSummaryState || {}) }
+      : null;
+  const initialGraphState = normalizeRunExecutionStateCandidate(
+    active.initial_task_graph && typeof active.initial_task_graph === "object"
+      ? { task: active.task || active.initial_task_graph.task, task_graph: active.initial_task_graph }
+      : null
+  );
+  const executionState =
+    [progressState, initialGraphState].find(hasRenderableRunPlanState) ||
+    progressState ||
+    initialGraphState ||
+    {};
+  const pendingDecision = resolvePendingDecisionCandidate(
+    progress.pending_decision,
+    progressSummaryState?.pending_decision,
+    progressExecutionState?.pending_decision,
+    executionState.pending_decision
+  );
   const currentSubgoal = executionState.current_subgoal || null;
   const livePointer = progress.live_pointer || null;
   const livePointerTrail = Array.isArray(progress.live_pointer_trail) ? progress.live_pointer_trail : [];
@@ -5352,17 +8947,22 @@ function renderRunningMessage(active) {
     progress.run_id && progress.latest_screenshot
       ? buildArtifactUrl(progress.run_id, progress.latest_screenshot)
       : null;
-  const latestSummary = normalizeText(progress.latest_summary) || tr("Waiting for the next step.", "Waiting for the next step.");
+  const latestSummary =
+    normalizeText(progress.latest_summary || progress.error || progress.cancel_reason || "") ||
+    tr("Waiting for the next step.", "Waiting for the next step.");
   const timingPill = renderTimingSummary(progress.latest_timings);
+  const stepProposal = resolveStepProposalCandidate(progress, executionState);
   const currentGoal =
     normalizeText(progress.current_goal || executionState.current_goal || currentSubgoal?.title || "") || latestSummary;
   const chosenCapability = normalizeText(
-    progress.chosen_capability || executionState.chosen_capability || progress.step_proposal?.capability || ""
+    progress.chosen_capability || executionState.chosen_capability || stepProposal?.capability || ""
   );
   const orchestrationPhase = normalizeText(progress.orchestration_phase || executionState.orchestration_phase || "");
   const activeSpecialist = normalizeText(progress.active_specialist || executionState.active_specialist || "");
   const workspaceSummary = progress.workspace_summary || executionState.workspace_summary || {};
-  const stageReviewStatus = normalizeText(progress.stage_review_status || executionState.stage_review_status || "");
+  const appContext = executionState.app_context && typeof executionState.app_context === "object" ? executionState.app_context : {};
+  const planReviewStatus = normalizeText(progress.plan_review_status || executionState.plan_review_status || appContext.plan_review_status || "");
+  const stageReviewStatus = normalizeText(progress.stage_review_status || executionState.stage_review_status || appContext.stage_review_status || "");
   const lastReplanReason = normalizeText(progress.last_replan_reason || executionState.last_replan_reason || "");
   const verificationStatus = normalizeText(progress.verification_status || executionState.verification_status || "");
   const recoveryReason = normalizeText(progress.recovery_reason || executionState.recovery_reason || "");
@@ -5374,55 +8974,142 @@ function renderRunningMessage(active) {
     .slice(0, 2)
     .join(" | ");
   const latestActions = (progress.latest_actions || []).slice(0, 4);
-  const jobState = active.cancel_requested
-    ? { label: tr("Stopping", "Stopping"), tone: "warn" }
-    : { label: tr("Running", "Running"), tone: "ok" };
-  const effectiveJobState = pendingDecision
+  const planHealthSection = renderAgentPlanHealth(executionState);
+  const stepProposalSection = renderAgentStepProposal(stepProposal);
+  const recoverySection = renderAgentRecoverySummary(executionState);
+  const jobStatus = normalizeText(active.status || "").toLowerCase();
+  const isStopping = isBooleanTrue(active.cancel_requested) || jobStatus === "stopping";
+  const terminalResult = Boolean(
+    isBooleanTrue(progress.cancelled) ||
+      isBooleanTrue(active.cancelled) ||
+      progress.error ||
+      active.error ||
+      isBooleanTrue(progress.completed) ||
+      isBooleanTrue(active.completed) ||
+      ["failed", "cancelled", "completed"].includes(jobStatus)
+  );
+  const effectivePendingDecision = isStopping || terminalResult ? null : pendingDecision;
+  const jobState = formatAgentJobState(active, effectivePendingDecision);
+  const effectiveJobState = effectivePendingDecision
     ? { label: tr("Awaiting approval", "Awaiting approval"), tone: "warn" }
     : jobState;
+  const humanAttention = !isStopping && !effectivePendingDecision && needsHumanVerification(active);
+  const terminalAttention = !humanAttention && terminalResult;
+  const humanAttentionReason = normalizeText(
+    progress.interruption_reason ||
+      active.interruption_reason ||
+      progress.recovery_reason ||
+      executionState.recovery_reason ||
+      latestSummary
+  );
+  const terminalReason = normalizeText(
+    progress.error ||
+      active.error ||
+      progress.cancel_reason ||
+      active.cancel_reason ||
+      progress.latest_summary ||
+      latestSummary
+  );
+  const decisionPending = Boolean(state.decisionPendingJobId && state.decisionPendingJobId === active.id);
+  const isQueued = jobStatus === "queued";
+  const pendingDecisionActions =
+    effectivePendingDecision && Array.isArray(effectivePendingDecision.actions)
+      ? effectivePendingDecision.actions.slice(0, 4).filter(isObjectRecord)
+      : [];
+  const pendingDecisionMeta = effectivePendingDecision
+    ? [
+        effectivePendingDecision.risk_level
+          ? `${tr("Risk", "Risk")}: ${formatPreviewRiskLabel(effectivePendingDecision.risk_level)}`
+          : "",
+        effectivePendingDecision.decision_type
+          ? `${tr("Type", "Type")}: ${normalizeText(effectivePendingDecision.decision_type)}`
+          : "",
+        effectivePendingDecision.approval_policy
+          ? `${tr("Approval", "Approval")}: ${formatApprovalPolicyValue(effectivePendingDecision.approval_policy)}`
+          : "",
+        isBooleanTrue(effectivePendingDecision.requires_user_presence)
+          ? `${tr("Operator", "Operator")}: ${tr("\u5728\u573a", "present")}`
+          : "",
+      ].filter(Boolean)
+    : [];
+  const pendingOperatorHint = normalizeText(effectivePendingDecision?.operator_hint || "");
+  const pendingDecisionReason = normalizeText(effectivePendingDecision?.reason || "");
 
-  const approvalSection = pendingDecision
+  const approvalSection = effectivePendingDecision
     ? renderAgentRunSection({
         label: tr("Approval", "Approval"),
         title:
-          pendingDecision.decision_type === "plan_review"
+          effectivePendingDecision.decision_type === "plan_review"
             ? tr("Review the task plan", "Review the task plan")
-            : pendingDecision.decision_type === "stage_review"
+            : effectivePendingDecision.decision_type === "stage_review"
               ? tr("Review the replanned stage", "Review the replanned stage")
             : tr("Waiting for your approval", "Waiting for your approval"),
         description:
-          pendingDecision.reason ||
-          (pendingDecision.decision_type === "plan_review" || pendingDecision.decision_type === "stage_review"
+          [pendingDecisionReason, pendingOperatorHint].filter(Boolean).join(" ") ||
+          (effectivePendingDecision.decision_type === "plan_review" || effectivePendingDecision.decision_type === "stage_review"
             ? tr("Aoryn will wait before executing this generated plan.", "Aoryn will wait before executing this generated plan.")
             : tr("This higher-risk step needs approval before the run can continue.", "This higher-risk step needs approval before the run can continue.")),
         modifier: "status",
         body: `
           <div class="assistant-run__callout">
             <div>
-              <strong>${escapeHtml(pendingDecision.summary || "")}</strong>
+              <strong>${escapeHtml(effectivePendingDecision.summary || "")}</strong>
               <p>${escapeHtml(
-                pendingDecision.decision_type === "plan_review"
+                effectivePendingDecision.decision_type === "plan_review"
                   ? (executionState.subgoals || []).map((item) => item.title).filter(Boolean).slice(0, 4).join(" -> ")
-                  : pendingDecision.decision_type === "stage_review"
+                  : effectivePendingDecision.decision_type === "stage_review"
                     ? lastReplanReason || stageReviewStatus || currentSubgoal?.title || ""
                   : currentSubgoal?.title || ""
               )}</p>
             </div>
           </div>
+          ${
+            pendingDecisionMeta.length
+              ? `<div class="assistant-run__action-row">${pendingDecisionMeta
+                  .map((item) => `<span class="action-pill">${escapeHtml(item)}</span>`)
+                  .join("")}</div>`
+              : ""
+          }
+          ${
+            pendingDecisionActions.length
+              ? `<div class="assistant-run__action-row">${pendingDecisionActions.map(renderActionPill).join("")}</div>`
+              : ""
+          }
         `,
       })
     : "";
-  const decisionDock = pendingDecision
+  const decisionDock = effectivePendingDecision
     ? [
-        `<button class="primary-button" type="button" data-job-decision="approve" data-job-id="${escapeHtml(active.id)}">${escapeHtml(tr("Approve", "Approve"))}</button>`,
-        `<button class="secondary-button" type="button" data-job-decision="reject" data-job-id="${escapeHtml(active.id)}">${escapeHtml(tr("Reject", "Reject"))}</button>`,
+        `<button class="primary-button" type="button" data-job-decision="approve" data-job-id="${escapeHtml(active.id)}"${decisionPending ? " disabled" : ""}>${escapeHtml(
+          decisionPending && state.decisionPendingChoice === "approve" ? tr("批准中", "Approving") : tr("Approve", "Approve")
+        )}</button>`,
+        `<button class="secondary-button" type="button" data-job-decision="reject" data-job-id="${escapeHtml(active.id)}"${decisionPending ? " disabled" : ""}>${escapeHtml(
+          decisionPending && state.decisionPendingChoice === "reject" ? tr("驳回中", "Rejecting") : tr("Reject", "Reject")
+        )}</button>`,
       ].join("")
     : "";
+  const stopDockAction = terminalResult
+    ? ""
+    : `<button class="primary-button" type="button" data-stop-active-task="true">${escapeHtml(
+        isBooleanTrue(active.cancel_requested) ? tr("Stopping", "Stopping") : tr("Stop", "Stop")
+      )}</button>`;
 
   const liveStateSection = renderAgentRunSection({
-    label: tr("Live", "Live"),
+    label: terminalAttention
+      ? jobState.label
+      : humanAttention
+        ? tr("Attention", "Attention")
+        : isQueued
+          ? tr("\u6392\u961f", "Queued")
+          : tr("Live", "Live"),
     title: currentGoal,
-    description: recoveryReason
+    description: terminalAttention
+      ? terminalReason || latestSummary
+      : humanAttention
+      ? tr("Aoryn is waiting for a manual checkpoint before it can continue.", "Aoryn is waiting for a manual checkpoint before it can continue.")
+      : isQueued
+      ? tr("\u8ba1\u5212\u72b6\u6001\u5df2\u5c31\u7eea\uff0c\u6b63\u5728\u7b49\u5f85\u9996\u4e2a\u6267\u884c\u66f4\u65b0\u3002", "The plan state is staged while Aoryn waits for the first execution update.")
+      : recoveryReason
       ? tr("Aoryn is repairing the current step instead of repeating the same action.", "Aoryn is repairing the current step instead of repeating the same action.")
       : tr("The card refreshes with the latest captured view and recent execution trace.", "The card refreshes with the latest captured view and recent execution trace."),
     modifier: "status",
@@ -5430,15 +9117,17 @@ function renderRunningMessage(active) {
       <div class="assistant-run__callout">
         <span class="assistant-run__live-dot" aria-hidden="true"></span>
         <div>
-          <strong>${escapeHtml(recoveryReason ? tr("Recovery in progress", "Recovery in progress") : tr("Goal-driven execution", "Goal-driven execution"))}</strong>
-          <p>${escapeHtml(recoveryReason || latestSummary)}</p>
+          <strong>${escapeHtml(terminalAttention ? jobState.label : humanAttention ? tr("\u9700\u8981\u5904\u7406", "Needs attention") : isQueued ? tr("\u5df2\u9884\u5907\u8ba1\u5212", "Plan staged") : recoveryReason ? tr("Recovery in progress", "Recovery in progress") : tr("Goal-driven execution", "Goal-driven execution"))}</strong>
+          <p>${escapeHtml(terminalAttention ? terminalReason || latestSummary : humanAttention ? humanAttentionReason || latestSummary : recoveryReason || latestSummary)}</p>
           ${
-            chosenCapability || activeSpecialist || orchestrationPhase || verificationStatus
+            chosenCapability || activeSpecialist || orchestrationPhase || planReviewStatus || stageReviewStatus || verificationStatus
               ? `<p>${escapeHtml(
                   [
                     orchestrationPhase ? `${tr("Phase", "Phase")}: ${orchestrationPhase}` : "",
                     activeSpecialist ? `${tr("Specialist", "Specialist")}: ${activeSpecialist}` : "",
                     chosenCapability ? `${tr("Capability", "Capability")}: ${chosenCapability}` : "",
+                    planReviewStatus ? `${tr("Plan review", "Plan review")}: ${planReviewStatus}` : "",
+                    stageReviewStatus ? `${tr("Stage review", "Stage review")}: ${stageReviewStatus}` : "",
                     verificationStatus ? `${tr("Verification", "Verification")}: ${verificationStatus}` : "",
                   ]
                     .filter(Boolean)
@@ -5467,8 +9156,12 @@ function renderRunningMessage(active) {
     ],
     chips: [
       renderExecutionModeChip(progress.dry_run ?? active.dry_run),
-      renderHumanVerificationChip(progress),
+      renderHumanVerificationChip(active),
       timingPill,
+      ...renderExecutionLimitChips(active),
+      ...renderAutomationPolicyChips(active),
+      ...renderPreviewEnvironmentChips(active),
+      ...renderExecutionContextChips(progress, executionState),
     ].filter(Boolean),
     hero: renderAgentRunHero({
       src: previewUrl,
@@ -5482,7 +9175,7 @@ function renderRunningMessage(active) {
       liveAction,
     }),
     trace: renderAgentRunActionPreview(latestActions),
-    timeline: `${liveStateSection}${approvalSection}`,
+    timeline: `${liveStateSection}${planHealthSection}${stepProposalSection}${recoverySection}${approvalSection}`,
     dock: renderAgentRunDock([
       progress.run_id
         ? `<button class="secondary-button" type="button" data-open-inspector="${escapeHtml(progress.run_id)}">${escapeHtml(
@@ -5490,12 +9183,44 @@ function renderRunningMessage(active) {
           )}</button>`
         : "",
       decisionDock,
-      `<button class="primary-button" type="button" data-stop-active-task="true">${escapeHtml(
-        active.cancel_requested ? tr("Stopping", "Stopping") : tr("Stop", "Stop")
-      )}</button>`,
+      stopDockAction,
     ]),
-    variant: active.cancel_requested ? "stopping" : pendingDecision ? "attention" : "live",
+    variant: jobState.variant,
   });
+}
+
+function formatAgentJobState(active, pendingDecision = undefined) {
+  const status = normalizeText(active?.status || "").toLowerCase();
+  const result = active?.result && typeof active.result === "object" ? active.result : {};
+  const effectivePendingDecision = pendingDecision === undefined ? getJobPendingDecision(active) : pendingDecision;
+  if (isBooleanTrue(active?.cancel_requested) || status === "stopping") {
+    return { label: tr("Stopping", "Stopping"), tone: "warn", variant: "stopping" };
+  }
+  if (effectivePendingDecision || status === "approval") {
+    return { label: tr("Awaiting approval", "Awaiting approval"), tone: "warn", variant: "attention" };
+  }
+  if (isAwaitingApprovalCheckpoint(active)) {
+    return { label: tr("Awaiting approval", "Awaiting approval"), tone: "warn", variant: "attention" };
+  }
+  if (isBooleanTrue(active?.cancelled) || isBooleanTrue(result.cancelled) || status === "cancelled") {
+    return { label: tr("\u5df2\u53d6\u6d88", "Cancelled"), tone: "warn", variant: "stopping" };
+  }
+  if (needsHumanVerification(active)) {
+    return { label: tr("\u9700\u8981\u5904\u7406", "Needs attention"), tone: "warn", variant: "attention" };
+  }
+  if (active?.error || result.error || status === "failed") {
+    return { label: tr("\u5931\u8d25", "Failed"), tone: "bad", variant: "attention" };
+  }
+  if (isBooleanTrue(active?.completed) || isBooleanTrue(result.completed) || status === "completed") {
+    return { label: tr("\u5df2\u5b8c\u6210", "Done"), tone: "ok", variant: "complete" };
+  }
+  if (status === "queued") {
+    return { label: tr("\u6392\u961f\u4e2d", "Queued"), tone: "warn", variant: "queued" };
+  }
+  if (status === "attention") {
+    return { label: tr("\u9700\u8981\u5904\u7406", "Needs attention"), tone: "warn", variant: "attention" };
+  }
+  return { label: tr("Running", "Running"), tone: "ok", variant: "live" };
 }
 
 function renderCompletedConversation(details) {
@@ -5505,6 +9230,11 @@ function renderCompletedConversation(details) {
   const heroShot = screenshots[0] || null;
   const actions = collectLatestActions(details).slice(0, 4);
   const stateInfo = buildRecordState(details);
+  const executionState = getRunExecutionState(details);
+  const stepProposalSection = renderAgentStepProposal(resolveStepProposalCandidate(details, executionState || {}));
+  const planHealthSection = renderAgentPlanHealth(executionState);
+  const recoverySection = renderAgentRecoverySummary(executionState);
+  const workspaceSection = renderAgentWorkspaceSummary(executionState);
 
   return [
     renderAgentRunCard({
@@ -5519,7 +9249,14 @@ function renderCompletedConversation(details) {
         renderMetricCard(tr("时长", "Duration"), formatRunDurationWindow(details.started_at, details.finished_at)),
         renderMetricCard(tr("步骤", "Steps"), String(details.steps ?? 0)),
       ],
-      chips: [renderExecutionModeChip(details.dry_run), renderHumanVerificationChip(details)],
+      chips: [
+        renderExecutionModeChip(details.dry_run),
+        renderHumanVerificationChip(details),
+        ...renderExecutionLimitChips(details),
+        ...renderAutomationPolicyChips(details),
+        ...renderPreviewEnvironmentChips(details),
+        ...renderExecutionContextChips(details, executionState),
+      ],
       hero: heroShot
         ? renderAgentRunHero({
             src: heroShot.src,
@@ -5531,7 +9268,7 @@ function renderCompletedConversation(details) {
           })
         : "",
       trace: renderAgentRunActionPreview(actions),
-      timeline: renderAgentRunStepPreview(details, steps),
+      timeline: `${renderAgentRunStepPreview(details, steps)}${planHealthSection}${stepProposalSection}${recoverySection}${workspaceSection}`,
       followUps: renderAgentRunFollowUps(followUps),
       dock: renderAgentRunDock([
         `<button class="secondary-button" type="button" data-open-inspector="${escapeHtml(details.id)}">${escapeHtml(
@@ -5607,14 +9344,16 @@ function renderDeveloper() {
   elements.activePayloadView.textContent = JSON.stringify(state.activeJob?.result || state.activeJob || {}, null, 2);
 
   if (state.selectedRunDetails?.timeline?.length) {
-    elements.developerTimeline.innerHTML = state.selectedRunDetails.timeline
+    const planItem = renderDeveloperPlanHealthItem(getRunExecutionState(state.selectedRunDetails));
+    const stepItems = state.selectedRunDetails.timeline
       .slice()
       .reverse()
       .slice(0, 6)
       .map(renderDeveloperTimelineItem)
       .join("");
+    elements.developerTimeline.innerHTML = `${planItem}${stepItems}`;
   } else if (state.activeJob) {
-    elements.developerTimeline.innerHTML = renderLiveDeveloperTimeline();
+    elements.developerTimeline.innerHTML = `${renderDeveloperPlanHealthItem(getJobExecutionState(state.activeJob))}${renderLiveDeveloperTimeline()}`;
   } else {
     elements.developerTimeline.innerHTML = renderPanelEmptyState({
       eyebrow: tr("Timeline", "Timeline"),
@@ -5628,6 +9367,11 @@ function renderJobCard(job) {
   const startedAt = formatShortTime(job.started_at || job.created_at);
   const finishedAt = Number.isFinite(Number(job.finished_at)) ? formatShortTime(job.finished_at) : "";
   const timelineMeta = [startedAt !== "--" ? startedAt : "", finishedAt ? `→ ${finishedAt}` : ""].filter(Boolean).join(" ");
+  const result = job.result && typeof job.result === "object" ? job.result : {};
+  const summary =
+    normalizeText(result.error || job.error || result.cancel_reason || job.cancel_reason || result.latest_summary || "") ||
+    "";
+  const stateInfo = buildRecordState(job);
 
   return `
     <article class="job-card">
@@ -5636,11 +9380,33 @@ function renderJobCard(job) {
           <p>${escapeHtml(job.id)}</p>
           <h3>${escapeHtml(cleanRunTitle(job.task))}</h3>
         </div>
-        <span class="status-pill ${statusTone(job.status)}">${escapeHtml(translateJobStatus(job.status))}</span>
+        <span class="status-pill ${stateInfo.tone || statusTone(job.status)}">${escapeHtml(stateInfo.label || translateJobStatus(job.status))}</span>
       </div>
       <div class="job-card__meta">
         <span>${escapeHtml(timelineMeta || tr("等待时间轴", "Waiting for timeline"))}</span>
       </div>
+      ${summary ? `<p class="job-card__summary">${escapeHtml(summary)}</p>` : ""}
+    </article>
+  `;
+}
+
+function getJobExecutionState(job) {
+  const result = job?.result && typeof job.result === "object" ? job.result : {};
+  const fullExecutionState = normalizeRunExecutionStateCandidate(result.execution_state);
+  const summaryState = normalizeRunExecutionStateCandidate(result.state);
+  const mergedState =
+    fullExecutionState || summaryState
+      ? { ...(fullExecutionState || {}), ...(summaryState || {}) }
+      : null;
+  return [mergedState, fullExecutionState, summaryState].find(hasRenderableRunPlanState) || mergedState || null;
+}
+
+function renderDeveloperPlanHealthItem(executionState = null) {
+  const planMarkup = renderAgentPlanHealth(executionState);
+  if (!planMarkup) return "";
+  return `
+    <article class="timeline-item timeline-item--developer timeline-item--plan" data-status="planning">
+      ${planMarkup}
     </article>
   `;
 }
@@ -5652,9 +9418,10 @@ function renderDeveloperTimelineItem(step) {
       : null;
   const actions = (step.executed_actions || []).slice(0, 4);
   const timingPill = renderTimingSummary(step.timings);
+  const statusMeta = timelineStepStatusMeta(step);
 
   return `
-    <article class="timeline-item timeline-item--developer">
+    <article class="timeline-item timeline-item--developer" data-status="${escapeHtml(statusMeta.token)}">
       <div class="timeline-item__head">
         <div>
           <p>${escapeHtml(tr("步骤", "Step"))} ${escapeHtml(String(step.step))}</p>
@@ -5663,10 +9430,14 @@ function renderDeveloperTimelineItem(step) {
         <span class="status-pill ${step.error ? "bad" : "ok"}">${escapeHtml(step.error ? tr("错误", "Error") : tr("完成", "OK"))}</span>
       </div>
       ${actions.length || timingPill ? `<div class="action-row">${actions.map(renderActionPill).join("")}${timingPill}</div>` : ""}
+      ${renderTimelinePlanningTrace(step)}
       ${screenshotUrl ? `<img class="timeline-shot" src="${escapeHtml(screenshotUrl)}" alt="${escapeHtml(tr("步骤截图", "Step screenshot"))}" />` : ""}
       <div class="timeline-item__meta">${escapeHtml(formatShortTime(step.captured_at))}</div>
     </article>
-  `;
+  `.replace(
+    /<span class="status-pill (?:bad|ok)">[^<]*<\/span>/,
+    `<span class="status-pill ${statusMeta.tone}">${escapeHtml(statusMeta.label)}</span>`
+  );
 }
 
 function renderLiveDeveloperTimeline() {
@@ -5683,7 +9454,7 @@ function renderLiveDeveloperTimeline() {
   const timingPill = renderTimingSummary(progress.latest_timings);
 
   return `
-    <article class="timeline-item timeline-item--developer timeline-item--live">
+    <article class="timeline-item timeline-item--developer timeline-item--live" data-status="running">
       <div class="timeline-item__head">
         <div>
           <p>${escapeHtml(tr("Live", "Live"))}</p>
@@ -5803,6 +9574,11 @@ function renderRunOverview(details) {
   const screenshots = collectRunScreenshots(details);
   const latestActions = collectLatestActions(details).slice(0, 4);
   const latestShot = screenshots[0] || null;
+  const executionState = getRunExecutionState(details);
+  const stepProposalSection = renderAgentStepProposal(resolveStepProposalCandidate(details, executionState || {}));
+  const planHealthSection = renderAgentPlanHealth(executionState);
+  const recoverySection = renderAgentRecoverySummary(executionState);
+  const workspaceSection = renderAgentWorkspaceSummary(executionState);
 
   return `
     <div class="inspector-overview">
@@ -5822,8 +9598,49 @@ function renderRunOverview(details) {
         <div class="inspector-section-card__chips">
           ${renderExecutionModeChip(details.dry_run)}
           ${renderHumanVerificationChip(details)}
+          ${renderExecutionContextChips(details, executionState).join("")}
         </div>
       </article>
+
+      ${
+        planHealthSection
+          ? `
+            <article class="inspector-section-card inspector-section-card--plan">
+              ${planHealthSection}
+            </article>
+          `
+          : ""
+      }
+
+      ${
+        stepProposalSection
+          ? `
+            <article class="inspector-section-card inspector-section-card--step">
+              ${stepProposalSection}
+            </article>
+          `
+          : ""
+      }
+
+      ${
+        recoverySection
+          ? `
+            <article class="inspector-section-card inspector-section-card--recovery">
+              ${recoverySection}
+            </article>
+          `
+          : ""
+      }
+
+      ${
+        workspaceSection
+          ? `
+            <article class="inspector-section-card inspector-section-card--workspace">
+              ${workspaceSection}
+            </article>
+          `
+          : ""
+      }
 
       ${
         latestShot
@@ -5875,8 +9692,9 @@ function renderRunTimeline(details) {
         .map((step) => {
           const screenshotUrl = details.id && step.screenshot ? buildArtifactUrl(details.id, step.screenshot) : null;
           const stepActions = (step.executed_actions || []).slice(0, 4);
+          const statusMeta = timelineStepStatusMeta(step);
           return `
-            <article class="timeline-item timeline-item--inspector">
+            <article class="timeline-item timeline-item--inspector" data-status="${escapeHtml(statusMeta.token)}">
               <div class="timeline-item__head">
                 <div>
                   <p>${escapeHtml(tr("步骤", "Step"))} ${escapeHtml(String(step.step))}</p>
@@ -5885,6 +9703,7 @@ function renderRunTimeline(details) {
                 <span class="status-pill ${step.error ? "bad" : "ok"}">${escapeHtml(step.error ? tr("错误", "Error") : tr("完成", "OK"))}</span>
               </div>
               ${stepActions.length ? `<div class="action-row">${stepActions.map(renderActionPill).join("")}</div>` : ""}
+              ${renderTimelinePlanningTrace(step)}
               ${
                 screenshotUrl
                   ? `
@@ -5901,7 +9720,10 @@ function renderRunTimeline(details) {
               }
               <div class="timeline-item__meta">${escapeHtml(formatShortTime(step.captured_at))}</div>
             </article>
-          `;
+          `.replace(
+            /<span class="status-pill (?:bad|ok)">[^<]*<\/span>/,
+            `<span class="status-pill ${statusMeta.tone}">${escapeHtml(statusMeta.label)}</span>`
+          );
         })
         .join("")}
     </div>
@@ -5995,6 +9817,8 @@ function renderComposerState(context) {
     elements.taskInput.disabled = Boolean(state.chatPending);
     elements.submitButton.disabled = Boolean(state.chatPending) || !configReady;
     elements.submitButton.hidden = Boolean(state.chatPending);
+    elements.previewTaskButton.hidden = true;
+    elements.previewTaskButton.disabled = true;
     elements.stopButton.hidden = !state.chatPending;
     elements.stopButton.disabled = !state.chatPending || Boolean(state.chatStopRequested);
     elements.stopButton.setAttribute("aria-label", chatStopLabel);
@@ -6004,27 +9828,42 @@ function renderComposerState(context) {
   }
 
   const isRunning = Boolean(state.activeJob);
-  elements.taskInput.disabled = isRunning;
-  elements.submitButton.disabled = isRunning || !configReady;
+  const pendingTask = normalizeText(state.pendingTask || "") || getAgentSessionPendingTask(getSelectedAgentSession());
+  const isPending = Boolean(pendingTask) || Boolean(state.resumePendingRunId);
+  elements.taskInput.disabled = isRunning || isPending;
+  elements.submitButton.disabled = isRunning || isPending || !configReady || state.taskPreviewLoading;
   elements.submitButton.hidden = isRunning;
-  elements.stopButton.disabled = !isRunning || Boolean(state.activeJob?.cancel_requested);
+  elements.previewTaskButton.hidden = isRunning;
+  elements.previewTaskButton.disabled = isRunning || isPending || !configReady || state.taskPreviewLoading;
+  const previewLabel = state.taskPreviewLoading
+    ? tr("\u89c4\u5212\u4e2d", "Planning")
+    : tr("\u9884\u89c8\u89c4\u5212", "Preview plan");
+  elements.previewTaskButton.setAttribute("aria-label", previewLabel);
+  elements.previewTaskButton.setAttribute("title", previewLabel);
+  elements.stopButton.disabled = !isRunning || isBooleanTrue(state.activeJob?.cancel_requested);
   elements.stopButton.hidden = !isRunning;
-  const stopLabel = state.activeJob?.cancel_requested ? tr("\u505c\u6b62\u4e2d", "Stopping") : t("chat.stop");
+  const stopLabel = isBooleanTrue(state.activeJob?.cancel_requested) ? tr("\u505c\u6b62\u4e2d", "Stopping") : t("chat.stop");
   elements.stopButton.setAttribute("aria-label", stopLabel);
   elements.stopButton.setAttribute("title", stopLabel);
 
   if (isRunning) {
-    elements.submitHint.textContent = state.activeJob.cancel_requested ? tr("\u6b63\u5728\u505c\u6b62", "Stopping") : tr("\u6b63\u5728\u6267\u884c", "Running");
+    elements.submitHint.textContent = formatAgentJobState(state.activeJob).label;
     return;
   }
 
-  if (state.pendingTask) {
+  if (isPending) {
     elements.submitHint.textContent = tr("\u4efb\u52a1\u5df2\u53d1\u9001", "Queued");
     return;
   }
 
   if (!configReady) {
     elements.submitHint.textContent = getConfigLoadingMessage();
+    return;
+  }
+
+  const previewHint = formatTaskPreviewComposerHint();
+  if (previewHint) {
+    elements.submitHint.textContent = previewHint;
     return;
   }
 
@@ -6660,6 +10499,7 @@ async function refreshEnvironmentCheck() {
   } else if (!state.environmentCheck) {
     state.environmentCheck = { items: [] };
   }
+  persistAgentSessions();
   renderAll();
   if (environmentCheckHasBackgroundProvider(payload)) {
     scheduleEnvironmentCheck({ delayMs: 1400 });

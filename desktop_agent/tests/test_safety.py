@@ -12,6 +12,20 @@ def test_guard_rejects_hotkey_not_in_whitelist():
         guard.validate(action)
 
 
+def test_guard_accepts_find_hotkey():
+    guard = ActionGuard(AgentConfig())
+    action = Action.from_dict({"type": "hotkey", "keys": ["ctrl", "f"]})
+
+    guard.validate(action)
+
+
+def test_guard_accepts_save_and_close_hotkeys_used_by_rules():
+    guard = ActionGuard(AgentConfig())
+
+    guard.validate(Action.from_dict({"type": "hotkey", "keys": ["ctrl", "s"]}))
+    guard.validate(Action.from_dict({"type": "hotkey", "keys": ["alt", "f4"]}))
+
+
 def test_guard_rejects_out_of_bounds_click():
     guard = ActionGuard(AgentConfig())
     action = Action.from_dict({"type": "click", "x": 4000, "y": 10, "button": "left"})
@@ -98,6 +112,13 @@ def test_guard_rejects_out_of_range_relative_click():
 def test_guard_accepts_safe_generic_app_intent():
     guard = ActionGuard(AgentConfig())
     action = Action.from_dict({"type": "open_app_if_needed", "app": "snipping tool"})
+
+    guard.validate(action)
+
+
+def test_guard_accepts_safe_chinese_app_intent():
+    guard = ActionGuard(AgentConfig())
+    action = Action.from_dict({"type": "open_app_if_needed", "app": "微信"})
 
     guard.validate(action)
 

@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from desktop_agent.actions import Action
 from desktop_agent.browser_runtime import BrowserRuntimeBridge, BrowserRuntimeError
-from desktop_agent.browser_dom import BrowserDOMError, PlaywrightBrowserSession, dom_backend_status
+from desktop_agent.browser_dom import BrowserDOMCancelled, BrowserDOMError, PlaywrightBrowserSession, dom_backend_status
 from desktop_agent.capabilities import CapabilityExecutor
 from desktop_agent.config import AgentConfig
 from desktop_agent.windows_env import (
@@ -28,6 +28,7 @@ from desktop_agent.windows_env import (
     maximize_window,
     minimize_window,
     move_resize_window,
+    preferred_work_area,
     wait_for_window,
 )
 
@@ -48,6 +49,7 @@ class BaseExecutor:
     def __init__(self) -> None:
         self.current_environment: DesktopEnvironment | None = None
         self._active_stop_requested: Callable[[], bool] | None = None
+        self._run_stop_requested: Callable[[], bool] | None = None
         self._action_progress_callback: Callable[[dict[str, Any]], None] | None = None
 
     def execute(self, action: Action) -> None:
@@ -58,6 +60,9 @@ class BaseExecutor:
 
     def set_action_progress_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
         self._action_progress_callback = callback
+
+    def set_run_stop_requested(self, callback: Callable[[], bool] | None) -> None:
+        self._run_stop_requested = callback
 
     def execute_many(
         self,
@@ -90,12 +95,15 @@ class BaseExecutor:
             self._active_stop_requested = previous_stop_requested
 
     def _stop_requested(self) -> bool:
-        if self._active_stop_requested is None:
-            return False
-        try:
-            return bool(self._active_stop_requested())
-        except Exception:
-            return False
+        for callback in (self._active_stop_requested, self._run_stop_requested):
+            if callback is None:
+                continue
+            try:
+                if bool(callback()):
+                    return True
+            except Exception:
+                continue
+        return False
 
     def _ensure_not_stopped(self, *, executed_actions: list[Action] | None = None) -> None:
         if self._stop_requested():
@@ -204,7 +212,13 @@ class RealDesktopExecutor(ActionExecutor):
             elif action.type == "browser_dom_extract":
                 self._dom_extract(text=action.text, selector=action.selector, target_scope=action.target_scope)
             elif action.type == "uia_invoke":
-                self._uia_invoke(title=action.title, selector=action.selector, text=action.text)
+                self._uia_invoke(
+                    title=action.title,
+                    selector=action.selector,
+                    text=action.text,
+                    x=action.x,
+                    y=action.y,
+                )
             elif action.type == "uia_set_value":
                 self._uia_set_value(title=action.title, selector=action.selector, text=action.text or "")
             elif action.type == "uia_select":
@@ -224,8 +238,9 @@ class RealDesktopExecutor(ActionExecutor):
                 gui = _load_pyautogui()
                 gui.press(action.key or "")
             elif action.type == "type":
-                gui = _load_pyautogui()
-                gui.write(action.text or "", interval=0.02)
+                self._type_text(action.text or "")
+            elif action.type == "insert_text":
+                self._insert_long_text(action.text or "")
             elif action.type == "drag":
                 self._drag_between(
                     action,
@@ -254,6 +269,8 @@ class RealDesktopExecutor(ActionExecutor):
                 raise ExecutionError(f"Unsupported action type: {action.type}")
         except ExecutionCancelled:
             raise
+        except BrowserDOMCancelled as exc:
+            raise ExecutionCancelled(str(exc)) from exc
         except Exception as exc:  # pragma: no cover - depends on runtime environment
             raise ExecutionError(str(exc)) from exc
 
@@ -264,16 +281,42 @@ class RealDesktopExecutor(ActionExecutor):
         alias = resolved_app.lower()
         target = self.config.app_launch_map.get(alias) or self.config.app_launch_map.get(resolved_app)
         if alias == "browser":
+            if self._open_managed_browser_window_if_available():
+                return
             if self._requires_dom_navigation() and self._attempt_dom_navigation(lambda session: session.open_url("about:blank")):
                 return
             self._open_browser_with_fallback(target)
             return
-        if target:
-            subprocess.Popen([target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if target and self._launch_mapped_app(target):
             return
-        if self.config.generic_app_launch_enabled and launch_app_by_name(resolved_app):
-            return
+        if self.config.generic_app_launch_enabled:
+            search_term = _windows_search_app_term(resolved_app)
+            if self._launch_app_via_start_menu(search_term):
+                return
+            if launch_app_by_name(resolved_app):
+                return
+            if search_term != resolved_app and launch_app_by_name(search_term):
+                return
         raise ExecutionError(f"Unknown or unavailable app: {resolved_app}")
+
+    def _launch_mapped_app(self, target: str) -> bool:
+        mapped_target = (target or "").strip()
+        if not mapped_target:
+            return False
+        try:
+            if _looks_like_shell_uri(mapped_target):
+                if os.name == "nt" and hasattr(os, "startfile"):
+                    os.startfile(mapped_target)  # type: ignore[attr-defined]
+                    return True
+                return bool(webbrowser.open(mapped_target))
+
+            resolved = shutil.which(mapped_target)
+            candidate_path = Path(mapped_target)
+            command = str(candidate_path) if candidate_path.is_file() else (resolved or mapped_target)
+            subprocess.Popen([command], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            return False
 
     def _open_app_if_needed(self, app: str) -> None:
         resolved_app = (app or "").strip()
@@ -288,7 +331,30 @@ class RealDesktopExecutor(ActionExecutor):
         self._launch_app(resolved_app)
         wait_query = _default_window_hint(resolved_app) or resolved_app
         if not (resolved_app.lower() == "browser" and self._prefers_dom_navigation()):
-            self._wait_for_window(wait_query, self.config.window_match_timeout)
+            self._wait_for_launched_app_window(wait_query)
+
+    def _wait_for_launched_app_window(self, title: str) -> None:
+        timeout_seconds = max(float(self.config.window_match_timeout or 0), 5.0)
+        match = wait_for_window(
+            title,
+            timeout_seconds=timeout_seconds,
+            stop_requested=self._stop_requested,
+        )
+        self.current_environment = capture_effective_desktop_environment(self.config)
+        self._ensure_not_stopped()
+        if match is not None:
+            return
+        self._ensure_not_stopped()
+
+    def _open_managed_browser_window_if_available(self) -> bool:
+        if self.managed_browser is None:
+            return False
+        try:
+            self.managed_browser.ensure_running()
+            self.managed_browser.open_window()
+            return True
+        except Exception:
+            return False
 
     def _open_browser_target(self, target: str, *, target_scope: str | None = None) -> None:
         if (target_scope or "").strip().lower() != "managed_aoryn_browser":
@@ -317,6 +383,95 @@ class RealDesktopExecutor(ActionExecutor):
         if webbrowser.open(fallback_target):
             return
         raise ExecutionError(f"Failed to open browser target: {fallback_target}")
+
+    def _launch_app_via_start_menu(self, app_name: str) -> bool:
+        search_term = (app_name or "").strip()
+        if not search_term:
+            return False
+        try:
+            gui = _load_pyautogui()
+            try:
+                gui.press("esc")
+                self._sleep_interruptibly(0.1)
+            except Exception:
+                pass
+            if not self._focus_windows_search(gui):
+                return False
+            self._replace_windows_search_text(gui, search_term)
+            self._sleep_interruptibly(0.75)
+            if self._click_windows_search_open_button():
+                return True
+            gui.press("enter")
+            return True
+        except ExecutionError:
+            return False
+        except Exception:
+            return False
+
+    def _focus_windows_search(self, gui: Any) -> bool:
+        gui.hotkey("win", "s")
+        self._sleep_interruptibly(0.55)
+        focused = _windows_search_has_text_input()
+        if focused is True or focused is None:
+            return True
+        gui.press("win")
+        self._sleep_interruptibly(0.55)
+        focused = _windows_search_has_text_input()
+        return focused is True or focused is None
+
+    def _click_windows_search_box(self, gui: Any) -> None:
+        try:
+            work_area = preferred_work_area(self.current_environment)
+            if work_area is not None and work_area.width > 0 and work_area.height > 0:
+                x = work_area.left + min(max(int(work_area.width * 0.28), 160), max(160, work_area.width - 160))
+                y = work_area.top + min(max(int(work_area.height * 0.11), 64), 230)
+            else:
+                width, height = gui.size()
+                x = min(max(int(width * 0.28), 160), max(160, int(width) - 160))
+                y = min(max(int(height * 0.11), 64), 230)
+            gui.click(x=x, y=y)
+            self._sleep_interruptibly(0.15)
+        except Exception:
+            return
+
+    def _replace_windows_search_text(self, gui: Any, text: str) -> None:
+        gui.hotkey("ctrl", "a")
+        self._sleep_interruptibly(0.05)
+        if _paste_text_via_clipboard(gui, text):
+            return
+        if _is_ascii_text(text):
+            gui.write(text, interval=0.03)
+            return
+        raise ExecutionError("Could not enter non-ASCII app name into Windows Search.")
+
+    def _click_windows_search_open_button(self) -> bool:
+        try:
+            from pywinauto import Desktop
+        except Exception:
+            return False
+
+        labels = {"打开", "Open", "Open app"}
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                desktop = Desktop(backend="uia")
+                windows = desktop.windows()
+            except Exception:
+                return False
+            for window in windows:
+                try:
+                    title = str(window.window_text() or "").strip().lower()
+                    if title and not any(token in title for token in ("search", "start", "搜索", "开始")):
+                        continue
+                    for button in window.descendants(control_type="Button"):
+                        name = str(button.window_text() or "").strip()
+                        if name in labels:
+                            button.click_input()
+                            return True
+                except Exception:
+                    continue
+            self._sleep_interruptibly(0.15)
+        return False
 
     def _search_in_browser(self, query: str, *, target_scope: str | None = None) -> None:
         if (target_scope or "").strip().lower() != "managed_aoryn_browser":
@@ -417,12 +572,91 @@ class RealDesktopExecutor(ActionExecutor):
         extracted = session.extract(text=text, selector=selector)
         self._last_dom_extract = extracted
 
-    def _uia_invoke(self, *, title: str | None, selector: str | None, text: str | None) -> None:
-        element = _resolve_uia_element(title=title, selector=selector, text=text)
-        if hasattr(element, "invoke"):
-            element.invoke()
+    def _uia_invoke(
+        self,
+        *,
+        title: str | None,
+        selector: str | None,
+        text: str | None,
+        x: int | None = None,
+        y: int | None = None,
+    ) -> None:
+        """Click a control by accessibility label, with a coordinate safety net.
+
+        Attempts, each more forgiving than the last, so a single step keeps
+        working when the easy path is unavailable:
+          1. resolve the element (robust label matching) and ``invoke()`` it;
+          2. if that control can't be programmatically invoked, ``click_input()``;
+          3. if the click itself fails (occluded / out-of-tree control), click
+             the centre of the element's on-screen rectangle by pixel coordinate;
+          4. if the element can't be resolved at all, fall back to the model-
+             provided ``(x, y)`` coordinate when one was supplied.
+        The whole step only fails once every layer is exhausted."""
+
+        try:
+            element = _resolve_uia_element(title=title, selector=selector, text=text)
+        except ExecutionError:
+            if self._coordinate_click_fallback(
+                x, y, reason=f"UIA could not locate {text or selector!r}; clicking model coordinate"
+            ):
+                return
+            raise
+        if self._click_resolved_uia_element(element):
             return
-        element.click_input()
+        if self._coordinate_click_fallback(
+            x, y, reason=f"UIA found {text or selector!r} but could not click it; using model coordinate"
+        ):
+            return
+        raise ExecutionError(
+            f"Resolved a UI Automation element for selector={selector!r} text={text!r} but could not click it."
+        )
+
+    def _click_resolved_uia_element(self, element) -> bool:
+        """Try the element's own ``invoke()``/``click_input()``, then a pixel
+        click at the centre of its rectangle. Returns True on the first that
+        succeeds, False if none did (so the caller can try coordinates)."""
+        if hasattr(element, "invoke"):
+            try:
+                element.invoke()
+                return True
+            except Exception:
+                pass
+        try:
+            element.click_input()
+            return True
+        except Exception:
+            pass
+        center = _uia_element_center(element)
+        if center is not None:
+            return self._coordinate_click_fallback(
+                center[0],
+                center[1],
+                reason="invoke/click_input failed; clicking element rectangle centre",
+            )
+        return False
+
+    def _coordinate_click_fallback(self, x: int | None, y: int | None, *, reason: str) -> bool:
+        """Last-resort pixel click. Returns False (no-op) when coordinates are
+        missing or invalid, so callers can decide whether to raise."""
+        try:
+            cx = int(x)  # type: ignore[arg-type]
+            cy = int(y)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return False
+        if cx < 0 or cy < 0:
+            return False
+        gui = _load_pyautogui()
+        self._emit_action_progress(
+            {
+                "event": "coordinate_fallback",
+                "x": cx,
+                "y": cy,
+                "reason": str(reason),
+                "updated_at": time.time(),
+            }
+        )
+        gui.click(cx, cy)
+        return True
 
     def _uia_set_value(self, *, title: str | None, selector: str | None, text: str) -> None:
         element = _resolve_uia_element(title=title, selector=selector, text=None)
@@ -433,8 +667,7 @@ class RealDesktopExecutor(ActionExecutor):
             element.set_text(text)
             return
         element.click_input()
-        gui = _load_pyautogui()
-        gui.write(text, interval=0.02)
+        self._type_text(text)
 
     def _uia_select(self, *, title: str | None, selector: str | None, text: str) -> None:
         element = _resolve_uia_element(title=title, selector=selector, text=None)
@@ -479,13 +712,52 @@ class RealDesktopExecutor(ActionExecutor):
             shell=False,
         )
 
+    def _type_text(self, text: str) -> None:
+        gui = _load_pyautogui()
+        if not text:
+            return
+        if _is_ascii_text(text):
+            gui.write(text, interval=0.02)
+            return
+        if _paste_text_via_clipboard(gui, text):
+            return
+        raise ExecutionError("Could not enter non-ASCII text into the focused control.")
+
+    def _insert_long_text(self, text: str) -> None:
+        """Write a multi-paragraph document into the focused editor.
+
+        Prefers a single clipboard paste because it handles Unicode, newlines, and
+        large bodies quickly; falls back to typing line by line so the agent still
+        behaves like a person at the keyboard when no clipboard is available.
+        """
+
+        if not text:
+            return
+        gui = _load_pyautogui()
+        if _paste_text_via_clipboard(gui, text):
+            return
+        lines = text.split("\n")
+        for index, line in enumerate(lines):
+            self._ensure_not_stopped()
+            if line:
+                if _is_ascii_text(line):
+                    gui.write(line, interval=0.01)
+                elif not _paste_text_via_clipboard(gui, line):
+                    raise ExecutionError("Could not enter non-ASCII document text into the focused control.")
+            if index < len(lines) - 1:
+                gui.press("enter")
+
     def _prepare_for_browser_task(self) -> None:
         self._refresh_environment()
+        self._ensure_not_stopped()
         browser_window = _find_existing_browser_window(self.current_environment)
         self._dismiss_known_blockers()
+        self._ensure_not_stopped()
         self._minimize_browser_conflicts(browser_window)
+        self._ensure_not_stopped()
         if browser_window is not None:
             focus_window(browser_window.handle)
+        self._ensure_not_stopped()
 
     def _focus_window(self, title: str) -> None:
         self._refresh_environment()
@@ -552,9 +824,7 @@ class RealDesktopExecutor(ActionExecutor):
         self._click_at(action, x=click_x, y=click_y, clicks=clicks, button=button)
 
     def _dismiss_known_blockers(self) -> None:
-        mode = self.config.desktop_autonomy_mode.lower().strip()
-        if mode not in {"conservative", "balanced", "aggressive"}:
-            return
+        mode = _blocker_dismissal_mode(self.config.desktop_autonomy_mode)
         if self.current_environment is None:
             return
         for blocker in _find_known_blockers(self.current_environment, mode=mode):
@@ -594,9 +864,11 @@ class RealDesktopExecutor(ActionExecutor):
 
         if self.dom_session is None:
             try:
-                self.dom_session = PlaywrightBrowserSession(self.config)
+                self.dom_session = PlaywrightBrowserSession(self.config, stop_requested=self._stop_requested)
             except BrowserDOMError as exc:
                 raise ExecutionError(str(exc)) from exc
+        elif hasattr(self.dom_session, "set_stop_requested"):
+            self.dom_session.set_stop_requested(self._stop_requested)
         return self.dom_session
 
     def _prefers_dom_navigation(self) -> bool:
@@ -613,8 +885,13 @@ class RealDesktopExecutor(ActionExecutor):
             session = self._get_dom_session(required=self._requires_dom_navigation())
             if session is None:
                 return False
+            self._ensure_not_stopped()
             operation(session)
+            self._ensure_not_stopped()
             return True
+        except BrowserDOMCancelled as exc:
+            self._reset_dom_session()
+            raise ExecutionCancelled(str(exc)) from exc
         except Exception as exc:
             self._reset_dom_session()
             if self._requires_dom_navigation():
@@ -631,10 +908,14 @@ class RealDesktopExecutor(ActionExecutor):
         if selector is not None and not selector.strip():
             return False
         try:
+            self._ensure_not_stopped()
             self.managed_browser.ensure_running()
+            self._ensure_not_stopped()
             operation(self.managed_browser)
+            self._ensure_not_stopped()
             return True
         except BrowserRuntimeError:
+            self._ensure_not_stopped()
             return False
 
     def _attempt_managed_browser_query(self, *, selector: str | None = None, action_scope: str | None = None) -> bool:
@@ -645,9 +926,12 @@ class RealDesktopExecutor(ActionExecutor):
         if selector is None or not selector.strip():
             return False
         try:
+            self._ensure_not_stopped()
             self.managed_browser.ensure_running()
+            self._ensure_not_stopped()
             return True
         except BrowserRuntimeError:
+            self._ensure_not_stopped()
             return False
 
     def _reset_dom_session(self) -> None:
@@ -658,21 +942,38 @@ class RealDesktopExecutor(ActionExecutor):
                 pass
         self.dom_session = None
 
+    def _with_extracted_text(self, snapshot: dict[str, str | None] | None) -> dict[str, str | None] | None:
+        # Surface the most recent browser_dom_extract result so research can use it
+        # (otherwise the extracted page content is gathered and then thrown away).
+        if isinstance(snapshot, dict) and self._last_dom_extract:
+            snapshot = dict(snapshot)
+            snapshot.setdefault("extracted_text", self._last_dom_extract)
+        return snapshot
+
     def browser_snapshot(self) -> dict[str, str | None] | None:
+        self._ensure_not_stopped()
         if self.managed_browser is not None:
             try:
                 snapshot = self.managed_browser.snapshot()
             except BrowserRuntimeError:
                 snapshot = None
+            self._ensure_not_stopped()
             if isinstance(snapshot, dict) and any(str(snapshot.get(key) or "").strip() for key in ("url", "title", "text")):
-                return snapshot
+                return self._with_extracted_text(snapshot)
         if self.dom_session is None:
             return None
         snapshot = getattr(self.dom_session, "snapshot", None)
         if snapshot is None:
             return None
         try:
-            return snapshot()
+            self._ensure_not_stopped()
+            payload = snapshot()
+            self._ensure_not_stopped()
+            return self._with_extracted_text(payload)
+        except BrowserDOMCancelled as exc:
+            raise ExecutionCancelled(str(exc)) from exc
+        except ExecutionCancelled:
+            raise
         except Exception:
             return None
 
@@ -826,6 +1127,9 @@ class MockDesktopState:
     address_bar_active: bool = False
     clipboard_text: str | None = None
     last_extracted_text: str | None = None
+    pending_save_app: str | None = None
+    pending_save_path: str | None = None
+    saved_paths: list[str] = field(default_factory=list)
 
 
 class MockExecutor(ActionExecutor):
@@ -910,11 +1214,20 @@ class MockExecutor(ActionExecutor):
             return
         if action.type == "type":
             if self.state.active_app:
+                if self.state.pending_save_app:
+                    self.state.pending_save_path = action.text or ""
+                    return
                 if self.state.active_app == "browser" and self.state.address_bar_active:
                     self.state.text_buffers["browser"] = action.text or ""
                 else:
                     current = self.state.text_buffers.get(self.state.active_app, "")
                     self.state.text_buffers[self.state.active_app] = current + (action.text or "")
+            return
+        if action.type == "insert_text":
+            if self.state.active_app:
+                current = self.state.text_buffers.get(self.state.active_app, "")
+                self.state.text_buffers[self.state.active_app] = current + (action.text or "")
+                self.state.last_extracted_text = self.state.text_buffers[self.state.active_app]
             return
         if action.type == "drag":
             return
@@ -928,11 +1241,22 @@ class MockExecutor(ActionExecutor):
                 self.state.text_buffers["browser"] = ""
                 self.state.current_url = "about:blank"
                 return
+            if combo == ("ctrl", "s") and self.state.active_app:
+                self.state.pending_save_app = self.state.active_app
+                self.state.pending_save_path = None
+                return
             if combo == ("alt", "tab") and self.state.open_apps:
                 self.state.active_app = self.state.active_app or next(iter(self.state.open_apps))
                 return
             return
         if action.type == "press":
+            if action.key == "enter" and self.state.pending_save_app:
+                saved_path = (self.state.pending_save_path or f"{self.state.pending_save_app}.txt").strip()
+                if saved_path:
+                    self.state.saved_paths.append(saved_path)
+                self.state.pending_save_app = None
+                self.state.pending_save_path = None
+                return
             if action.key == "enter" and self.state.active_app == "browser" and self.state.address_bar_active:
                 self._commit_browser_address_bar()
             return
@@ -979,6 +1303,7 @@ class MockExecutor(ActionExecutor):
             "url": self.state.current_url,
             "title": None,
             "text": self.state.text_buffers.get("browser"),
+            "extracted_text": self.state.last_extracted_text,
         }
 
 
@@ -998,8 +1323,128 @@ def _load_pyautogui():
     import pyautogui  # imported lazily
 
     pyautogui.FAILSAFE = True
-    pyautogui.PAUSE = 0.1
+    pyautogui.PAUSE = 0.02
     return pyautogui
+
+
+def _windows_search_app_term(app: str) -> str:
+    normalized = " ".join((app or "").strip().split())
+    aliases = {
+        "browser": "Microsoft Edge",
+        "edge": "Microsoft Edge",
+        "msedge": "Microsoft Edge",
+        "explorer": "File Explorer",
+        "file explorer": "File Explorer",
+        "calculator": "Calculator",
+        "calc": "Calculator",
+        "notepad": "Notepad",
+        "paint": "Paint",
+        "mspaint": "Paint",
+        "settings": "Settings",
+        "snipping tool": "Snipping Tool",
+        "screenshot tool": "Snipping Tool",
+        "word": "Word",
+        "winword": "Word",
+        "excel": "Excel",
+        "powerpoint": "PowerPoint",
+        "ppt": "PowerPoint",
+        "vscode": "Visual Studio Code",
+        "vs code": "Visual Studio Code",
+        "code": "Visual Studio Code",
+        "wechat": "WeChat",
+        "weixin": "WeChat",
+        "微信": "微信",
+        "dingtalk": "DingTalk",
+        "钉钉": "钉钉",
+        "wps": "WPS Office",
+    }
+    return aliases.get(normalized.lower(), normalized)
+
+
+def _looks_like_shell_uri(target: str) -> bool:
+    return bool(re.match(r"^[a-z][a-z0-9+.-]*:$", (target or "").strip(), re.I))
+
+
+def _is_ascii_text(text: str) -> bool:
+    try:
+        text.encode("ascii")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def _paste_text_via_clipboard(gui, text: str) -> bool:
+    previous_text = _read_windows_clipboard_text()
+    if not _set_windows_clipboard_text(text):
+        return False
+    try:
+        gui.hotkey("ctrl", "v")
+        time.sleep(0.08)
+        return True
+    finally:
+        if previous_text is not None:
+            _set_windows_clipboard_text(previous_text)
+
+
+def _windows_search_has_text_input() -> bool | None:
+    try:
+        from pywinauto import Desktop
+    except Exception:
+        return None
+
+    title_tokens = ("search", "start", "搜索", "开始")
+    try:
+        windows = Desktop(backend="uia").windows()
+    except Exception:
+        return None
+    for window in windows:
+        try:
+            title = str(window.window_text() or "").strip().lower()
+            class_name = str(getattr(window.element_info, "class_name", "") or "").strip().lower()
+            if title and not any(token in title for token in title_tokens) and "search" not in class_name:
+                continue
+            edits = window.descendants(control_type="Edit")
+            if edits:
+                return True
+            combo_boxes = window.descendants(control_type="ComboBox")
+            if combo_boxes:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _read_windows_clipboard_text() -> str | None:
+    try:
+        import win32clipboard
+        import win32con
+
+        win32clipboard.OpenClipboard()
+        try:
+            if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                return None
+            data = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+            return str(data) if data is not None else None
+        finally:
+            win32clipboard.CloseClipboard()
+    except Exception:
+        return None
+
+
+def _set_windows_clipboard_text(text: str) -> bool:
+    try:
+        import win32clipboard
+        import win32con
+
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, str(text))
+        finally:
+            win32clipboard.CloseClipboard()
+        return True
+    except Exception:
+        return False
 
 
 def _current_cursor_position(gui, *, fallback: tuple[int, int]) -> tuple[int, int]:
@@ -1057,7 +1502,6 @@ def _resolve_uia_element(*, title: str | None, selector: str | None, text: str |
         raise ExecutionError("pywinauto is required for Windows UI Automation actions.") from exc
 
     desktop = Desktop(backend="uia")
-    window = None
     if (title or "").strip():
         window = desktop.window(title_re=re.escape(str(title).strip()))
     else:
@@ -1066,17 +1510,147 @@ def _resolve_uia_element(*, title: str | None, selector: str | None, text: str |
         except Exception as exc:  # pragma: no cover - runtime dependent
             raise ExecutionError("Could not resolve the active desktop window for UI Automation.") from exc
 
+    return _resolve_uia_element_in_window(window, selector=selector, text=text)
+
+
+def _resolve_uia_element_in_window(window, *, selector: str | None, text: str | None):
+    """Resolve a control by trying several matching strategies in order, so a
+    slightly-off label (extra spaces, mixed CN/EN, partial text) still clicks the
+    right element instead of failing the whole step. Pure of the Desktop lookup so
+    it can be unit-tested with a fake window."""
+
     query = _parse_uia_selector(selector)
-    if text and "title_re" not in query and "best_match" not in query and "name" not in query:
-        query["title_re"] = re.escape(text.strip())
-    try:
-        if query:
-            return window.child_window(**query).wrapper_object()
+    target = str(text or "").strip()
+    strategies = _uia_resolution_strategies(query, target)
+    if not strategies:
         return window.wrapper_object()
-    except Exception as exc:  # pragma: no cover - runtime dependent
-        raise ExecutionError(
-            f"Could not resolve a UI Automation element for selector={selector!r} text={text!r}."
-        ) from exc
+
+    for strategy in strategies:
+        try:
+            element = window.child_window(**strategy).wrapper_object()
+        except Exception:
+            continue
+        if element is not None:
+            return element
+
+    if target:
+        fuzzy = _best_uia_descendant(window, target)
+        if fuzzy is not None:
+            return fuzzy
+
+    raise ExecutionError(
+        f"Could not resolve a UI Automation element for selector={selector!r} text={text!r}."
+    )
+
+
+def _uia_resolution_strategies(query: dict[str, str], target: str) -> list[dict[str, str]]:
+    strategies: list[dict[str, str]] = []
+    if query:
+        strategies.append(dict(query))
+    if target:
+        escaped = re.escape(target)
+        contains = f"(?i).*{escaped}.*"
+        strategies.append({"title": target})  # exact label
+        strategies.append({"title_re": contains})  # case-insensitive contains
+        strategies.append({"best_match": target})  # pywinauto fuzzy match
+        for control_type in (
+            "Button",
+            "MenuItem",
+            "Hyperlink",
+            "ListItem",
+            "TabItem",
+            "CheckBox",
+            "RadioButton",
+            "SplitButton",
+            "Text",
+        ):
+            strategies.append({"control_type": control_type, "title_re": contains})
+    # de-duplicate while keeping order
+    seen: set[tuple] = set()
+    ordered: list[dict[str, str]] = []
+    for strategy in strategies:
+        key = tuple(sorted(strategy.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(strategy)
+    return ordered
+
+
+def _best_uia_descendant(window, target: str):
+    try:
+        descendants = list(window.descendants())
+    except Exception:
+        return None
+    normalized_target = _normalize_uia_label(target)
+    if not normalized_target:
+        return None
+    best = None
+    best_score = 0
+    for element in descendants:
+        try:
+            name = str(element.window_text() or "").strip()
+        except Exception:
+            continue
+        score = _uia_label_score(normalized_target, _normalize_uia_label(name))
+        if score > best_score:
+            best_score = score
+            best = element
+    if best is None or best_score <= 0:
+        return None
+    try:
+        return best.wrapper_object() if hasattr(best, "wrapper_object") else best
+    except Exception:
+        return best
+
+
+def _uia_element_center(element) -> tuple[int, int] | None:
+    """Best-effort centre point of a resolved UIA element's bounding rectangle,
+    so a click can fall back to pixel coordinates when ``invoke()`` /
+    ``click_input()`` are unavailable. Returns None when no usable rectangle
+    can be read."""
+    rect_getter = getattr(element, "rectangle", None)
+    if not callable(rect_getter):
+        return None
+    try:
+        rect = rect_getter()
+    except Exception:
+        return None
+    mid = getattr(rect, "mid_point", None)
+    if callable(mid):
+        try:
+            point = mid()
+            return int(point.x), int(point.y)
+        except Exception:
+            pass
+    try:
+        left = int(rect.left)
+        top = int(rect.top)
+        right = int(rect.right)
+        bottom = int(rect.bottom)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if right <= left or bottom <= top:
+        return None
+    return (left + right) // 2, (top + bottom) // 2
+
+
+def _normalize_uia_label(value: str) -> str:
+    lowered = str(value or "").lower()
+    return re.sub(r"[^0-9a-z一-鿿]+", "", lowered)
+
+
+def _uia_label_score(target: str, candidate: str) -> int:
+    if not target or not candidate:
+        return 0
+    if target == candidate:
+        return 100
+    if target in candidate:
+        return 70
+    if candidate in target:
+        return 40
+    shared = set(target) & set(candidate)
+    return len(shared) if len(shared) >= max(2, len(target) // 2) else 0
 
 
 def _parse_uia_selector(selector: str | None) -> dict[str, str]:
@@ -1185,6 +1759,19 @@ def _default_window_hint(app: str) -> str | None:
         "notepad": "notepad",
         "calculator": "calculator",
         "explorer": "file explorer",
+        "paint": "paint",
+        "settings": "settings",
+        "word": "word",
+        "excel": "excel",
+        "powerpoint": "powerpoint",
+        "ppt": "powerpoint",
+        "vscode": "visual studio code",
+        "wechat": "wechat",
+        "weixin": "wechat",
+        "微信": "微信",
+        "dingtalk": "dingtalk",
+        "钉钉": "钉钉",
+        "wps": "wps",
     }
     return hints.get(normalized) or normalized or None
 
@@ -1198,6 +1785,24 @@ def _infer_mock_app_from_title(title: str) -> str | None:
         return "calculator"
     if "explorer" in title or "file" in title:
         return "explorer"
+    if "paint" in title:
+        return "paint"
+    if "settings" in title:
+        return "settings"
+    if "word" in title:
+        return "word"
+    if "excel" in title:
+        return "excel"
+    if "powerpoint" in title or "ppt" in title:
+        return "powerpoint"
+    if "visual studio code" in title or "vscode" in title:
+        return "vscode"
+    if "wechat" in title or "微信" in title:
+        return "wechat"
+    if "dingtalk" in title or "钉钉" in title:
+        return "dingtalk"
+    if "wps" in title:
+        return "wps"
     return None
 
 
@@ -1292,6 +1897,17 @@ def _find_known_blockers(
             # Reserved for future broader popup handling, but never class-only in conservative mode.
             continue
     return blockers
+
+
+def _blocker_dismissal_mode(mode: str | None) -> str:
+    normalized = (mode or "conservative").strip().lower().replace(" ", "_").replace("-", "_")
+    if normalized in {"autonomous", "high_autonomy", "aggressive", "auto"}:
+        return "aggressive"
+    if normalized in {"review_first", "supervised", "strict"}:
+        return "conservative"
+    if normalized == "balanced":
+        return "balanced"
+    return "conservative"
 
 
 def _resolve_relative_axis(ratio: float, span: int) -> int:

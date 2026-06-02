@@ -5,8 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#ffffff" />
     <title>__APP_NAME__</title>
-    <link rel="icon" type="image/png" href="/assets/icons/logo-mark.png?v=__APP_ASSET_VERSION__" />
+    <link rel="icon" type="image/png" href="/assets/icons/aoryn-mark.png?v=__APP_ASSET_VERSION__" />
     <link rel="icon" href="/favicon.ico" sizes="64x64" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/assets/vendor/tabler.min.css?v=__APP_ASSET_VERSION__" />
     <link rel="stylesheet" href="/assets/vendor/tabler-icons-subset.css?v=__APP_ASSET_VERSION__" />
     <link rel="stylesheet" href="/assets/styles.css?v=__APP_ASSET_VERSION__" />
@@ -17,7 +23,7 @@
         <div class="sidebar-head">
           <button class="sidebar-brand sidebar-brand-toggle" id="sidebarBrandButton" type="button" aria-label="Toggle sidebar" title="Toggle sidebar">
             <div class="brand-mark" aria-hidden="true">
-              <img class="brand-mark__image" src="/assets/icons/logo-mark.png?v=__APP_ASSET_VERSION__" alt="" />
+              <img class="brand-mark__image" src="/assets/icons/aoryn-mark.png?v=__APP_ASSET_VERSION__" alt="" />
             </div>
             <div class="sidebar-brand__copy">
               <strong class="brand-wordmark" data-i18n="sidebar.appTitle">Aoryn</strong>
@@ -32,18 +38,32 @@
 
         <div class="sidebar-section-head">
           <p data-i18n="sidebar.history">历史</p>
-          <button class="sidebar-refresh" id="refreshRunsButton" type="button" aria-label="刷新" title="刷新">
-            <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
-                fill="none"
-                stroke="currentColor"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="1.8"
-              />
-            </svg>
-          </button>
+          <div class="sidebar-section-actions">
+            <button class="sidebar-clear" id="clearHistoryButton" type="button" aria-label="清空历史记录" title="清空历史记录">
+              <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M4 7h16M9.5 3.75h5M8 7l.6 11.1A2 2 0 0 0 10.59 20h2.82a2 2 0 0 0 1.99-1.9L16 7M10 10.5v5M14 10.5v5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.8"
+                />
+              </svg>
+            </button>
+            <button class="sidebar-refresh" id="refreshRunsButton" type="button" aria-label="刷新" title="刷新">
+              <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.8"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div class="sidebar-run-list" id="sidebarRunList">
@@ -87,6 +107,18 @@
                 <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
                   <path
                     d="m9 8-4 4 4 4m6-8 4 4-4 4M12 4v16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.8"
+                  />
+                </svg>
+              </button>
+              <button class="mode-switch__button" data-ui-mode="developer" type="button" aria-label="Dev" title="Dev">
+                <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="m8.5 9-3 3 3 3M15.5 9l3 3-3 3M13 5l-2 14"
                     fill="none"
                     stroke="currentColor"
                     stroke-linecap="round"
@@ -146,6 +178,18 @@
                     <button class="secondary-button composer-icon-button" id="stopButton" type="button" aria-label="停止" title="停止" hidden>
                       <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
                         <rect x="7" y="7" width="10" height="10" rx="2.2" fill="currentColor" />
+                      </svg>
+                    </button>
+                    <button class="secondary-button composer-icon-button" id="previewTaskButton" type="button" aria-label="预览规划" title="预览规划">
+                      <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="1.8"
+                        />
                       </svg>
                     </button>
                     <button class="primary-button composer-icon-button" id="submitButton" type="submit" aria-label="发送" title="发送">
@@ -307,8 +351,13 @@
                 </label>
 
                 <label class="field">
+                  <span data-i18n="settings.maxRunSeconds">时限</span>
+                  <input id="maxRunSecondsInput" name="max_run_seconds" min="1" step="1" type="number" placeholder="3600" />
+                </label>
+
+                <label class="field">
                   <span data-i18n="settings.pausePerAction">暂停</span>
-                  <input id="pauseInput" name="pause_after_action" min="0" step="0.1" type="number" placeholder="0.4" />
+                  <input id="pauseInput" name="pause_after_action" min="0" step="0.1" type="number" placeholder="0.12" />
                 </label>
               </div>
 
@@ -325,7 +374,92 @@
 
               <label class="field">
                 <span>Cursor motion duration (s)</span>
-                <input id="cursorMotionDuration" name="cursor_motion_duration" min="0.1" max="1" step="0.05" type="number" placeholder="0.20" />
+                <input id="cursorMotionDuration" name="cursor_motion_duration" min="0.05" max="1" step="0.05" type="number" placeholder="0.12" />
+              </label>
+            </section>
+
+            <section class="settings-section">
+              <div class="section-head">
+                <h3>Planning</h3>
+              </div>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span>Autonomy</span>
+                  <select id="autonomyModeSelect" aria-label="Autonomy mode"></select>
+                </label>
+
+                <label class="field">
+                  <span>Mode</span>
+                  <select id="planningModeSelect" aria-label="Planning mode"></select>
+                </label>
+
+                <label class="field">
+                  <span>Plan timeout</span>
+                  <input id="taskGraphRequestTimeoutInput" name="task_graph_request_timeout" min="0.5" max="60" step="0.5" type="number" placeholder="12" />
+                </label>
+
+                <label class="field">
+                  <span>Plan review</span>
+                  <select id="planReviewPolicySelect" aria-label="Plan review policy"></select>
+                </label>
+
+                <label class="field">
+                  <span>Step approval</span>
+                  <select id="approvalPolicySelect" aria-label="Step approval policy"></select>
+                </label>
+
+                <label class="field">
+                  <span>Replan review</span>
+                  <select id="stageReviewPolicySelect" aria-label="Stage review policy"></select>
+                </label>
+
+                <label class="field">
+                  <span>Subgoals</span>
+                  <input id="maxTaskSubgoalsInput" name="max_task_subgoals" min="1" max="20" step="1" type="number" placeholder="12" />
+                </label>
+
+                <label class="field">
+                  <span>Retries</span>
+                  <input id="maxSubgoalRetriesInput" name="max_subgoal_retries" min="0" max="12" step="1" type="number" placeholder="2" />
+                </label>
+
+                <label class="field">
+                  <span>Replans</span>
+                  <input id="maxReplansInput" name="max_replans_per_run" min="0" max="10" step="1" type="number" placeholder="3" />
+                </label>
+
+                <label class="field">
+                  <span>Failure budget</span>
+                  <input id="maxFailuresInput" name="max_failures_per_subgoal" min="1" max="12" step="1" type="number" placeholder="3" />
+                </label>
+
+                <label class="field">
+                  <span>Recovery retries</span>
+                  <input id="recoverableRetryLimitInput" name="recoverable_error_retry_limit" min="0" max="10" step="1" type="number" placeholder="2" />
+                </label>
+              </div>
+
+              <label class="toggle-field">
+                <span>
+                  <strong>Task workspace</strong>
+                  <small>Keep subgoals, evidence, and recovery state across the run.</small>
+                </span>
+                <span class="switch">
+                  <input id="taskWorkspaceEnabled" type="checkbox" />
+                  <i></i>
+                </span>
+              </label>
+
+              <label class="toggle-field">
+                <span>
+                  <strong>Auto replan on recoverable error</strong>
+                  <small>Let Aoryn repair or retry transient failures before stopping the run.</small>
+                </span>
+                <span class="switch">
+                  <input id="replanOnRecoverableError" type="checkbox" />
+                  <i></i>
+                </span>
               </label>
             </section>
 
@@ -475,7 +609,7 @@
 
                 <label class="field">
                   <span data-i18n="settings.domTimeout">超时</span>
-                  <input id="browserDomTimeout" name="browser_dom_timeout" min="1" step="0.5" type="number" placeholder="8" />
+                  <input id="browserDomTimeout" name="browser_dom_timeout" min="0.5" step="0.5" type="number" placeholder="4" />
                 </label>
               </div>
 

@@ -12,11 +12,14 @@ from typing import Sequence
 from urllib import error as url_error
 from urllib import request as url_request
 
+import yaml
+
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_DASHBOARD_PORT = 8765
-DEFAULT_BROWSER_PORT = 38991
-DEFAULT_BROWSER_PROFILE = Path(".tmp") / "browser-runtime" / "browser-profile"
+DEFAULT_DASHBOARD_PORT = 8766
+DEFAULT_BROWSER_PORT = 38992
+DEFAULT_DEV_ROOT = Path(".tmp") / "source-test"
+DEFAULT_BROWSER_PROFILE = DEFAULT_DEV_ROOT / "browser-profile"
 APP_TITLE = "Aoryn"
 
 
@@ -31,6 +34,7 @@ class LaunchPlan:
     browser_command: list[str] | None
     dashboard_url: str
     browser_url: str
+    config_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +58,7 @@ class PortProbe:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Start the Aoryn source-mode development workbench.")
     parser.add_argument("--ui", choices=["shell", "web"], default="shell", help="UI mode to launch.")
+    parser.add_argument("--host", default=DEFAULT_HOST, help="Dashboard HTTP host.")
     parser.add_argument("--port", type=int, default=DEFAULT_DASHBOARD_PORT, help="Dashboard HTTP port.")
     parser.add_argument(
         "--managed-browser-port",
@@ -84,22 +89,24 @@ def build_launch_plan(args: argparse.Namespace, *, project_root: Path | None = N
     root = (project_root or _project_root()).resolve()
     run_agent = root / "run_agent.py"
     run_browser = root / "run_browser.py"
+    host = str(args.host or DEFAULT_HOST).strip() or DEFAULT_HOST
+    config_path = _materialize_source_config(args, project_root=root, host=host)
 
     dashboard_command = [
         sys.executable,
         str(run_agent),
         "ui",
         "--host",
-        DEFAULT_HOST,
+        host,
         "--port",
         str(int(args.port)),
+        "--config",
+        str(config_path),
     ]
     if args.ui == "web":
         dashboard_command.append("--browser")
     if args.no_browser_tab:
         dashboard_command.append("--no-browser")
-    if args.config is not None:
-        dashboard_command.extend(["--config", str(args.config)])
 
     browser_command: list[str] | None = None
     if not args.no_managed_browser:
@@ -111,20 +118,21 @@ def build_launch_plan(args: argparse.Namespace, *, project_root: Path | None = N
             str(int(args.managed_browser_port)),
             "--profile-root",
             str(browser_profile),
+            "--config-path",
+            str(config_path),
         ]
-        if args.config is not None:
-            browser_command.extend(["--config-path", str(args.config)])
 
     return LaunchPlan(
         project_root=root,
-        host=DEFAULT_HOST,
+        host=host,
         dashboard_port=int(args.port),
         browser_port=int(args.managed_browser_port),
         ui_mode=str(args.ui),
         dashboard_command=dashboard_command,
         browser_command=browser_command,
-        dashboard_url=f"http://{DEFAULT_HOST}:{int(args.port)}",
-        browser_url=f"http://{DEFAULT_HOST}:{int(args.managed_browser_port)}",
+        dashboard_url=f"http://{host}:{int(args.port)}",
+        browser_url=f"http://{host}:{int(args.managed_browser_port)}",
+        config_path=config_path,
     )
 
 
@@ -181,6 +189,7 @@ def _print_header(plan: LaunchPlan) -> None:
     print(f"Dashboard: {plan.dashboard_url}")
     print(f"Browser Runtime: {plan.browser_url}")
     print(f"UI mode: {plan.ui_mode}")
+    print(f"Source config: {plan.config_path}")
 
 
 def _print_commands(plan: LaunchPlan) -> None:
@@ -198,6 +207,17 @@ def _format_command(command: Sequence[str]) -> str:
 def _probe_dashboard_port(host: str, port: int) -> PortProbe:
     if not _tcp_port_open(host, port):
         return PortProbe("free")
+    meta_payload = _read_json(f"http://{host}:{port}/api/meta")
+    if isinstance(meta_payload, dict):
+        runtime_mode = str(meta_payload.get("runtime_mode") or "").strip().lower()
+        title = str(meta_payload.get("title") or "").strip()
+        if title == APP_TITLE and runtime_mode == "source":
+            return PortProbe("aoryn", "Aoryn source dashboard responded to /api/meta.")
+        if title == APP_TITLE and runtime_mode:
+            return PortProbe(
+                "occupied",
+                f"Existing Aoryn runtime on this port is {runtime_mode}, not source mode.",
+            )
     payload = _read_json(f"http://{host}:{port}/api/overview")
     if isinstance(payload, dict):
         meta = payload.get("meta")
@@ -285,6 +305,45 @@ def _qtwebengine_available(project_root: Path) -> tuple[bool, str]:
 
 def _start_process(command: Sequence[str], *, cwd: Path) -> subprocess.Popen:
     return subprocess.Popen([str(part) for part in command], cwd=str(cwd))
+
+
+def _materialize_source_config(args: argparse.Namespace, *, project_root: Path, host: str) -> Path:
+    source_config_path = _resolve_source_config_path(args.config, project_root=project_root)
+    payload = _read_yaml_mapping(source_config_path) if source_config_path is not None else {}
+    payload.update(
+        {
+            "managed_browser_host": host,
+            "managed_browser_port": int(args.managed_browser_port),
+        }
+    )
+    dev_root = project_root / DEFAULT_DEV_ROOT
+    dev_root.mkdir(parents=True, exist_ok=True)
+    config_path = dev_root / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def _resolve_source_config_path(config_arg: Path | None, *, project_root: Path) -> Path | None:
+    if config_arg is not None:
+        path = config_arg if config_arg.is_absolute() else project_root / config_arg
+        return path.resolve()
+    default_config = project_root / "config.yaml"
+    return default_config.resolve() if default_config.exists() else None
+
+
+def _read_yaml_mapping(path: Path | None) -> dict:
+    if path is None:
+        return {}
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Config file was not found: {path}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Config file must contain a YAML mapping: {path}")
+    return dict(payload)
 
 
 def _stop_started_processes(processes: list[tuple[str, subprocess.Popen]]) -> None:
