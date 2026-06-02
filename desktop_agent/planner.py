@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import socket
 import threading
@@ -752,6 +753,212 @@ class VLMPlanner(BasePlanner):
         return _extract_message_content(data)
 
 
+class OpenAIComputerUsePlanner(BasePlanner):
+    """Planner backed by OpenAI's Responses API computer use loop."""
+
+    def __init__(self, config: AgentConfig):
+        self.config = config
+        self._active_task: str | None = None
+        self._previous_response_id: str | None = None
+        self._last_call_id: str | None = None
+        self._prefer_chat_fallback = False
+
+    def plan(
+        self,
+        task: str,
+        screenshot_path: Path | None,
+        history: list[str],
+        environment: DesktopEnvironment | None = None,
+    ) -> PlanResult:
+        if screenshot_path is None or not screenshot_path.exists():
+            raise PlannerError("Computer use planning requires a screenshot.")
+        requests = _import_requests()
+        api_base = _computer_use_api_base(self.config)
+        model_name = _resolve_computer_use_model_name(self.config)
+        display_width, display_height = _computer_use_display_size(screenshot_path, environment)
+        image_b64 = base64.b64encode(screenshot_path.read_bytes()).decode("utf-8")
+        task_key = " ".join(str(task or "").split()).strip()
+        if task_key != self._active_task:
+            self._reset_loop(task_key)
+        if self._prefer_chat_fallback:
+            return self._plan_with_chat_fallback(
+                requests=requests,
+                api_base=api_base,
+                model_name=model_name,
+                task=task,
+                history=history,
+                image_b64=image_b64,
+                display_width=display_width,
+                display_height=display_height,
+                environment=_computer_use_environment(environment),
+            )
+        if self._previous_response_id and self._last_call_id:
+            payload = _build_computer_use_followup_payload(
+                model_name=model_name,
+                previous_response_id=self._previous_response_id,
+                call_id=self._last_call_id,
+                image_b64=image_b64,
+                display_width=display_width,
+                display_height=display_height,
+                environment=_computer_use_environment(environment),
+            )
+        else:
+            payload = _build_computer_use_payload(
+                model_name=model_name,
+                task=task,
+                history_text=_format_history_for_prompt(history),
+                image_b64=image_b64,
+                display_width=display_width,
+                display_height=display_height,
+                environment=_computer_use_environment(environment),
+            )
+        try:
+            response = requests.post(
+                f"{api_base}/responses",
+                headers=_build_request_headers(_computer_use_api_key(self.config)),
+                json=payload,
+                timeout=self.config.model_request_timeout,
+            )
+        except requests.RequestException as exc:
+            raise PlannerError(f"Could not reach the OpenAI computer use API at {api_base}: {exc}") from exc
+        if response.status_code >= 400:
+            if _should_try_computer_use_chat_fallback(api_base, response.status_code, response.text):
+                self._prefer_chat_fallback = True
+                self._previous_response_id = None
+                self._last_call_id = None
+                return self._plan_with_chat_fallback(
+                    requests=requests,
+                    api_base=api_base,
+                    model_name=model_name,
+                    task=task,
+                    history=history,
+                    image_b64=image_b64,
+                    display_width=display_width,
+                    display_height=display_height,
+                    environment=_computer_use_environment(environment),
+                )
+            body_text = _redact_sensitive_text(response.text.strip())
+            raise PlannerError(
+                f"OpenAI computer use request failed with HTTP {response.status_code}. "
+                f"Response: {body_text or '<empty>'}"
+            )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            if _should_try_computer_use_chat_fallback_for_invalid_json(api_base, response.text):
+                self._prefer_chat_fallback = True
+                self._previous_response_id = None
+                self._last_call_id = None
+                return self._plan_with_chat_fallback(
+                    requests=requests,
+                    api_base=api_base,
+                    model_name=model_name,
+                    task=task,
+                    history=history,
+                    image_b64=image_b64,
+                    display_width=display_width,
+                    display_height=display_height,
+                    environment=_computer_use_environment(environment),
+                )
+            raise PlannerError("OpenAI computer use returned invalid JSON.") from exc
+        plan = _extract_computer_use_plan(data)
+        self._remember_loop_state(data, has_executable_action=bool(plan.actions))
+        return plan
+
+    def _plan_with_chat_fallback(
+        self,
+        *,
+        requests: Any,
+        api_base: str,
+        model_name: str,
+        task: str,
+        history: list[str],
+        image_b64: str,
+        display_width: int,
+        display_height: int,
+        environment: str,
+    ) -> PlanResult:
+        payload = _build_computer_use_chat_completion_payload(
+            model_name=model_name,
+            task=task,
+            history_text=_format_history_for_prompt(history),
+            image_b64=image_b64,
+            display_width=display_width,
+            display_height=display_height,
+            environment=environment,
+            include_response_format=True,
+        )
+        try:
+            response = requests.post(
+                f"{api_base}/chat/completions",
+                headers=_build_request_headers(_computer_use_api_key(self.config)),
+                json=payload,
+                timeout=self.config.model_request_timeout,
+            )
+        except requests.RequestException as exc:
+            raise PlannerError(
+                f"Could not reach the OpenAI-compatible computer use fallback at {api_base}: {exc}"
+            ) from exc
+        if response.status_code >= 400 and _chat_completion_response_format_rejected(response.text):
+            payload = _build_computer_use_chat_completion_payload(
+                model_name=model_name,
+                task=task,
+                history_text=_format_history_for_prompt(history),
+                image_b64=image_b64,
+                display_width=display_width,
+                display_height=display_height,
+                environment=environment,
+                include_response_format=False,
+            )
+            try:
+                response = requests.post(
+                    f"{api_base}/chat/completions",
+                    headers=_build_request_headers(_computer_use_api_key(self.config)),
+                    json=payload,
+                    timeout=self.config.model_request_timeout,
+                )
+            except requests.RequestException as exc:
+                raise PlannerError(
+                    f"Could not reach the OpenAI-compatible computer use fallback at {api_base}: {exc}"
+                ) from exc
+        if response.status_code >= 400:
+            body_text = _redact_sensitive_text(response.text.strip())
+            raise PlannerError(
+                f"OpenAI-compatible computer use fallback failed with HTTP {response.status_code}. "
+                f"Response: {body_text or '<empty>'}"
+            )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise PlannerError("OpenAI-compatible computer use fallback returned invalid JSON.") from exc
+        self._previous_response_id = None
+        self._last_call_id = None
+        return _extract_computer_use_chat_completion_plan(data)
+
+    def _reset_loop(self, task_key: str | None = None) -> None:
+        self._active_task = task_key
+        self._previous_response_id = None
+        self._last_call_id = None
+
+    def _remember_loop_state(self, payload: dict[str, Any], *, has_executable_action: bool) -> None:
+        output = payload.get("output")
+        computer_call = (
+            next((item for item in output if isinstance(item, dict) and item.get("type") == "computer_call"), None)
+            if isinstance(output, list)
+            else None
+        )
+        if not has_executable_action or not isinstance(computer_call, dict):
+            self._reset_loop(self._active_task)
+            return
+        response_id = str(payload.get("id") or "").strip()
+        call_id = str(computer_call.get("call_id") or "").strip()
+        if not response_id or not call_id:
+            self._reset_loop(self._active_task)
+            return
+        self._previous_response_id = response_id
+        self._last_call_id = call_id
+
+
 class AutoPlanner(BasePlanner):
     """Try rule planner first, then fall back to the VLM planner."""
 
@@ -1444,6 +1651,8 @@ def build_planner(config: AgentConfig) -> BasePlanner:
         return RulePlanner()
     if mode == "vlm":
         return VLMPlanner(config)
+    if mode in {"computer_use", "computer-use", "cua"}:
+        return OpenAIComputerUsePlanner(config)
     return AutoPlanner(config)
 
 
@@ -1940,7 +2149,7 @@ def _build_plan_reflection_payload(
                 "content": (
                     "You revise the remaining plan of a local desktop agent mid-run. Return only JSON with key "
                     "'subgoals' (optionally constraints, risk_points). Capability vocabulary: browser_dom, "
-                    "document_authoring, windows_uia, clipboard, filesystem, office_com, guarded_shell_recipe."
+                    "document_authoring, office_com, windows_uia, clipboard, filesystem, guarded_shell_recipe."
                 ),
             },
             {"role": "user", "content": user_text},
@@ -3794,6 +4003,584 @@ def _build_vlm_payload(
     return payload
 
 
+def _resolve_computer_use_model_name(config: AgentConfig) -> str:
+    configured = str(getattr(config, "model_name", "") or "").strip()
+    if _needs_model_discovery(configured):
+        return "gpt-5.5"
+    return configured
+
+
+def _computer_use_api_base(config: AgentConfig) -> str:
+    configured_base = str(getattr(config, "model_base_url", "") or "").strip()
+    if configured_base and not _looks_like_local_api_base(configured_base):
+        return _normalize_api_base_url(configured_base)
+    return _normalize_api_base_url("https://api.openai.com/v1")
+
+
+def _computer_use_api_key(config: AgentConfig) -> str | None:
+    configured = str(getattr(config, "model_api_key", "") or "").strip()
+    if configured:
+        return configured
+    env_key = str(os.environ.get("OPENAI_API_KEY") or "").strip()
+    return env_key or None
+
+
+def _looks_like_local_api_base(base_url: str) -> bool:
+    try:
+        parsed = urlsplit(_normalize_api_base_url(base_url))
+    except Exception:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    return host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def _computer_use_display_size(
+    screenshot_path: Path,
+    environment: DesktopEnvironment | None,
+) -> tuple[int, int]:
+    try:
+        from PIL import Image
+
+        with Image.open(screenshot_path) as image:
+            width, height = image.size
+            if width > 0 and height > 0:
+                return int(width), int(height)
+    except Exception:
+        pass
+
+    bounds = getattr(environment, "virtual_bounds", None)
+    width = int(getattr(bounds, "width", 0) or 0)
+    height = int(getattr(bounds, "height", 0) or 0)
+    if width > 0 and height > 0:
+        return width, height
+    return 1024, 768
+
+
+def _computer_use_environment(environment: DesktopEnvironment | None) -> str:
+    platform = str(getattr(environment, "platform", "") or "").strip().lower()
+    if "windows" in platform or platform == "win32":
+        return "windows"
+    if "darwin" in platform or "mac" in platform:
+        return "mac"
+    if "linux" in platform:
+        return "linux"
+    return "windows"
+
+
+def _build_computer_use_payload(
+    *,
+    model_name: str,
+    task: str,
+    history_text: str,
+    image_b64: str,
+    display_width: int,
+    display_height: int,
+    environment: str,
+) -> dict[str, Any]:
+    user_text = (
+        f"Task: {task}\n"
+        f"Recent execution memory:\n{history_text}\n"
+        "The attached screenshot is the current desktop state. "
+        "Use it to choose exactly the next desktop action. "
+        "Prefer visible, low-risk UI actions. If the task appears complete, stop requesting computer actions."
+    )
+    return {
+        "model": model_name,
+        "tools": [_computer_use_tool_definition(model_name, display_width, display_height, environment)],
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": user_text},
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:image/png;base64,{image_b64}",
+                        "detail": "original",
+                    },
+                ],
+            }
+        ],
+        "reasoning": {"summary": "concise"},
+        "truncation": "auto",
+    }
+
+
+def _build_computer_use_followup_payload(
+    *,
+    model_name: str,
+    previous_response_id: str,
+    call_id: str,
+    image_b64: str,
+    display_width: int,
+    display_height: int,
+    environment: str,
+) -> dict[str, Any]:
+    return {
+        "model": model_name,
+        "previous_response_id": previous_response_id,
+        "tools": [_computer_use_tool_definition(model_name, display_width, display_height, environment)],
+        "input": [
+            {
+                "type": "computer_call_output",
+                "call_id": call_id,
+                "output": {
+                    "type": "computer_screenshot",
+                    "image_url": f"data:image/png;base64,{image_b64}",
+                    "detail": "original",
+                },
+            }
+        ],
+        "truncation": "auto",
+    }
+
+
+def _computer_use_tool_definition(
+    model_name: str,
+    display_width: int,
+    display_height: int,
+    environment: str,
+) -> dict[str, Any]:
+    if str(model_name or "").strip().lower() == "computer-use-preview":
+        return {
+            "type": "computer_use_preview",
+            "display_width": max(1, int(display_width or 1)),
+            "display_height": max(1, int(display_height or 1)),
+            "environment": environment,
+        }
+    return {"type": "computer"}
+
+
+def _build_computer_use_chat_completion_payload(
+    *,
+    model_name: str,
+    task: str,
+    history_text: str,
+    image_b64: str,
+    display_width: int,
+    display_height: int,
+    environment: str,
+    include_response_format: bool,
+) -> dict[str, Any]:
+    system_text = (
+        "You are a careful desktop computer-use planner. Analyze the screenshot and return only one JSON object. "
+        "Use pixel coordinates from the screenshot. Prefer a concrete next UI action when a reasonable target is "
+        "visible; do not ask for human takeover for minor uncertainty. Use at most two actions."
+    )
+    user_text = (
+        f"Task: {task}\n"
+        f"Environment: {environment}\n"
+        f"Screenshot size: {max(1, int(display_width or 1))}x{max(1, int(display_height or 1))}\n"
+        f"Recent execution memory:\n{history_text}\n\n"
+        "Return JSON with this shape:\n"
+        '{"done": false, "status_summary": "short summary", "reasoning": "why this action", '
+        '"actions": [{"type": "click", "x": 100, "y": 200, "button": "left"}]}\n'
+        "Allowed action types: click, double_click, type, keypress, scroll, drag, wait, screenshot. "
+        "For keypress use keys, for example [\"ctrl\", \"l\"] or [\"enter\"]. "
+        "For drag use path as coordinate objects. If the task is complete, use done=true and actions=[]."
+    )
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_text},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{image_b64}",
+                            "detail": "high",
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+    if include_response_format:
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+def _should_try_computer_use_chat_fallback(api_base: str, status_code: int, body_text: str) -> bool:
+    if _is_official_openai_api_base(api_base):
+        return False
+    if int(status_code or 0) not in {400, 401, 404, 405, 422, 501}:
+        return False
+    body = str(body_text or "").lower()
+    if not body:
+        return True
+    return any(
+        token in body
+        for token in (
+            "responses",
+            "invalid_api_key",
+            "not found",
+            "unsupported",
+            "unknown endpoint",
+            "no such",
+            "method not allowed",
+        )
+    )
+
+
+def _should_try_computer_use_chat_fallback_for_invalid_json(api_base: str, body_text: str) -> bool:
+    if _is_official_openai_api_base(api_base):
+        return False
+    body = str(body_text or "").strip()
+    lower = body.lower()
+    return (
+        not body
+        or body.startswith("<")
+        or lower.startswith("event:")
+        or "responses" in lower
+        or "unsupported tool" in lower
+        or "unsupported" in lower
+    )
+
+
+def _is_official_openai_api_base(api_base: str) -> bool:
+    try:
+        parsed = urlsplit(_normalize_api_base_url(api_base))
+    except Exception:
+        return False
+    return (parsed.hostname or "").strip().lower() == "api.openai.com"
+
+
+def _chat_completion_response_format_rejected(body_text: str) -> bool:
+    body = str(body_text or "").lower()
+    return "response_format" in body or "json_object" in body
+
+
+def _extract_computer_use_chat_completion_plan(payload: dict[str, Any]) -> PlanResult:
+    raw_response = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    content = _chat_completion_message_text(payload)
+    plan_payload = _parse_json_object_from_text(content)
+    status_summary = (
+        str(plan_payload.get("status_summary") or plan_payload.get("summary") or "").strip()
+        or "OpenAI-compatible vision planner returned an action."
+    )
+    done = _optional_bool(plan_payload.get("done")) or False
+    raw_actions = plan_payload.get("actions")
+    if not isinstance(raw_actions, list):
+        single_action = plan_payload.get("action")
+        raw_actions = [single_action] if isinstance(single_action, dict) else []
+    action_payloads = [_normalize_chat_computer_action(item) for item in raw_actions if isinstance(item, dict)]
+    if not action_payloads:
+        return PlanResult(
+            status_summary=status_summary if done else "OpenAI-compatible vision planner returned no action.",
+            done=done,
+            actions=[],
+            reasoning=_optional_str(plan_payload.get("reasoning")),
+            raw_response=raw_response,
+        )
+    actions: list[Action] = []
+    for action_payload in action_payloads:
+        actions.extend(_actions_from_computer_use_action(action_payload))
+    summary = _computer_use_actions_summary(action_payloads)
+    return PlanResult(
+        status_summary=status_summary,
+        done=False,
+        actions=actions,
+        current_focus=summary,
+        reasoning=_optional_str(plan_payload.get("reasoning")) or summary,
+        raw_response=raw_response,
+    )
+
+
+def _chat_completion_message_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise PlannerError("OpenAI-compatible computer use fallback returned no choices.")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(message, dict):
+        raise PlannerError("OpenAI-compatible computer use fallback returned no message.")
+    content = message.get("content")
+    if isinstance(content, str):
+        text = content.strip()
+        if text:
+            return text
+    if isinstance(content, list):
+        fragments: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = str(item.get("text") or "").strip()
+                if text:
+                    fragments.append(text)
+        if fragments:
+            return "\n".join(fragments)
+    raise PlannerError("OpenAI-compatible computer use fallback returned an empty message.")
+
+
+def _parse_json_object_from_text(text: str) -> dict[str, Any]:
+    cleaned = str(text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start < 0 or end <= start:
+            raise PlannerError("OpenAI-compatible computer use fallback did not return JSON.")
+        try:
+            parsed = json.loads(cleaned[start : end + 1])
+        except json.JSONDecodeError as exc:
+            raise PlannerError("OpenAI-compatible computer use fallback returned invalid JSON.") from exc
+    if not isinstance(parsed, dict):
+        raise PlannerError("OpenAI-compatible computer use fallback JSON was not an object.")
+    return parsed
+
+
+def _normalize_chat_computer_action(action: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(action)
+    action_type = str(normalized.get("type") or normalized.get("action") or "").strip().lower()
+    aliases = {
+        "doubleclick": "double_click",
+        "double-click": "double_click",
+        "press": "keypress",
+        "hotkey": "keypress",
+        "key": "keypress",
+        "input": "type",
+        "input_text": "type",
+        "text": "type",
+        "move_mouse": "move",
+    }
+    normalized["type"] = aliases.get(action_type, action_type)
+    if "x" not in normalized or "y" not in normalized:
+        point = _computer_use_point(normalized.get("coordinates") or normalized.get("position") or normalized.get("point"))
+        if point:
+            normalized.setdefault("x", point.get("x"))
+            normalized.setdefault("y", point.get("y"))
+    if normalized["type"] == "keypress" and "keys" not in normalized:
+        key = normalized.get("key")
+        normalized["keys"] = [key] if key is not None else []
+    if normalized["type"] == "drag" and "path" not in normalized:
+        start = normalized.get("start") or normalized.get("from")
+        end = normalized.get("end") or normalized.get("to")
+        if start is not None and end is not None:
+            normalized["path"] = [_computer_use_point(start), _computer_use_point(end)]
+    return normalized
+
+
+def _extract_computer_use_plan(payload: dict[str, Any]) -> PlanResult:
+    raw_response = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    output = payload.get("output")
+    if not isinstance(output, list):
+        raise PlannerError("OpenAI computer use response did not contain an output list.")
+
+    message_text = _computer_use_message_text(output)
+    computer_call = next((item for item in output if isinstance(item, dict) and item.get("type") == "computer_call"), None)
+    if not isinstance(computer_call, dict):
+        return PlanResult(
+            status_summary=message_text or "Computer use returned no further action.",
+            done=True,
+            actions=[],
+            raw_response=raw_response,
+        )
+
+    pending_safety_checks = computer_call.get("pending_safety_checks")
+    if isinstance(pending_safety_checks, list) and pending_safety_checks:
+        return PlanResult(
+            status_summary="Computer use requested safety acknowledgement before continuing.",
+            done=False,
+            actions=[],
+            reasoning=json.dumps(pending_safety_checks, ensure_ascii=False),
+            raw_response=raw_response,
+        )
+
+    action_payloads = _computer_use_action_payloads(computer_call)
+    if not action_payloads:
+        raise PlannerError("OpenAI computer use response did not include action payloads.")
+    actions: list[Action] = []
+    for action_payload in action_payloads:
+        actions.extend(_actions_from_computer_use_action(action_payload))
+    summary = _computer_use_actions_summary(action_payloads)
+    return PlanResult(
+        status_summary=message_text or summary,
+        done=False,
+        actions=actions,
+        current_focus=summary,
+        reasoning=summary,
+        raw_response=raw_response,
+    )
+
+
+def _computer_use_action_payloads(computer_call: dict[str, Any]) -> list[dict[str, Any]]:
+    actions = computer_call.get("actions")
+    if isinstance(actions, list):
+        return [item for item in actions if isinstance(item, dict)]
+    action = computer_call.get("action")
+    if isinstance(action, dict):
+        return [action]
+    return []
+
+
+def _computer_use_message_text(output: list[Any]) -> str | None:
+    fragments: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "message":
+            for content in item.get("content") or []:
+                if isinstance(content, dict):
+                    text = str(content.get("text") or "").strip()
+                    if text:
+                        fragments.append(text)
+        elif item.get("type") == "reasoning":
+            for content in item.get("summary") or []:
+                if isinstance(content, dict):
+                    text = str(content.get("text") or "").strip()
+                    if text:
+                        fragments.append(text)
+    if not fragments:
+        return None
+    return " ".join(fragments)
+
+
+def _actions_from_computer_use_action(action: dict[str, Any]) -> list[Action]:
+    action_type = str(action.get("type") or "").strip().lower()
+    if action_type in {"click", "double_click"}:
+        x = _optional_int_value(action.get("x"))
+        y = _optional_int_value(action.get("y"))
+        if x is None or y is None:
+            raise PlannerError("Computer use click action was missing x/y coordinates.")
+        return [
+            _action_from_payload(
+                {
+                    "type": "click",
+                    "x": x,
+                    "y": y,
+                    "button": _normalize_computer_button(action.get("button")),
+                    "clicks": 2 if action_type == "double_click" else 1,
+                }
+            )
+        ]
+    if action_type == "drag":
+        points = action.get("path")
+        if not isinstance(points, list) or len(points) < 2:
+            raise PlannerError("Computer use drag action was missing a path.")
+        start = _computer_use_point(points[0])
+        end = _computer_use_point(points[-1])
+        start_x = _optional_int_value(start.get("x"))
+        start_y = _optional_int_value(start.get("y"))
+        end_x = _optional_int_value(end.get("x"))
+        end_y = _optional_int_value(end.get("y"))
+        if None in {start_x, start_y, end_x, end_y}:
+            raise PlannerError("Computer use drag path contained invalid coordinates.")
+        return [
+            _action_from_payload(
+                {
+                    "type": "drag",
+                    "x": start_x,
+                    "y": start_y,
+                    "end_x": end_x,
+                    "end_y": end_y,
+                    "button": _normalize_computer_button(action.get("button")),
+                }
+            )
+        ]
+    if action_type == "scroll":
+        scroll_y = _optional_int_value(action.get("scroll_y", action.get("scrollY"))) or 0
+        scroll_x = _optional_int_value(action.get("scroll_x", action.get("scrollX"))) or 0
+        amount = -scroll_y if scroll_y else -scroll_x
+        return [_action_from_payload({"type": "scroll", "amount": amount})]
+    if action_type == "keypress":
+        keys = _computer_use_keys(action.get("keys"))
+        if not keys:
+            raise PlannerError("Computer use keypress action was missing keys.")
+        if len(keys) == 1:
+            return [_action_from_payload({"type": "press", "key": keys[0]})]
+        return [_action_from_payload({"type": "hotkey", "keys": keys})]
+    if action_type == "type":
+        return [_action_from_payload({"type": "type", "text": str(action.get("text") or "")})]
+    if action_type in {"wait", "screenshot", "move"}:
+        seconds = _optional_number(action.get("seconds")) or (0.2 if action_type in {"screenshot", "move"} else 1.0)
+        return [_action_from_payload({"type": "wait", "seconds": seconds})]
+    raise PlannerError(f"Unsupported computer use action type: {action_type or '<missing>'}")
+
+
+def _computer_use_point(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        return {"x": value[0], "y": value[1]}
+    return {}
+
+
+def _action_from_payload(payload: dict[str, Any]) -> Action:
+    from desktop_agent.actions import Action
+
+    return Action.from_dict(payload)
+
+
+def _computer_use_action_summary(action: dict[str, Any]) -> str:
+    action_type = str(action.get("type") or "action").strip() or "action"
+    x = action.get("x")
+    y = action.get("y")
+    if x is not None and y is not None:
+        return f"Computer use requested {action_type} at ({x}, {y})."
+    return f"Computer use requested {action_type}."
+
+
+def _computer_use_actions_summary(actions: list[dict[str, Any]]) -> str:
+    if len(actions) == 1:
+        return _computer_use_action_summary(actions[0])
+    return f"Computer use requested {len(actions)} actions: " + ", ".join(
+        str(item.get("type") or "action").strip() or "action" for item in actions
+    )
+
+
+def _normalize_computer_button(value: Any) -> str:
+    button = str(value or "left").strip().lower()
+    return button if button in {"left", "right", "middle"} else "left"
+
+
+def _computer_use_keys(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_items = [value]
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = []
+    keys: list[str] = []
+    aliases = {
+        "return": "enter",
+        "esc": "escape",
+        "cmd": "win",
+        "command": "win",
+        "control": "ctrl",
+        "meta": "win",
+        "arrowup": "up",
+        "arrowdown": "down",
+        "arrowleft": "left",
+        "arrowright": "right",
+        "option": "alt",
+        "del": "delete",
+    }
+    for item in raw_items:
+        key = str(item or "").strip().lower()
+        if not key:
+            continue
+        keys.append(aliases.get(key, key))
+    return keys
+
+
+def _optional_number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int_value(value: Any) -> int | None:
+    number = _optional_number(value)
+    return int(round(number)) if number is not None else None
+
+
 def _build_response_format(mode: str) -> dict | None:
     if mode == "off":
         return None
@@ -3860,6 +4647,12 @@ def _planner_json_schema() -> dict:
         "required": ["status_summary", "done", "actions"],
         "additionalProperties": False,
     }
+
+
+def _redact_sensitive_text(text: str) -> str:
+    if not text:
+        return ""
+    return re.sub(r"sk-[A-Za-z0-9_\-\*]{8,}", "sk-<redacted>", text)
 
 
 def _build_request_headers(api_key: str | None) -> dict[str, str]:

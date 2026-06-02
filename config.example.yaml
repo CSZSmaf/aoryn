@@ -26,6 +26,11 @@ task_graph_request_timeout: 30
 model_auto_discover: true
 model_structured_output: auto
 model_provider: lmstudio_local
+# API computer-use mode (no local model): set planner_mode=computer_use,
+# model_base_url=https://api.openai.com/v1 or an OpenAI-compatible /v1 endpoint,
+# model_name=gpt-5.5, model_auto_discover=false, and provide model_api_key
+# or OPENAI_API_KEY. Responses API is preferred; chat/completions vision JSON
+# fallback is used when a compatible provider does not support the computer tool.
 desktop_autonomy_mode: conservative
 approval_policy: tiered
 complex_task_planning: hybrid
@@ -62,6 +67,13 @@ enabled_capabilities:
   - document_authoring
   - guarded_shell_recipe
 driver_preferences: []
+# Optional Python modules that register software-specific app drivers or
+# capability adapters through register_plugin(context). Example:
+# plugin_modules:
+#   - desktop_agent.software_plugins.notepad
+#   - my_company.aoryn_excel_plugin
+plugin_modules: []
+plugin_fail_fast: false
 shell_recipe_policy: approval_required
 browser_control_mode: hybrid
 browser_dom_backend: playwright
@@ -71,6 +83,7 @@ browser_channel: msedge
 browser_executable_path:
 screenshot_format: png
 browser_search_url: https://www.google.com/search?q={query}
+shell_start_mode: main
 app_launch_map:
   notepad: notepad.exe
   calculator: calc.exe

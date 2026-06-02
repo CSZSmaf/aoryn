@@ -104,6 +104,7 @@ class AgentConfig:
     browser_executable_path: str | None = None
     screenshot_format: str = "png"
     window_display_mode: str = "workarea_maximized"
+    shell_start_mode: str = "main"
     desktop_autonomy_mode: str = "conservative"
     window_conflict_policy: str = "minimize_first"
     window_match_timeout: float = 1.5
@@ -136,6 +137,8 @@ class AgentConfig:
         ]
     )
     driver_preferences: list[str] = field(default_factory=list)
+    plugin_modules: list[str] = field(default_factory=list)
+    plugin_fail_fast: bool = False
     shell_recipe_policy: str = "approval_required"
     shell_recipe_registry: dict[str, list[str]] = field(
         default_factory=lambda: {
@@ -258,6 +261,7 @@ class AgentConfig:
         self.browser_headless = _normalized_bool(self.browser_headless, default=False)
         self.display_override_enabled = _normalized_bool(self.display_override_enabled, default=False)
         self.generic_app_launch_enabled = _normalized_bool(self.generic_app_launch_enabled, default=True)
+        self.plugin_fail_fast = _normalized_bool(self.plugin_fail_fast, default=False)
         self.composition_enabled = _normalized_bool(self.composition_enabled, default=True)
         self.research_extract_enabled = _normalized_bool(self.research_extract_enabled, default=True)
         self.plan_reflection_enabled = _normalized_bool(self.plan_reflection_enabled, default=True)
@@ -272,6 +276,9 @@ class AgentConfig:
             max_document_length = 20000
         self.max_document_length = max(self.max_text_length, min(200000, max_document_length))
         self.document_default_app = str(self.document_default_app or "word").strip() or "word"
+        self.enabled_capabilities = _normalized_string_list(self.enabled_capabilities)
+        self.driver_preferences = _normalized_string_list(self.driver_preferences)
+        self.plugin_modules = _normalized_string_list(self.plugin_modules)
         if self.enabled_capabilities and "document_authoring" not in {
             str(item).strip().lower() for item in self.enabled_capabilities
         }:
@@ -307,6 +314,8 @@ class AgentConfig:
             self.max_run_seconds = max(0.0, run_seconds) or None
         planning_mode = str(self.complex_task_planning or "hybrid").strip().lower()
         self.complex_task_planning = planning_mode if planning_mode in {"off", "heuristic", "hybrid", "model"} else "hybrid"
+        shell_start_mode = str(self.shell_start_mode or "main").strip().lower().replace("-", "_")
+        self.shell_start_mode = shell_start_mode if shell_start_mode in {"floating", "main"} else "main"
         review_policy = str(self.plan_review_policy or "low_risk_auto").strip().lower()
         self.plan_review_policy = review_policy if review_policy in {"never", "low_risk_auto", "always"} else "low_risk_auto"
         approval_policy = str(self.approval_policy or "tiered").strip().lower().replace("_", " ")
@@ -401,3 +410,18 @@ def _normalized_bool(value: Any, *, default: bool) -> bool:
         if normalized in _FALSE_STRING_VALUES:
             return False
     return default
+
+
+def _normalized_string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_items = value.replace(";", ",").split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = value
+    else:
+        raw_items = []
+    items: list[str] = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text and text not in items:
+            items.append(text)
+    return items

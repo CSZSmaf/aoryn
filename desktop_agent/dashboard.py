@@ -1803,6 +1803,8 @@ class DashboardApp:
                 "recoverable_error_retry_limit": config.recoverable_error_retry_limit,
                 "enabled_capabilities": list(config.enabled_capabilities),
                 "driver_preferences": list(config.driver_preferences),
+                "plugin_modules": list(getattr(config, "plugin_modules", []) or []),
+                "plugin_fail_fast": bool(getattr(config, "plugin_fail_fast", False)),
                 "shell_recipe_policy": config.shell_recipe_policy,
                 "browser_control_mode": config.browser_control_mode,
                 "browser_dom_backend": config.browser_dom_backend,
@@ -2216,6 +2218,9 @@ class DashboardApp:
             "custom": "Custom provider",
         }
         provider_value = str(config.model_provider or "").strip()
+        planner_mode = str(getattr(config, "planner_mode", "") or "").strip().lower().replace("-", "_")
+        computer_use_mode = planner_mode in {"computer_use", "cua"}
+        connection_provider_value = "openai_api" if computer_use_mode else provider_value
         provider_label = provider_labels.get(provider_value, provider_value or "Not selected")
         items.append(
             {
@@ -2250,7 +2255,11 @@ class DashboardApp:
         )
 
         api_base = normalize_api_base_url(config.model_base_url)
+        if computer_use_mode and _looks_like_local_api_base(api_base):
+            api_base = "https://api.openai.com/v1"
         api_key = str(config.model_api_key or "").strip()
+        env_api_key = str(os.environ.get("OPENAI_API_KEY") or "").strip()
+        effective_api_key = api_key or env_api_key
         connection_item = {
             "id": "provider_connection",
             "label": "Provider connection",
@@ -2258,20 +2267,20 @@ class DashboardApp:
             "detail": "Complete the provider settings first.",
             "action": "refresh_model_catalog",
         }
-        requires_api_key = provider_value in {"openai_api", "openai_compatible"}
-        if not provider_value:
+        requires_api_key = connection_provider_value in {"openai_api", "openai_compatible"}
+        if not connection_provider_value:
             connection_item["action"] = "open_settings"
         elif not api_base:
             connection_item["detail"] = "Add a Base URL in Settings before checking the provider connection."
             connection_item["action"] = "open_settings"
-        elif requires_api_key and not api_key:
-            connection_item["detail"] = "Add an API key in Settings before checking the provider connection."
+        elif requires_api_key and not effective_api_key:
+            connection_item["detail"] = "Add an API key in Settings or set OPENAI_API_KEY before checking the provider connection."
             connection_item["action"] = "open_settings"
         else:
             snapshot = self._environment_provider_snapshot(
-                provider=provider_value,
+                provider=connection_provider_value,
                 base_url=api_base,
-                api_key=api_key,
+                api_key=effective_api_key,
                 timeout=float(config.model_request_timeout),
             )
             if snapshot is None:
@@ -2279,7 +2288,7 @@ class DashboardApp:
             elif snapshot.ok:
                 catalog_count = len(snapshot.catalog_models)
                 loaded_count = len(snapshot.loaded_models)
-                if provider_value == "lmstudio_local":
+                if connection_provider_value == "lmstudio_local":
                     connection_item["label"] = "LM Studio connection"
                     if catalog_count or loaded_count:
                         connection_item["status"] = "Ready"
@@ -2309,6 +2318,45 @@ class DashboardApp:
                 connection_item["detail"] = detail
 
         items.append(connection_item)
+        if computer_use_mode:
+            items.append(
+                {
+                    "id": "computer_use_api",
+                    "label": "Computer use API",
+                    "status": "Ready" if effective_api_key else "Needs setup",
+                    "detail": (
+                        f"Responses API computer tool will use {api_base}; local model discovery is skipped."
+                        if effective_api_key
+                        else "Set model_api_key or OPENAI_API_KEY before running computer_use mode."
+                    ),
+                    "action": "open_settings",
+                }
+            )
+        plugin_modules = list(getattr(config, "plugin_modules", []) or [])
+        if plugin_modules:
+            from desktop_agent.plugins import build_runtime_registries
+
+            _capability_registry, _driver_registry, plugin_results = build_runtime_registries(config)
+            failed_plugins = [item for item in plugin_results if not item.loaded]
+            registered_capabilities = sum(len(item.capabilities) for item in plugin_results if item.loaded)
+            registered_drivers = sum(len(item.drivers) for item in plugin_results if item.loaded)
+            items.append(
+                {
+                    "id": "software_plugins",
+                    "label": "Software plugins",
+                    "status": "Needs setup" if failed_plugins else "Ready",
+                    "detail": (
+                        f"{len(failed_plugins)} plugin(s) failed to load: "
+                        + "; ".join(f"{item.module}: {item.error}" for item in failed_plugins[:3])
+                        if failed_plugins
+                        else (
+                            f"Loaded {len(plugin_results)} plugin module(s), "
+                            f"{registered_capabilities} capability adapter(s), {registered_drivers} app driver(s)."
+                        )
+                    ),
+                    "action": "open_settings",
+                }
+            )
         return {
             "items": items,
             "checked_at": time.time(),
@@ -3505,6 +3553,15 @@ def _optional_bool(value: Any) -> bool | None:
     return None
 
 
+def _looks_like_local_api_base(base_url: str) -> bool:
+    try:
+        parsed = urlparse(str(base_url or "").strip())
+    except Exception:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    return host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
 def _stable_preview_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _stable_preview_value(value[key]) for key in sorted(value)}
@@ -3848,6 +3905,7 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
         "external_browser_attach_enabled": _optional_bool,
         "safe_mode_enabled": _optional_bool,
         "user_input_preemption_policy": _optional_text,
+        "shell_start_mode": _optional_text,
         "browser_runtime_transport": _optional_text,
         "browser_profile_strategy": _optional_text,
         "desktop_autonomy_mode": _optional_text,
@@ -3863,6 +3921,7 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
         "max_failures_per_subgoal": _optional_int,
         "replan_on_recoverable_error": _optional_bool,
         "recoverable_error_retry_limit": _optional_int,
+        "plugin_fail_fast": _optional_bool,
         "browser_control_mode": _optional_text,
         "browser_dom_backend": _optional_text,
         "browser_dom_timeout": _optional_float,
@@ -3890,4 +3949,9 @@ def _clean_config_overrides(raw: Any) -> dict[str, Any]:
     driver_preferences = raw.get("driver_preferences")
     if isinstance(driver_preferences, list):
         cleaned["driver_preferences"] = [str(item).strip() for item in driver_preferences if str(item).strip()]
+    plugin_modules = raw.get("plugin_modules")
+    if isinstance(plugin_modules, str):
+        cleaned["plugin_modules"] = [item.strip() for item in plugin_modules.replace(";", ",").split(",") if item.strip()]
+    elif isinstance(plugin_modules, list):
+        cleaned["plugin_modules"] = [str(item).strip() for item in plugin_modules if str(item).strip()]
     return cleaned

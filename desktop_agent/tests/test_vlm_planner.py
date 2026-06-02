@@ -1,8 +1,11 @@
+import base64
+
 import pytest
 
 from desktop_agent.config import AgentConfig
 from desktop_agent.planner import (
     AutoPlanner,
+    OpenAIComputerUsePlanner,
     VLMPlanner,
     PlannerError,
     _build_environment_context,
@@ -12,9 +15,11 @@ from desktop_agent.planner import (
     _import_requests,
     _needs_model_discovery,
     _normalize_api_base_url,
+    _redact_sensitive_text,
     _normalize_structured_output_mode,
     _pick_model_name,
     _task_graph_model_timeout,
+    build_planner,
 )
 from desktop_agent.windows_env import DesktopEnvironment, MonitorSnapshot, Rect, TaskbarState, WindowSnapshot
 
@@ -136,6 +141,444 @@ def test_vlm_planner_short_circuits_shopping_tasks():
     assert result.done is True
     assert result.actions[0].type == "browser_open"
     assert result.actions[0].text.startswith("https://www.amazon.com/s?k=")
+
+
+def test_computer_use_planner_posts_responses_api_and_maps_click(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "screen.png"
+    screenshot_path.write_bytes(
+        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kv4QAAAAASUVORK5CYII=")
+    )
+
+    calls: list[dict] = []
+
+    class _Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "id": "resp-test",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": "Click the visible Continue button."}],
+                    },
+                    {
+                        "type": "computer_call",
+                        "call_id": "call-test",
+                        "actions": [{"type": "click", "x": 156, "y": 50, "button": "left"}],
+                        "pending_safety_checks": [],
+                    },
+                ],
+            }
+
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def get(self, *args, **kwargs):
+            raise AssertionError("computer_use planner must not discover a local /models catalog")
+
+        def post(self, url, **kwargs):
+            calls.append({"url": url, **kwargs})
+            return _Response()
+
+    monkeypatch.setattr("desktop_agent.planner._import_requests", lambda: _Requests())
+
+    planner = OpenAIComputerUsePlanner(
+        AgentConfig(
+            planner_mode="computer_use",
+            model_provider="openai_api",
+            model_base_url="https://api.openai.com/v1",
+            model_name="gpt-5.5",
+            model_auto_discover=False,
+        )
+    )
+    result = planner.plan("click continue", screenshot_path=screenshot_path, history=["opened the app"])
+
+    assert calls[0]["url"] == "https://api.openai.com/v1/responses"
+    payload = calls[0]["json"]
+    assert payload["model"] == "gpt-5.5"
+    assert payload["tools"][0]["type"] == "computer"
+    assert payload["input"][0]["content"][1]["type"] == "input_image"
+    assert payload["input"][0]["content"][1]["detail"] == "original"
+    assert result.actions[0].type == "click"
+    assert result.actions[0].x == 156
+    assert result.actions[0].y == 50
+
+    planner.plan("click continue", screenshot_path=screenshot_path, history=["clicked once"])
+    followup_payload = calls[1]["json"]
+    assert followup_payload["previous_response_id"] == "resp-test"
+    assert followup_payload["input"][0]["type"] == "computer_call_output"
+    assert followup_payload["input"][0]["call_id"] == "call-test"
+    assert followup_payload["input"][0]["output"]["type"] == "computer_screenshot"
+    assert followup_payload["input"][0]["output"]["detail"] == "original"
+
+
+def test_computer_use_planner_defaults_to_openai_api_not_local_model(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "screen.png"
+    screenshot_path.write_bytes(
+        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kv4QAAAAASUVORK5CYII=")
+    )
+    calls: list[str] = []
+
+    class _Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "Done."}]}]}
+
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def post(self, url, **kwargs):
+            calls.append(url)
+            return _Response()
+
+    monkeypatch.setattr("desktop_agent.planner._import_requests", lambda: _Requests())
+
+    OpenAIComputerUsePlanner(AgentConfig(planner_mode="computer_use")).plan(
+        "inspect the screen",
+        screenshot_path=screenshot_path,
+        history=[],
+    )
+
+    assert calls == ["https://api.openai.com/v1/responses"]
+
+
+def test_computer_use_planner_honors_explicit_non_local_base_url(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "screen.png"
+    screenshot_path.write_bytes(
+        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kv4QAAAAASUVORK5CYII=")
+    )
+    calls: list[str] = []
+
+    class _Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "Done."}]}]}
+
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def post(self, url, **kwargs):
+            calls.append(url)
+            return _Response()
+
+    monkeypatch.setattr("desktop_agent.planner._import_requests", lambda: _Requests())
+
+    OpenAIComputerUsePlanner(
+        AgentConfig(planner_mode="computer_use", model_base_url="https://api.gptsapi.net/v1")
+    ).plan(
+        "inspect the screen",
+        screenshot_path=screenshot_path,
+        history=[],
+    )
+
+    assert calls == ["https://api.gptsapi.net/v1/responses"]
+
+
+def test_computer_use_planner_keeps_preview_tool_when_explicitly_configured(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "screen.png"
+    screenshot_path.write_bytes(
+        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kv4QAAAAASUVORK5CYII=")
+    )
+    calls: list[dict] = []
+
+    class _Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "Done."}]}]}
+
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def post(self, url, **kwargs):
+            calls.append({"url": url, **kwargs})
+            return _Response()
+
+    monkeypatch.setattr("desktop_agent.planner._import_requests", lambda: _Requests())
+
+    OpenAIComputerUsePlanner(
+        AgentConfig(
+            planner_mode="computer_use",
+            model_provider="openai_api",
+            model_base_url="https://api.openai.com/v1",
+            model_name="computer-use-preview",
+            model_auto_discover=False,
+        )
+    ).plan("inspect the screen", screenshot_path=screenshot_path, history=[])
+
+    payload = calls[0]["json"]
+    assert payload["model"] == "computer-use-preview"
+    assert payload["tools"][0]["type"] == "computer_use_preview"
+    assert payload["tools"][0]["display_width"] > 0
+
+
+def test_computer_use_planner_uses_openai_api_key_env_fallback(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "screen.png"
+    screenshot_path.write_bytes(
+        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kv4QAAAAASUVORK5CYII=")
+    )
+    calls: list[dict] = []
+
+    class _Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "Done."}]}]}
+
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def post(self, url, **kwargs):
+            calls.append({"url": url, **kwargs})
+            return _Response()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
+    monkeypatch.setattr("desktop_agent.planner._import_requests", lambda: _Requests())
+
+    OpenAIComputerUsePlanner(AgentConfig(planner_mode="computer_use", model_api_key="")).plan(
+        "inspect the screen",
+        screenshot_path=screenshot_path,
+        history=[],
+    )
+
+    assert calls[0]["headers"]["Authorization"] == "Bearer env-secret"
+
+
+def test_computer_use_planner_falls_back_to_chat_completions_for_compatible_provider(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "screen.png"
+    screenshot_path.write_bytes(
+        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kv4QAAAAASUVORK5CYII=")
+    )
+    calls: list[dict] = []
+
+    class _Response:
+        def __init__(self, status_code, payload, text=""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+
+        def json(self):
+            return self._payload
+
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def post(self, url, **kwargs):
+            calls.append({"url": url, **kwargs})
+            if url.endswith("/responses"):
+                return _Response(
+                    401,
+                    {},
+                    '{"error":{"code":"invalid_api_key","message":"Responses endpoint rejected this key"}}',
+                )
+            return _Response(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"done": false, "status_summary": "Click Continue.", '
+                                    '"reasoning": "The Continue button is visible.", '
+                                    '"actions": [{"type": "click", "x": 160, "y": 48}]}'
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr("desktop_agent.planner._import_requests", lambda: _Requests())
+
+    result = OpenAIComputerUsePlanner(
+        AgentConfig(
+            planner_mode="computer_use",
+            model_provider="openai_api",
+            model_base_url="https://api.gptsapi.net/v1",
+            model_name="gpt-5.5",
+            model_auto_discover=False,
+        )
+    ).plan("click continue", screenshot_path=screenshot_path, history=["opened the app"])
+
+    assert calls[0]["url"] == "https://api.gptsapi.net/v1/responses"
+    assert calls[1]["url"] == "https://api.gptsapi.net/v1/chat/completions"
+    assert calls[1]["json"]["messages"][1]["content"][1]["type"] == "image_url"
+    assert calls[1]["json"]["response_format"] == {"type": "json_object"}
+    assert result.actions[0].type == "click"
+    assert result.actions[0].x == 160
+    assert result.actions[0].y == 48
+
+
+def test_computer_use_planner_falls_back_when_responses_returns_non_json(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "screen.png"
+    screenshot_path.write_bytes(
+        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kv4QAAAAASUVORK5CYII=")
+    )
+    calls: list[str] = []
+
+    class _Response:
+        def __init__(self, status_code, payload=None, text=""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("not json")
+            return self._payload
+
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def post(self, url, **kwargs):
+            calls.append(url)
+            if url.endswith("/responses"):
+                return _Response(200, None, "<html>responses proxy unavailable</html>")
+            return _Response(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"done": false, "status_summary": "Wait for the screen.", '
+                                    '"actions": [{"type": "wait", "seconds": 0.5}]}'
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr("desktop_agent.planner._import_requests", lambda: _Requests())
+
+    result = OpenAIComputerUsePlanner(
+        AgentConfig(
+            planner_mode="computer_use",
+            model_provider="openai_api",
+            model_base_url="https://api.gptsapi.net/v1",
+            model_name="gpt-5.5",
+            model_auto_discover=False,
+        )
+    ).plan("wait briefly", screenshot_path=screenshot_path, history=[])
+
+    assert calls == ["https://api.gptsapi.net/v1/responses", "https://api.gptsapi.net/v1/chat/completions"]
+    assert result.actions[0].type == "wait"
+    assert result.actions[0].seconds == 0.5
+
+
+def test_computer_use_chat_fallback_retries_without_response_format(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "screen.png"
+    screenshot_path.write_bytes(
+        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kv4QAAAAASUVORK5CYII=")
+    )
+    calls: list[dict] = []
+
+    class _Response:
+        def __init__(self, status_code, payload, text=""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+
+        def json(self):
+            return self._payload
+
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def post(self, url, **kwargs):
+            calls.append({"url": url, **kwargs})
+            if url.endswith("/responses"):
+                return _Response(404, {}, '{"error":{"message":"responses not found"}}')
+            if "response_format" in kwargs["json"]:
+                return _Response(400, {}, '{"error":{"message":"response_format is unsupported"}}')
+            return _Response(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    "```json\n"
+                                    '{"done": false, "summary": "Press Enter.", '
+                                    '"actions": [{"type": "press", "key": "enter"}]}'
+                                    "\n```"
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr("desktop_agent.planner._import_requests", lambda: _Requests())
+
+    result = OpenAIComputerUsePlanner(
+        AgentConfig(
+            planner_mode="computer_use",
+            model_provider="openai_api",
+            model_base_url="https://api.gptsapi.net/v1",
+            model_name="gpt-5.5",
+            model_auto_discover=False,
+        )
+    ).plan("confirm", screenshot_path=screenshot_path, history=[])
+
+    assert len(calls) == 3
+    assert "response_format" in calls[1]["json"]
+    assert "response_format" not in calls[2]["json"]
+    assert result.actions[0].type == "press"
+    assert result.actions[0].key == "enter"
+
+
+def test_computer_use_planner_wraps_request_errors(monkeypatch, tmp_path):
+    screenshot_path = tmp_path / "screen.png"
+    screenshot_path.write_bytes(
+        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+kv4QAAAAASUVORK5CYII=")
+    )
+
+    class _Requests:
+        class RequestException(Exception):
+            pass
+
+        def post(self, url, **kwargs):
+            raise self.RequestException("timed out")
+
+    monkeypatch.setattr("desktop_agent.planner._import_requests", lambda: _Requests())
+
+    with pytest.raises(PlannerError, match="Could not reach the OpenAI computer use API"):
+        OpenAIComputerUsePlanner(
+            AgentConfig(planner_mode="computer_use", model_base_url="https://api.gptsapi.net", model_api_key="secret")
+        ).plan(
+            "inspect the screen",
+            screenshot_path=screenshot_path,
+            history=[],
+        )
+
+
+def test_redact_sensitive_text_masks_api_keys():
+    assert _redact_sensitive_text("Incorrect key sk-abc123456789XYZ") == "Incorrect key sk-<redacted>"
+    assert _redact_sensitive_text("Incorrect key sk-abcd********wxyz") == "Incorrect key sk-<redacted>"
+
+
+def test_build_planner_supports_computer_use_mode():
+    planner = build_planner(AgentConfig(planner_mode="computer_use"))
+
+    assert isinstance(planner, OpenAIComputerUsePlanner)
 
 
 def test_auto_planner_prefers_vlm_for_complex_cross_app_task():

@@ -229,6 +229,53 @@ Aoryn 把“像人一样坐在电脑前完成复杂任务”拆成三段能力�
 `coordinate_fallback` 进度事件，便于在 Dashboard 观察何时降级。相关单测覆盖 invoke→click_input→矩形
 中心三级回退、解析失败时用模型坐标、无坐标则报错，以及 `_uia_element_center` 的矩形/`mid_point` 读取。
 
+### 4.8 OpenAI Computer Use API 模式
+
+若希望行为更接近 Codex computer use 的“截图 → 模型判断下一步 → 执行动作 → 再截图”循环，可以把
+`planner_mode` 设为 `computer_use`，并使用 OpenAI API：
+
+```yaml
+planner_mode: computer_use
+model_provider: openai_api
+model_base_url: https://api.openai.com/v1
+model_name: gpt-5.5
+model_auto_discover: false
+desktop_autonomy_mode: autonomous
+shell_start_mode: main
+```
+
+该模式优先走 Responses API 的内置 `computer` 工具；如果配置的是 gptsapi 等 OpenAI-compatible
+中转服务，且 `/responses` 不支持 `computer` 工具，系统会自动降级到 `/chat/completions` 的视觉 JSON
+动作规划，仍然由 API 根据截图返回坐标/键盘动作。如果配置仍保留默认的本地 LM Studio 地址，
+系统会改用 `https://api.openai.com/v1`，不会探测或加载本地模型。模型返回的
+`click`、`keypress`、`type`、`scroll`、`drag`、`wait` 等动作会被映射到现有安全执行器；每一步执行后
+仍由运行循环重新截屏；Responses 路径会用 `previous_response_id` + `computer_call_output` 回传 `computer_screenshot` 给 API，
+并做本地验证。API key 可填入 `model_api_key`，也可通过 `OPENAI_API_KEY` 环境变量提供。若显式配置
+`model_name: computer-use-preview`，系统会保留旧版 `computer_use_preview` 工具兼容路径。
+软件刚打开时默认显示主界面；一旦任务开始执行，桌面壳会自动收起主界面，只保留悬浮窗显示执行状态。
+
+真实 API smoke test 可以只请求下一步动作、不执行鼠标键盘：
+
+```bash
+python scripts/smoke_computer_use_api.py
+python scripts/smoke_computer_use_api.py --config path/to/config.yaml
+```
+
+### 4.9 软件插件接口
+
+特定软件可以通过插件补充更稳的识别、规划和验证逻辑。插件模块通过 `plugin_modules` 启用，模块中暴露
+`register_plugin(context)`，然后调用：
+
+```python
+def register_plugin(context):
+    context.register_driver(MyAppDriver())
+    context.register_capability(MyAppCapability())
+```
+
+`driver` 负责判断当前窗口是不是目标软件，并声明偏好的 capability；`capability` 负责为该软件生成更稳定的
+动作和验证证据。这样通用 `computer_use` 截图坐标能力仍作为兜底，后续可以逐个为常用软件添加专用插件。
+仓库内提供了一个最小示例插件：`desktop_agent.software_plugins.notepad`。
+
 ## 5. 关键配置
 
 `desktop_agent/config.py` 中的 `AgentConfig` 仍然是统一配置来源。
@@ -241,6 +288,9 @@ Aoryn 把“像人一样坐在电脑前完成复杂任务”拆成三段能力�
 - `model_api_key`
 - `model_auto_discover`
 - `model_structured_output`
+- `shell_start_mode`
+- `plugin_modules`
+- `plugin_fail_fast`
 - `composition_enabled`
 - `document_default_app`
 - `max_document_length`

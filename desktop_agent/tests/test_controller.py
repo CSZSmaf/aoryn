@@ -3338,13 +3338,13 @@ def test_build_floating_view_state_idle_and_expanded_input():
     expanded = build_floating_view_state(input_expanded=True)
 
     assert idle.mode == "idle"
-    assert (idle.width, idle.height) == (220, 46)
+    assert (idle.width, idle.height) == (300, 52)
     assert idle.show_open is True
     assert idle.show_add is True
     assert idle.show_input is False
 
     assert expanded.mode == "idle_input"
-    assert (expanded.width, expanded.height) == (440, 54)
+    assert (expanded.width, expanded.height) == (620, 60)
     assert expanded.show_input is True
     assert expanded.show_submit is True
     assert expanded.show_cancel is True
@@ -3399,7 +3399,7 @@ def test_build_floating_view_state_running_stopping_and_queued_input():
     completed = build_floating_view_state(active_job={**active_job, "result": {"completed": True, "latest_summary": "已整理结果"}})
 
     assert running.mode == "running"
-    assert (running.width, running.height) == (280, 46)
+    assert (running.width, running.height) == (480, 52)
     assert running.show_timer is True
     assert running.show_stop is True
     assert running.show_open is True
@@ -3413,13 +3413,13 @@ def test_build_floating_view_state_running_stopping_and_queued_input():
     assert queued.add_label == "编辑"
 
     assert expanded.mode == "running_input"
-    assert (expanded.width, expanded.height) == (440, 54)
+    assert (expanded.width, expanded.height) == (620, 60)
     assert expanded.show_input is True
     assert expanded.submit_label == "排队"
     assert expanded.input_text == "下一步搜索文档"
 
     assert stopping.mode == "stopping"
-    assert (stopping.width, stopping.height) == (220, 46)
+    assert (stopping.width, stopping.height) == (300, 52)
     assert stopping.title == "正在停止"
     assert stopping.show_add is False
     assert stopping.show_stop is False
@@ -3427,7 +3427,7 @@ def test_build_floating_view_state_running_stopping_and_queued_input():
 
     assert failed.mode == "running"
     assert failed.title == "需要处理: 规划失败"
-    assert (failed.width, failed.height) == (220, 46)
+    assert (failed.width, failed.height) == (300, 52)
     assert failed.show_timer is False
     assert failed.show_add is False
     assert failed.show_stop is False
@@ -3518,7 +3518,7 @@ def test_build_floating_view_state_approval_resume_and_waiting_follow_up():
     editing = build_floating_view_state(follow_up_draft="继续整理结果", input_expanded=True)
 
     assert approval.mode == "approval"
-    assert (approval.width, approval.height) == (360, 50)
+    assert (approval.width, approval.height) == (520, 56)
     assert approval.show_continue is True
     assert approval.continue_label == "批准"
     assert approval.show_stop is True
@@ -3528,7 +3528,7 @@ def test_build_floating_view_state_approval_resume_and_waiting_follow_up():
     assert nested_approval.show_continue is True
 
     assert resume.mode == "resume"
-    assert (resume.width, resume.height) == (360, 50)
+    assert (resume.width, resume.height) == (520, 56)
     assert resume.show_continue is True
     assert resume.continue_label == "恢复"
     assert resume.show_open is True
@@ -3561,7 +3561,7 @@ def test_build_floating_view_state_saved_step_approval_phase_without_pending_dec
     )
 
     assert approval.mode == "approval"
-    assert (approval.width, approval.height) == (360, 50)
+    assert (approval.width, approval.height) == (520, 56)
     assert approval.show_continue is True
     assert approval.show_stop is True
 
@@ -4217,6 +4217,88 @@ def test_desktop_shell_controller_loads_versioned_dashboard_url(monkeypatch):
     assert captured["url"] == f"http://127.0.0.1:8765/index.html?v={desktop_shell.APP_ASSET_VERSION}"
 
 
+def test_desktop_shell_controller_starts_with_main_shell_by_default(monkeypatch):
+    import desktop_agent.desktop_shell as desktop_shell
+
+    main_shows: list[str] = []
+    floating_states: list[str] = []
+
+    class _WindowStub:
+        def __init__(self, **kwargs):
+            pass
+
+        def show(self):
+            main_shows.append("main")
+
+        def isVisible(self):
+            return False
+
+    floating = SimpleNamespace(
+        move=lambda *_: None,
+        update_active_job=lambda *_: floating_states.append("active"),
+        show_waiting_follow_up=lambda *_: floating_states.append("followup"),
+        show_idle=lambda **__: floating_states.append("idle"),
+    )
+
+    monkeypatch.setattr(desktop_shell, "DesktopMainWindow", _WindowStub)
+    monkeypatch.setattr(desktop_shell, "FloatingExecutionWindow", lambda **kwargs: floating)
+    monkeypatch.setattr(desktop_shell.DesktopShellController, "_build_tray", lambda self: SimpleNamespace(show=lambda: None))
+
+    desktop_shell.DesktopShellController(
+        qt_app=SimpleNamespace(),
+        dashboard_app=SimpleNamespace(
+            ui_root=Path("desktop_agent/dashboard_assets"),
+            config=SimpleNamespace(window_display_mode="workarea_maximized"),
+        ),
+        server=SimpleNamespace(),
+        base_url="http://127.0.0.1:8765/",
+    )
+
+    assert main_shows == ["main"]
+    assert floating_states == []
+
+
+def test_desktop_shell_controller_can_start_with_floating_shell_when_configured(monkeypatch):
+    import desktop_agent.desktop_shell as desktop_shell
+
+    main_shows: list[str] = []
+    floating_states: list[str] = []
+
+    class _WindowStub:
+        def __init__(self, **kwargs):
+            pass
+
+        def show(self):
+            main_shows.append("main")
+
+        def isVisible(self):
+            return False
+
+    floating = SimpleNamespace(
+        move=lambda *_: None,
+        update_active_job=lambda *_: floating_states.append("active"),
+        show_waiting_follow_up=lambda *_: floating_states.append("followup"),
+        show_idle=lambda **__: floating_states.append("idle"),
+    )
+
+    monkeypatch.setattr(desktop_shell, "DesktopMainWindow", _WindowStub)
+    monkeypatch.setattr(desktop_shell, "FloatingExecutionWindow", lambda **kwargs: floating)
+    monkeypatch.setattr(desktop_shell.DesktopShellController, "_build_tray", lambda self: SimpleNamespace(show=lambda: None))
+
+    desktop_shell.DesktopShellController(
+        qt_app=SimpleNamespace(),
+        dashboard_app=SimpleNamespace(
+            ui_root=Path("desktop_agent/dashboard_assets"),
+            config=SimpleNamespace(window_display_mode="workarea_maximized", shell_start_mode="floating"),
+        ),
+        server=SimpleNamespace(),
+        base_url="http://127.0.0.1:8765/",
+    )
+
+    assert main_shows == []
+    assert floating_states == ["idle"]
+
+
 def test_desktop_shell_controller_request_overview_refresh_skips_reentrant_calls(monkeypatch):
     import desktop_agent.desktop_shell as desktop_shell
 
@@ -4302,6 +4384,40 @@ def test_desktop_shell_controller_handle_overview_payload_applies_changed_snapsh
 
     assert changed is True
     assert len(applied) == 2
+
+
+def test_desktop_shell_controller_active_job_switches_main_to_floating():
+    import desktop_agent.desktop_shell as desktop_shell
+
+    hidden: list[str] = []
+    controller_stub = SimpleNamespace(
+        current_active_job_id=None,
+        current_active_job=None,
+        paused_run_id=None,
+        paused_task="",
+        paused_reason="",
+        follow_up_draft="",
+        success_feedback_deadline=0.0,
+        auto_collapsed_for_current_job=False,
+        main_window=SimpleNamespace(isVisible=lambda: True),
+        floating=SimpleNamespace(update_active_job=lambda *_: None),
+        _clear_paused_run=lambda: None,
+        _hide_main_window_for_floating=lambda: hidden.append("floating"),
+    )
+
+    desktop_shell.DesktopShellController._apply_overview_payload(
+        controller_stub,
+        {
+            "active_job": {"id": "job-running", "status": "running", "task": "click continue"},
+            "jobs": [],
+            "runs": [],
+        },
+    )
+
+    assert controller_stub.current_active_job_id == "job-running"
+    assert controller_stub.current_active_job["task"] == "click continue"
+    assert controller_stub.auto_collapsed_for_current_job is True
+    assert hidden == ["floating"]
 
 
 def test_desktop_shell_controller_overview_signature_tracks_terminal_job_result_reason():

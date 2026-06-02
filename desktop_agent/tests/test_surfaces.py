@@ -34,3 +34,25 @@ def test_detect_user_input_preemption_ignores_recent_agent_actions():
     session = type("Session", (), {"last_input_age_seconds": 0.1})()
 
     assert detect_user_input_preemption(config=config, execution_context=context, session=session) is False
+
+
+def test_detect_user_input_preemption_ignores_agent_generated_input_tick():
+    config = AgentConfig(user_input_preemption_policy="pause_and_resume")
+    context = {
+        "last_agent_action_at": time.time() - 2.0,
+        "last_agent_input_tick_ms": 5000,
+    }
+    session = type("Session", (), {"last_input_age_seconds": 0.2, "last_input_tick_ms": 5000})()
+
+    assert detect_user_input_preemption(config=config, execution_context=context, session=session) is False
+
+
+def test_detect_user_input_preemption_detects_newer_user_input_tick():
+    config = AgentConfig(user_input_preemption_policy="pause_and_resume")
+    context = {
+        "last_agent_action_at": time.time() - 2.0,
+        "last_agent_input_tick_ms": 5000,
+    }
+    session = type("Session", (), {"last_input_age_seconds": 0.2, "last_input_tick_ms": 5010})()
+
+    assert detect_user_input_preemption(config=config, execution_context=context, session=session) is True

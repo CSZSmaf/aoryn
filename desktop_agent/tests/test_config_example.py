@@ -15,6 +15,9 @@ def test_config_example_loads_and_matches_complex_task_defaults():
     assert config.max_task_subgoals == defaults.max_task_subgoals == 12
     assert config.max_replans_per_run == defaults.max_replans_per_run == 3
     assert config.approval_policy == defaults.approval_policy == "tiered"
+    assert config.shell_start_mode == defaults.shell_start_mode == "main"
+    assert config.plugin_modules == defaults.plugin_modules == []
+    assert config.plugin_fail_fast is defaults.plugin_fail_fast is False
     assert config.task_graph_request_timeout == defaults.task_graph_request_timeout == 30.0
     assert config.replan_on_recoverable_error is defaults.replan_on_recoverable_error is True
     assert config.recoverable_error_retry_limit == defaults.recoverable_error_retry_limit == 2

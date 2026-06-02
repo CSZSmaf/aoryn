@@ -79,14 +79,14 @@ class DesktopShellUnavailable(RuntimeError):
     """Raised when the native desktop shell cannot be launched."""
 
 
-_FLOATING_IDLE_WIDTH = 220
-_FLOATING_RUNNING_WIDTH = 280
-_FLOATING_EXPANDED_WIDTH = 440
-_FLOATING_DECISION_WIDTH = 360
-_FLOATING_IDLE_HEIGHT = 46
-_FLOATING_EXPANDED_HEIGHT = 54
-_FLOATING_DECISION_HEIGHT = 50
-_FLOATING_TITLE_LIMIT = 22
+_FLOATING_IDLE_WIDTH = 300
+_FLOATING_RUNNING_WIDTH = 480
+_FLOATING_EXPANDED_WIDTH = 620
+_FLOATING_DECISION_WIDTH = 520
+_FLOATING_IDLE_HEIGHT = 52
+_FLOATING_EXPANDED_HEIGHT = 60
+_FLOATING_DECISION_HEIGHT = 56
+_FLOATING_TITLE_LIMIT = 36
 _TRUE_STRING_VALUES = {"1", "true", "t", "yes", "y", "on"}
 _FALSE_STRING_VALUES = {"0", "false", "f", "no", "n", "off"}
 _EXECUTION_BUDGET_SUMMARY_FIELDS = (
@@ -792,8 +792,8 @@ if QApplication is not None:
             root.addWidget(self.card)
 
             card_layout = QHBoxLayout(self.card)
-            card_layout.setContentsMargins(7, 6, 7, 6)
-            card_layout.setSpacing(5)
+            card_layout.setContentsMargins(9, 7, 9, 7)
+            card_layout.setSpacing(7)
 
             self.logo_button = QPushButton(self.card)
             self.logo_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -812,7 +812,7 @@ if QApplication is not None:
 
             self.timer_label = QLabel("--", self.card)
             self.timer_label.setObjectName("floatingTimerLabel")
-            self.timer_label.setFixedWidth(32)
+            self.timer_label.setFixedWidth(44)
             card_layout.addWidget(self.timer_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
             self.input_line = QLineEdit(self.card)
@@ -824,25 +824,25 @@ if QApplication is not None:
 
             self.submit_button = QPushButton("排队", self.card)
             self.submit_button.setObjectName("floatingPrimaryButton")
-            self.submit_button.setMinimumWidth(50)
+            self.submit_button.setMinimumWidth(58)
             self.submit_button.clicked.connect(self._handle_submit)
             card_layout.addWidget(self.submit_button)
 
             self.continue_button = QPushButton("继续", self.card)
             self.continue_button.setObjectName("floatingPrimaryButton")
-            self.continue_button.setMinimumWidth(50)
+            self.continue_button.setMinimumWidth(58)
             self.continue_button.clicked.connect(self._handle_continue_follow_up)
             card_layout.addWidget(self.continue_button)
 
             self.stop_button = QPushButton("停止", self.card)
             self.stop_button.setObjectName("floatingDangerButton")
-            self.stop_button.setMinimumWidth(46)
+            self.stop_button.setMinimumWidth(54)
             self.stop_button.clicked.connect(self._handle_stop_action)
             card_layout.addWidget(self.stop_button)
 
             self.open_button = QPushButton("打开", self.card)
             self.open_button.setObjectName("floatingGhostButton")
-            self.open_button.setMinimumWidth(44)
+            self.open_button.setMinimumWidth(52)
             self.open_button.clicked.connect(self._on_open_main)
             card_layout.addWidget(self.open_button)
 
@@ -854,7 +854,7 @@ if QApplication is not None:
 
             self.cancel_button = QPushButton("取消", self.card)
             self.cancel_button.setObjectName("floatingGhostButton")
-            self.cancel_button.setMinimumWidth(44)
+            self.cancel_button.setMinimumWidth(52)
             self.cancel_button.clicked.connect(self._handle_cancel_input)
             card_layout.addWidget(self.cancel_button)
 
@@ -1161,7 +1161,9 @@ if QApplication is not None:
 
         def _show_floating_window(self) -> None:  # pragma: no cover - GUI runtime behavior
             self._remember_programmatic_activation()
+            self._keep_within_available_geometry()
             self.show()
+            self._keep_within_available_geometry()
             self.raise_()
 
         def _remember_programmatic_activation(self, duration: float = 0.5) -> None:
@@ -1207,6 +1209,26 @@ if QApplication is not None:
             except Exception:
                 return
 
+        def _keep_within_available_geometry(self) -> None:  # pragma: no cover - GUI runtime behavior
+            try:
+                screen = self.screen() or QApplication.primaryScreen()
+                if screen is None:
+                    return
+                available = screen.availableGeometry()
+                margin = 8
+                width = max(1, self.width())
+                height = max(1, self.height())
+                min_x = available.left() + margin
+                min_y = available.top() + margin
+                max_x = available.right() - width - margin + 1
+                max_y = available.bottom() - height - margin + 1
+                x = min(max(self.x(), min_x), max(min_x, max_x))
+                y = min(max(self.y(), min_y), max(min_y, max_y))
+                if x != self.x() or y != self.y():
+                    self.move(x, y)
+            except Exception:
+                return
+
         def _apply_layout_state(self) -> None:  # pragma: no cover - GUI runtime behavior
             was_input_visible = self.input_line.isVisible()
             state = build_floating_view_state(
@@ -1221,6 +1243,7 @@ if QApplication is not None:
 
             self.setFixedSize(state.width, state.height)
             self.card.setFixedSize(state.width, state.height)
+            self._keep_within_available_geometry()
             self._apply_window_shape()
             self._apply_native_window_chrome()
 
@@ -1310,7 +1333,10 @@ if QApplication is not None:
             self.poll_timer.timeout.connect(self.refresh_overview)
             self.poll_timer.start()
 
-            self.main_window.show()
+            if str(getattr(self.dashboard_app.config, "shell_start_mode", "main") or "main").strip().lower() == "floating":
+                self._show_floating_for_current_state()
+            else:
+                self.main_window.show()
             self.tray_icon.show()
             QTimer.singleShot(250, self.refresh_overview)
 

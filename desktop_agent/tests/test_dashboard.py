@@ -4,6 +4,7 @@ import shutil
 import sys
 import threading
 import time
+import types
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -39,6 +40,8 @@ def test_clean_config_overrides_accepts_model_browser_and_display_fields():
         "max_failures_per_subgoal": "5",
         "replan_on_recoverable_error": "false",
         "recoverable_error_retry_limit": "6",
+        "plugin_modules": "plugins.excel; plugins.vscode",
+        "plugin_fail_fast": "true",
         "browser_control_mode": "dom",
         "browser_dom_backend": "playwright",
         "browser_dom_timeout": "12.5",
@@ -83,6 +86,8 @@ def test_clean_config_overrides_accepts_model_browser_and_display_fields():
         "max_failures_per_subgoal": 5,
         "replan_on_recoverable_error": False,
         "recoverable_error_retry_limit": 6,
+        "plugin_modules": ["plugins.excel", "plugins.vscode"],
+        "plugin_fail_fast": True,
         "browser_control_mode": "dom",
         "browser_dom_backend": "playwright",
         "browser_dom_timeout": 12.5,
@@ -4154,6 +4159,7 @@ def test_dashboard_auth_routes_are_removed_and_core_routes_stay_available(monkey
 
 
 def test_dashboard_environment_check_reports_missing_api_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(
         dashboard,
         "dom_backend_status",
@@ -4215,6 +4221,161 @@ def test_dashboard_environment_check_reports_missing_api_key(monkeypatch):
     assert payload["items"][3]["status"] == "Ready"
     assert payload["items"][4]["status"] == "Needs setup"
     assert "API key" in payload["items"][4]["detail"]
+
+
+def test_dashboard_environment_check_computer_use_uses_openai_env_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
+    monkeypatch.setattr(
+        dashboard,
+        "dom_backend_status",
+        lambda backend: type(
+            "Status",
+            (),
+            {"available": True, "backend": backend, "detail": "Playwright ready"},
+        )(),
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "load_agent_config",
+        lambda *args, **kwargs: type(
+            "Config",
+            (),
+            {
+                "planner_mode": "computer_use",
+                "model_provider": "lmstudio_local",
+                "model_base_url": "http://127.0.0.1:1234/v1",
+                "model_name": "gpt-5.5",
+                "model_api_key": "",
+                "model_auto_discover": False,
+                "model_request_timeout": 15.0,
+                "browser_dom_backend": "playwright",
+                "browser_channel": "chrome",
+                "browser_executable_path": "",
+                "run_root": Path("runs"),
+                "plugin_modules": [],
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "detect_display_environment",
+        lambda config: type(
+            "DisplayDetection",
+            (),
+            {
+                "override": type(
+                    "Override",
+                    (),
+                    {"status": "override", "warnings": [], "editable": True},
+                )(),
+            },
+        )(),
+    )
+
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=None)
+    calls: list[dict] = []
+
+    def fake_environment_snapshot(*, provider, base_url, api_key, timeout):
+        calls.append({"provider": provider, "base_url": base_url, "api_key": api_key, "timeout": timeout})
+        return ProviderSnapshot(
+            ok=True,
+            provider=provider,
+            api_base=base_url,
+            root_base=base_url.removesuffix("/v1"),
+            catalog_models=[ProviderModelEntry(model_id="gpt-5.5", label="gpt-5.5")],
+            loaded_models=[],
+        )
+
+    app._environment_provider_snapshot = fake_environment_snapshot
+
+    payload = app.environment_check()
+
+    assert calls == [
+        {
+            "provider": "openai_api",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "env-secret",
+            "timeout": 15.0,
+        }
+    ]
+    computer_use_item = next(item for item in payload["items"] if item["id"] == "computer_use_api")
+    assert computer_use_item["status"] == "Ready"
+    assert "local model discovery is skipped" in computer_use_item["detail"]
+
+
+def test_dashboard_environment_check_reports_loaded_plugins(monkeypatch):
+    module = types.ModuleType("aoryn_dashboard_test_plugin")
+
+    class _DashboardPluginDriver:
+        name = "dashboard_test_driver"
+
+        def matches(self, world_model):
+            return False
+
+    class _DashboardPluginCapability:
+        name = "dashboard_test_capability"
+
+    def register_plugin(context):
+        context.register_driver(_DashboardPluginDriver())
+        context.register_capability(_DashboardPluginCapability())
+
+    module.register_plugin = register_plugin
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(
+        dashboard,
+        "dom_backend_status",
+        lambda backend: type(
+            "Status",
+            (),
+            {"available": True, "backend": backend, "detail": "Playwright ready"},
+        )(),
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "load_agent_config",
+        lambda *args, **kwargs: type(
+            "Config",
+            (),
+            {
+                "planner_mode": "auto",
+                "model_provider": "",
+                "model_base_url": "",
+                "model_name": "auto",
+                "model_api_key": "",
+                "model_auto_discover": True,
+                "model_request_timeout": 15.0,
+                "browser_dom_backend": "playwright",
+                "browser_channel": "chrome",
+                "browser_executable_path": "",
+                "run_root": Path("runs"),
+                "plugin_modules": [module.__name__],
+                "plugin_fail_fast": False,
+                "enabled_capabilities": [],
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "detect_display_environment",
+        lambda config: type(
+            "DisplayDetection",
+            (),
+            {
+                "override": type(
+                    "Override",
+                    (),
+                    {"status": "override", "warnings": [], "editable": True},
+                )(),
+            },
+        )(),
+    )
+
+    payload = DashboardApp(host="127.0.0.1", port=0, config_path=None).environment_check()
+
+    plugin_item = next(item for item in payload["items"] if item["id"] == "software_plugins")
+    assert plugin_item["status"] == "Ready"
+    assert "1 capability adapter" in plugin_item["detail"]
+    assert "1 app driver" in plugin_item["detail"]
 
 
 def test_dashboard_environment_check_uses_background_provider_cache(monkeypatch):

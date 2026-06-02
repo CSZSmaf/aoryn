@@ -24,6 +24,7 @@ from desktop_agent.human_verification import HumanVerificationSignal, detect_hum
 from desktop_agent.logger import RunLogger
 from desktop_agent.orchestrator import TaskOrchestrator, standardize_failure_kind, task_graph_is_ambiguous, task_graph_risk_level
 from desktop_agent.perception import MockCapture, PerceptionError, ScreenCapture
+from desktop_agent.plugins import build_runtime_registries
 from desktop_agent.planner import (
     BasePlanner,
     PlannerError,
@@ -110,12 +111,16 @@ class DesktopAgent:
         self.stop_requested = stop_requested
         self.progress_callback = progress_callback
         self.decision_callback = decision_callback
-        self.driver_registry = driver_registry or build_driver_registry()
+        runtime_capability_registry = None
+        runtime_driver_registry = None
+        if driver_registry is None or capability_executor is None:
+            runtime_capability_registry, runtime_driver_registry, _plugin_results = build_runtime_registries(config)
+        self.driver_registry = driver_registry or runtime_driver_registry or build_driver_registry()
         self.task_graph_planner = task_graph_planner or TaskGraphPlanner(config)
         self.capability_executor = capability_executor or CapabilityExecutor(
             config=config,
             planner=planner,
-            registry=build_capability_registry(),
+            registry=runtime_capability_registry or build_capability_registry(),
             driver_registry=self.driver_registry,
         )
         self.recipe_memory = recipe_memory or TaskRecipeMemory()
@@ -797,6 +802,9 @@ class DesktopAgent:
                     step_index=step_index,
                     captured_at=captured_at,
                 )
+                last_input_tick_ms = getattr(post_world_model.user_desktop_session, "last_input_tick_ms", None)
+                if last_input_tick_ms is not None:
+                    execution_state.app_context["last_agent_input_tick_ms"] = int(last_input_tick_ms)
                 post_world_model.state_delta = _describe_world_model_delta(world_model, post_world_model)
                 post_facts = self.capability_executor.observe(post_world_model)
                 post_world_model.facts = post_facts
@@ -2836,7 +2844,7 @@ def build_agent(
 ) -> DesktopAgent:
     planner = build_planner(config)
     subgoal_planner = SubgoalPlanner(config, base_planner=planner)
-    driver_registry = build_driver_registry()
+    capability_registry, driver_registry, _plugin_results = build_runtime_registries(config)
     if config.dry_run:
         executor: BaseExecutor = MockExecutor(config)
         perception = MockCapture(config=config)
@@ -2859,7 +2867,7 @@ def build_agent(
         capability_executor=CapabilityExecutor(
             config=config,
             planner=subgoal_planner,
-            registry=build_capability_registry(),
+            registry=capability_registry,
             driver_registry=driver_registry,
         ),
         driver_registry=driver_registry,
