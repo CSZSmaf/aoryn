@@ -7,7 +7,7 @@ mainland-China search engines and shopping sites aggressively block automation
 let a skill:
 
 * read the page the real browser actually loaded,
-* classify it (ok / login / verification / empty / error), and
+* classify it (ok / search_results / login / verification / empty / error), and
 * optionally run a genuine analysis with a locally-configured OpenAI-compatible
   model **on the real page content** — only when that endpoint is reachable.
 
@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 
 @dataclass(slots=True)
 class PageReading:
-    status: str  # "ok" | "login" | "verification" | "empty" | "error"
+    status: str  # "ok" | "search_results" | "login" | "verification" | "empty" | "error"
     url: str
     title: str
     text: str
@@ -40,6 +40,21 @@ class PageReading:
 _LOGIN_MARKERS = ("passport.", "/login", "login.aspx", "signin", "sign-in", "/sign_in", "accounts.")
 _LOGIN_TEXT_MARKERS = ("请登录", "登录后", "扫码登录", "账号登录", "sign in to", "log in to")
 _VERIFY_MARKERS = ("安全验证", "人机验证", "滑动验证", "captcha", "verify you are human", "unusual traffic", "robot")
+_SEARCH_ENGINE_HOSTS = (
+    "bing.com",
+    "cn.bing.com",
+    "www.bing.com",
+    "baidu.com",
+    "www.baidu.com",
+    "google.com",
+    "www.google.com",
+    "sogou.com",
+    "www.sogou.com",
+    "so.com",
+    "www.so.com",
+)
+_SEARCH_ENGINE_PATHS = ("/search", "/s", "/web")
+_SEARCH_RESULT_TEXT_MARKERS = ("网页", "图片", "视频", "约 ", "个结果", "更多", "Rewards")
 
 
 def clean_page_text(value: Any, *, limit: int = 1200) -> str:
@@ -71,7 +86,24 @@ def classify_page(snapshot: dict[str, Any] | None) -> PageReading:
             return PageReading("login", url, title, text, "页面跳转到登录，未能在未登录状态下获取真实数据。")
     if len(text) < 80:
         return PageReading("empty", url, title, text, "页面几乎没有可读取的文本（可能仍在加载或被拦截）。")
+    if _looks_like_search_results_page(url=url, title=title, text=text):
+        return PageReading("search_results", url, title, text, "这是搜索结果页，不是可直接引用的攻略正文页。")
     return PageReading("ok", url, title, text, "已成功读取页面文本内容。")
+
+
+def _looks_like_search_results_page(*, url: str, title: str, text: str) -> bool:
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    if host not in _SEARCH_ENGINE_HOSTS:
+        return False
+    if not any(path.startswith(item) for item in _SEARCH_ENGINE_PATHS):
+        return False
+    title_text = f"{title}\n{text[:500]}"
+    return any(marker in title_text for marker in _SEARCH_RESULT_TEXT_MARKERS) or " - 搜索" in title
 
 
 def endpoint_reachable(base_url: str | None, *, timeout: float = 0.35) -> bool:

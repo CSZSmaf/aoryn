@@ -125,6 +125,24 @@ def test_classify_page_detects_login_verification_and_ok():
     assert classify_page({"url": "https://passport.jd.com/new/login.aspx", "title": "登录", "text": "请登录"}).status == "login"
     assert classify_page({"url": "https://www.baidu.com/s", "title": "百度安全验证", "text": "请完成验证"}).status == "verification"
     assert classify_page({"url": "x", "title": "x", "text": "短"}).status == "empty"
+    search = classify_page(
+        {
+            "url": "https://cn.bing.com/search?q=北京旅游攻略&mkt=zh-CN",
+            "title": "北京旅游攻略 - 搜索",
+            "text": "网页 图片 视频 更多 约 65,200 个结果 北京旅游攻略 " * 20,
+        }
+    )
+    assert search.status == "search_results"
+    assert not search.usable
+    redirected_search = classify_page(
+        {
+            "url": "https://www.bing.com/search?q=北京旅游攻略&mkt=zh-CN",
+            "title": "北京旅游攻略 - 搜索",
+            "text": "网页 图片 视频 更多 约 65,200 个结果 北京旅游攻略 " * 20,
+        }
+    )
+    assert redirected_search.status == "search_results"
+    assert not redirected_search.usable
     ok = classify_page({"url": "https://search.jd.com", "title": "男士裤子", "text": "李宁速干裤 ¥159 海澜之家 " * 20})
     assert ok.status == "ok" and ok.usable
 
@@ -337,6 +355,42 @@ def test_run_travel_notepad_opens_multiple_pages_and_writes_text(workdir, runner
     assert "北京旅游攻略总结" in text
     assert "故宫" in text and "长城" in text and "颐和园" in text
     assert "读取 4 个页面" in result.answer
+
+
+def test_run_travel_notepad_uses_model_summary_when_available(workdir, monkeypatch):
+    snapshots = [
+        {"url": "https://example.test/1", "title": "北京旅游攻略一", "text": "故宫 天安门 景山 王府井 预约 地铁 " * 20},
+        {"url": "https://example.test/2", "title": "北京旅游攻略二", "text": "长城 八达岭 慕田峪 鸟巢 水立方 " * 20},
+        {"url": "https://example.test/3", "title": "北京旅游攻略三", "text": "颐和园 圆明园 胡同 什刹海 南锣鼓巷 " * 20},
+        {"url": "https://example.test/4", "title": "北京旅游攻略四", "text": "烤鸭 炸酱面 地铁 门票 预约 " * 20},
+    ]
+    executor = _FakeTravelExecutor(AgentConfig(), snapshots)
+    captured: dict[str, str] = {}
+
+    def fake_model_chat(config, system, user, *, max_tokens=700):
+        captured["system"] = system
+        captured["user"] = user
+        captured["max_tokens"] = str(max_tokens)
+        return "API建议：第一天故宫和景山，第二天长城，第三天颐和园和胡同。"
+
+    monkeypatch.setattr("desktop_agent.task_skills.model_chat", fake_model_chat)
+
+    result = TaskSkillRunner(AgentConfig()).run(
+        "travel_notepad",
+        "打开浏览器搜索北京旅游攻略，阅读多个网页后总结，并把总结内容写在记事本上",
+        executor=executor,
+        run_dir=workdir / "run",
+        output_dir=workdir / "out",
+        open_artifacts=False,
+    )
+
+    assert result.handled and result.completed
+    assert "故宫 天安门" in captured["user"]
+    assert "长城 八达岭" in captured["user"]
+    saved = (workdir / "out") / result.artifacts[0]
+    text = saved.read_text(encoding="utf-8-sig")
+    assert "API 综合建议" in text
+    assert "API建议：第一天故宫和景山" in text
 
 
 def test_run_travel_notepad_does_not_complete_with_one_readable_page(workdir, runner: TaskSkillRunner):

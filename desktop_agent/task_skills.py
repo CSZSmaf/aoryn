@@ -531,10 +531,10 @@ _TRAVEL_MIN_USABLE_PAGES = 2
 
 def _beijing_research_targets() -> tuple[tuple[str, str], ...]:
     return (
-        ("百度搜索", "https://www.baidu.com/s?wd=" + _url_quote("北京旅游攻略 必去景点 行程")),
         ("必应搜索", "https://cn.bing.com/search?q=" + _url_quote("北京旅游攻略 三天 行程")),
-        ("马蜂窝北京", "https://www.mafengwo.cn/travel-scenic-spot/mafengwo/10065.html"),
+        ("维基导游北京", "https://zh.wikivoyage.org/wiki/%E5%8C%97%E4%BA%AC"),
         ("携程北京目的地", "https://you.ctrip.com/place/beijing1.html"),
+        ("TravelChinaGuide北京", "https://www.travelchinaguide.com/cityguides/beijing.htm"),
     )
 
 
@@ -548,12 +548,14 @@ def has_enough_beijing_travel_evidence(readings: list[PageReading]) -> bool:
     return len(_usable_travel_readings(readings)) >= _TRAVEL_MIN_USABLE_PAGES
 
 
-def build_beijing_travel_summary(readings: list[PageReading]) -> str:
+def build_beijing_travel_summary(readings: list[PageReading], *, model_summary: str | None = None) -> str:
     """Build a Notepad-friendly Beijing travel summary from page readings.
 
     The summary records which pages were actually opened/read. It only gives a
     final route plan when multiple pages were successfully read; otherwise it
-    writes an evidence report and says the conclusion is not reliable yet.
+    writes an evidence report and says the conclusion is not reliable yet. When
+    a configured API returns a grounded summary, that text is preferred over the
+    deterministic fallback route.
     """
 
     usable = _usable_travel_readings(readings)
@@ -590,16 +592,28 @@ def build_beijing_travel_summary(readings: list[PageReading]) -> str:
             "3. 如果站点持续拦截，可改用已登录浏览器或换用可读的官方/攻略页面。",
         ]
         return "\r\n".join(lines).strip() + "\r\n"
+    model_summary = _normalize(model_summary)
+    if model_summary:
+        lines += [
+            "",
+            "二、API 综合建议（基于已读取网页正文）",
+            model_summary,
+            "",
+            "三、稳定路线参考",
+        ]
+    else:
+        lines += [
+            "",
+            "二、综合建议",
+        ]
     lines += [
-        "",
-        "二、综合建议",
         "1. 第一天走中轴线：天安门广场、故宫、景山公园、王府井。故宫需要提前实名预约，景山适合俯瞰故宫全景。",
         "2. 第二天安排长城与奥运区域：八达岭或慕田峪长城择一，下午返回市区看鸟巢、水立方夜景。",
         "3. 第三天看皇家园林和胡同：颐和园、圆明园、什刹海或南锣鼓巷，节奏比前两天轻松。",
         "4. 交通优先地铁，长城段选择正规旅游专线或市郊铁路；热门景点门票、升旗观礼和博物馆建议提前预约。",
         "5. 餐饮可安排北京烤鸭、炸酱面、卤煮、豆汁焦圈等本地特色，但景区周边用餐要看价格和评价。",
         "",
-        "三、演示说明",
+        "四、演示说明" if model_summary else "三、演示说明",
     ]
     lines.append(f"本次已成功读取 {len(usable)} 个网页的正文，上面的攻略综合了多个可读页面内容和稳定经典路线。")
     return "\r\n".join(lines).strip() + "\r\n"
@@ -1011,7 +1025,8 @@ class TaskSkillRunner:
                     interruption_reason=reading.reason,
                 )
 
-        summary = build_beijing_travel_summary(readings)
+        model_summary = self._summarize_beijing_travel_with_model(readings)
+        summary = build_beijing_travel_summary(readings, model_summary=model_summary)
         artifacts: list[str] = []
         notepad_status = ""
         saved_path: Path | None = None
@@ -1070,6 +1085,26 @@ class TaskSkillRunner:
             actions=actions,
             artifacts=artifacts,
             error=error,
+        )
+
+    def _summarize_beijing_travel_with_model(self, readings: list[PageReading]) -> str | None:
+        usable = _usable_travel_readings(readings)
+        if len(usable) < _TRAVEL_MIN_USABLE_PAGES:
+            return None
+        evidence_lines: list[str] = []
+        for index, reading in enumerate(usable, start=1):
+            evidence_lines.append(f"来源 {index}: {reading.title or '(无标题)'}")
+            evidence_lines.append(f"URL: {reading.url}")
+            evidence_lines.append(excerpt(reading.text, limit=900))
+            evidence_lines.append("")
+        return model_chat(
+            self.config,
+            "你是严谨的中文旅行攻略助手。只能依据用户提供的已读取网页正文总结北京旅游攻略；"
+            "不得声称读取了未提供的网页，不得编造门票价格、开放时间或实时政策。"
+            "如果信息不足，要明确说明。输出适合直接写入记事本，条理清楚。",
+            "任务：根据下面多个真实网页正文摘录，总结北京旅游攻略，并给出一个3天行程、交通/预约提示、餐饮建议。\n\n"
+            + "\n".join(evidence_lines),
+            max_tokens=900,
         )
 
     def _run_qq_group_message(self, task: str, ctx: "_SkillContext") -> TaskSkillResult:
