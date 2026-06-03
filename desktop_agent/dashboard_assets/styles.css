@@ -3997,6 +3997,26 @@ body {
   line-height: 1.8;
 }
 
+.message-bubble--assistant {
+  display: grid;
+  gap: 8px;
+  max-width: min(72ch, 82%);
+}
+
+.agent-answer-message .message-bubble__label {
+  background: rgba(31, 56, 100, 0.1);
+  color: #1f3864;
+}
+
+.agent-answer-message__body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.8;
+  font-size: 0.95rem;
+  color: #15233a;
+}
+
 .assistant-shell {
   width: min(100%, var(--content-max));
   grid-template-columns: 56px minmax(0, 1fr);
@@ -4895,6 +4915,25 @@ body {
   box-shadow:
     0 16px 28px rgba(18, 33, 29, 0.06),
     inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.agent-answer-card {
+  border-color: rgba(31, 56, 100, 0.18);
+  background:
+    linear-gradient(180deg, rgba(238, 245, 255, 0.92), rgba(244, 249, 255, 0.86));
+}
+
+.agent-answer-card__body {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(31, 56, 100, 0.1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.7;
+  font-size: 0.95rem;
+  color: #15233a;
 }
 
 .job-card__meta {

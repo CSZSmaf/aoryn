@@ -39,6 +39,8 @@ class RunRecord:
             "started_at": self.summary_payload.get("started_at", self.created_at),
             "finished_at": self.summary_payload.get("finished_at", self.created_at),
             "preview_image": latest_step_image.name if latest_step_image else None,
+            "answer": self.summary_payload.get("answer"),
+            "skill": self.summary_payload.get("skill"),
         }
 
 
@@ -181,6 +183,8 @@ def load_run_details(run_root: Path, run_id: str) -> dict[str, Any] | None:
         "finished_at": summary.get("finished_at", summary_stat.st_mtime),
         "error": summary.get("error"),
         "architecture": summary.get("architecture"),
+        "answer": summary.get("answer"),
+        "skill": summary.get("skill"),
         "artifacts": [item.name for item in sorted(run_dir.iterdir()) if item.is_file()],
         "timeline": steps,
         "plan": plan_payload,

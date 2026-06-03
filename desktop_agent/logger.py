@@ -92,6 +92,8 @@ class RunLogger:
         started_at: float | None = None,
         finished_at: float | None = None,
         architecture: str = "generic_agent_v1",
+        answer: str | None = None,
+        skill: str | None = None,
     ) -> Path:
         payload = {
             "task": task,
@@ -108,6 +110,8 @@ class RunLogger:
             "started_at": started_at,
             "finished_at": finished_at if finished_at is not None else time.time(),
             "architecture": architecture,
+            "answer": answer,
+            "skill": skill,
         }
         output = run_dir / "summary.json"
         self._write_json(output, payload)

@@ -1230,6 +1230,8 @@ def _windows_search_app_term(app: str) -> str:
         "wechat": "WeChat",
         "weixin": "WeChat",
         "微信": "微信",
+        "qq": "QQ",
+        "腾讯qq": "QQ",
         "dingtalk": "DingTalk",
         "钉钉": "钉钉",
         "wps": "WPS Office",
@@ -1516,6 +1518,8 @@ def _default_window_hint(app: str) -> str | None:
         "wechat": "wechat",
         "weixin": "wechat",
         "微信": "微信",
+        "qq": "qq",
+        "腾讯qq": "qq",
         "dingtalk": "dingtalk",
         "钉钉": "钉钉",
         "wps": "wps",
@@ -1546,6 +1550,8 @@ def _infer_mock_app_from_title(title: str) -> str | None:
         return "vscode"
     if "wechat" in title or "微信" in title:
         return "wechat"
+    if "qq" in title or "腾讯qq" in title:
+        return "qq"
     if "dingtalk" in title or "钉钉" in title:
         return "dingtalk"
     if "wps" in title:

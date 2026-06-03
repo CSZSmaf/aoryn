@@ -123,6 +123,13 @@ def test_guard_accepts_safe_chinese_app_intent():
     guard.validate(action)
 
 
+def test_guard_accepts_qq_app_intent():
+    guard = ActionGuard(AgentConfig())
+    action = Action.from_dict({"type": "open_app_if_needed", "app": "qq"})
+
+    guard.validate(action)
+
+
 def test_guard_rejects_blocked_generic_app_intent():
     guard = ActionGuard(AgentConfig())
     action = Action.from_dict({"type": "open_app_if_needed", "app": "powershell"})

@@ -39,6 +39,7 @@ from desktop_agent.surfaces import (
     choose_surface_kind,
     detect_user_input_preemption,
 )
+from desktop_agent.task_skills import TaskSkillRunner, resolve_user_output_dir
 from desktop_agent.version import APP_NAME
 from desktop_agent.workflow import (
     ExecutionState,
@@ -69,6 +70,8 @@ class AgentRunResult:
     requires_human: bool = False
     interruption_kind: str | None = None
     interruption_reason: str | None = None
+    answer: str | None = None
+    skill: str | None = None
 
 
 @dataclass(slots=True)
@@ -115,6 +118,7 @@ class DesktopAgent:
             driver_registry=self.driver_registry,
         )
         self.recipe_memory = recipe_memory or TaskRecipeMemory()
+        self.skill_runner = TaskSkillRunner(config)
         self.orchestrator = TaskOrchestrator(
             config=config,
             task_graph_planner=self.task_graph_planner,
@@ -156,6 +160,17 @@ class DesktopAgent:
             }
         )
         history = list(history or (execution_state.memory if execution_state is not None else []))
+
+        skill_result = self._maybe_run_task_skill(
+            task=task,
+            run_dir=run_dir,
+            started_at=started_at,
+            execution_state=execution_state,
+            step_offset=step_offset,
+        )
+        if skill_result is not None:
+            return skill_result
+
         completed = False
         error_message: str | None = None
         cancelled = False
@@ -1084,6 +1099,191 @@ class DesktopAgent:
         if hasattr(self.executor, "set_run_stop_requested"):
             self.executor.set_run_stop_requested(previous_executor_stop_requested)
         return result
+
+    def _maybe_run_task_skill(
+        self,
+        *,
+        task: str,
+        run_dir: Path,
+        started_at: float,
+        execution_state: ExecutionState | None,
+        step_offset: int,
+    ) -> AgentRunResult | None:
+        if not getattr(self.config, "task_skills_enabled", True):
+            return None
+        if self.config.dry_run:
+            return None
+        if execution_state is not None or step_offset != 0:
+            return None
+        if self._stop_requested():
+            return None
+        try:
+            skill = self.skill_runner.match(task)
+        except Exception:
+            skill = None
+        if not skill:
+            return None
+        return self._run_task_skill(skill=skill, task=task, run_dir=run_dir, started_at=started_at)
+
+    def _run_task_skill(
+        self,
+        *,
+        skill: str,
+        task: str,
+        run_dir: Path,
+        started_at: float,
+    ) -> AgentRunResult:
+        screenshot_path = run_dir / f"step_01.{self.config.screenshot_format}"
+        executed: list[Action] = []
+
+        def _emit(headline: str, actions: list[Action], step: int) -> None:
+            executed.extend(actions)
+            self._emit_progress(
+                {
+                    "task": task,
+                    "run_dir": str(run_dir),
+                    "run_id": run_dir.name,
+                    "steps": step,
+                    "latest_summary": headline,
+                    "latest_actions": [item.to_dict() for item in actions],
+                    "started_at": started_at,
+                    "skill": skill,
+                }
+            )
+
+        try:
+            result = self.skill_runner.run(
+                skill,
+                task,
+                executor=self.executor,
+                run_dir=run_dir,
+                output_dir=resolve_user_output_dir(),
+                open_artifacts=True,
+                allow_filesystem=True,
+                pause_after_action=self.config.pause_after_action,
+                stop_requested=self._stop_requested,
+                emit=_emit,
+            )
+        except ExecutionCancelled as exc:
+            finished_at = time.time()
+            cancel_reason = self._stop_cancel_reason(str(exc) or "Stopped by user.")
+            self.logger.log_summary(
+                run_dir=run_dir,
+                task=task,
+                completed=False,
+                steps=len(executed),
+                dry_run=self.config.dry_run,
+                planner_mode=self.config.planner_mode,
+                cancelled=True,
+                cancel_reason=cancel_reason,
+                started_at=started_at,
+                finished_at=finished_at,
+                architecture="task_skill_v1",
+                skill=skill,
+            )
+            return AgentRunResult(
+                task=task,
+                completed=False,
+                steps=len(executed),
+                run_dir=run_dir,
+                started_at=started_at,
+                finished_at=finished_at,
+                cancelled=True,
+                cancel_reason=cancel_reason,
+                skill=skill,
+            )
+        except Exception as exc:  # pragma: no cover - runtime dependent
+            finished_at = time.time()
+            error_message = str(exc)
+            self.logger.log_summary(
+                run_dir=run_dir,
+                task=task,
+                completed=False,
+                steps=len(executed),
+                dry_run=self.config.dry_run,
+                planner_mode=self.config.planner_mode,
+                error=error_message,
+                started_at=started_at,
+                finished_at=finished_at,
+                architecture="task_skill_v1",
+                skill=skill,
+            )
+            return AgentRunResult(
+                task=task,
+                completed=False,
+                steps=len(executed),
+                run_dir=run_dir,
+                started_at=started_at,
+                finished_at=finished_at,
+                error=error_message,
+                skill=skill,
+            )
+
+        captured_at = self._refresh_step_screenshot(screenshot_path)
+        screenshot_exists = screenshot_path.exists()
+        finished_at = time.time()
+        actions = result.actions or executed
+        plan = PlanResult(
+            status_summary=result.headline or result.answer or "Task skill completed.",
+            done=result.completed,
+            actions=list(actions),
+            current_focus=skill,
+            reasoning=result.answer or None,
+        )
+        try:
+            self.logger.log_step(
+                run_dir=run_dir,
+                step_index=1,
+                task=task,
+                screenshot_path=screenshot_path,
+                plan=plan,
+                executed_actions=list(actions),
+                error=result.error,
+                captured_at=captured_at if captured_at is not None else finished_at,
+            )
+        except Exception:
+            pass
+        self.logger.log_summary(
+            run_dir=run_dir,
+            task=task,
+            completed=result.completed,
+            steps=max(1, len(actions)),
+            dry_run=self.config.dry_run,
+            planner_mode=self.config.planner_mode,
+            error=result.error,
+            started_at=started_at,
+            finished_at=finished_at,
+            architecture="task_skill_v1",
+            answer=result.answer or None,
+            skill=skill,
+        )
+        self._emit_progress(
+            {
+                "task": task,
+                "run_dir": str(run_dir),
+                "run_id": run_dir.name,
+                "steps": max(1, len(actions)),
+                "latest_screenshot": screenshot_path.name if screenshot_exists else None,
+                "latest_summary": result.headline or result.answer,
+                "latest_actions": [item.to_dict() for item in actions],
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "answer": result.answer,
+                "skill": skill,
+                "error": result.error,
+            }
+        )
+        return AgentRunResult(
+            task=task,
+            completed=result.completed,
+            steps=max(1, len(actions)),
+            run_dir=run_dir,
+            started_at=started_at,
+            finished_at=finished_at,
+            error=result.error,
+            answer=result.answer or None,
+            skill=skill,
+        )
 
     def _refresh_step_screenshot(self, screenshot_path: Path) -> float | None:
         try:

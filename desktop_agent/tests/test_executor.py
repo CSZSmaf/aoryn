@@ -51,6 +51,7 @@ def test_launch_browser_dom_mode_uses_dom_session(monkeypatch):
 
 def test_browser_open_falls_back_to_default_browser(monkeypatch):
     executor = RealDesktopExecutor(AgentConfig(dry_run=False))
+    executor.managed_browser = None
     opened: list[str] = []
 
     def fake_popen(*args, **kwargs):
@@ -62,6 +63,7 @@ def test_browser_open_falls_back_to_default_browser(monkeypatch):
 
     monkeypatch.setattr("desktop_agent.executor.subprocess.Popen", fake_popen)
     monkeypatch.setattr("desktop_agent.executor.webbrowser.open", fake_open)
+    monkeypatch.setattr(executor, "_attempt_dom_navigation", lambda operation: False)
 
     executor.execute(Action.from_dict({"type": "browser_open", "text": "openai.com"}))
 

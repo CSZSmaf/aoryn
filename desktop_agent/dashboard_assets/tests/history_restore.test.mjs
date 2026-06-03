@@ -88,7 +88,9 @@ function snapshot(value) {
 
 
 function getLastCssBlock(source, selector, needle = null) {
-  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedSelector = selector
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\n/g, "\\r?\\n");
   const pattern = new RegExp(`${escapedSelector}\\s*\\{([\\s\\S]*?)\\}`, "g");
   const matches = [...source.matchAll(pattern)].map((match) => match[1]);
 

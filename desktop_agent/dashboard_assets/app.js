@@ -2852,12 +2852,20 @@ function cleanRunTitle(value) {
   return truncate(text || tr("未命名任务", "Untitled task"), 60);
 }
 
+function answerHeadline(value) {
+  const text = normalizeText(value);
+  if (!text) return "";
+  return text.split("\n").find((line) => line.trim()) || "";
+}
+
 function runSummary(details) {
   if (details.error) return normalizeText(details.error);
   if (details.cancel_reason) return normalizeText(details.cancel_reason);
   if (details.interruption_reason) return normalizeText(details.interruption_reason);
   if (details.cancelled) return tr("任务在完成前被停止。", "The run was stopped before completion.");
   if (needsHumanVerification(details)) return tr("当前需要人工处理。", "This run currently needs attention.");
+  const headline = answerHeadline(details.answer);
+  if (headline) return headline;
   if (details.completed) return tr("任务已完成。", "The run has finished.");
   return tr("任务尚未结束。", "The run is still open.");
 }
@@ -3012,6 +3020,8 @@ function summarizeOverviewJob(job) {
     interruption_reason: job.interruption_reason ?? null,
     run_id: result.run_id ?? null,
     finished_at: result.finished_at ?? null,
+    answer: result.answer ?? null,
+    skill: result.skill ?? null,
     latest_summary: result.latest_summary ?? null,
     current_goal: result.current_goal ?? executionState.current_goal ?? null,
     chosen_capability: result.chosen_capability ?? executionState.chosen_capability ?? null,
@@ -5965,6 +5975,19 @@ function renderRunningMessage(active) {
   });
 }
 
+function renderAgentAnswerMessage(details) {
+  const answer = normalizeText(details && details.answer);
+  if (!answer) return "";
+  return `
+    <div class="message message--assistant">
+      <article class="message-bubble message-bubble--assistant agent-answer-message">
+        <span class="message-bubble__label">${escapeHtml(tr("Agent 回复", "Agent reply"))}</span>
+        <div class="agent-answer-message__body">${escapeHtml(answer)}</div>
+      </article>
+    </div>
+  `;
+}
+
 function renderCompletedConversation(details) {
   const screenshots = collectRunScreenshots(details);
   const steps = collectLatestTimelineMilestones(details, 4);
@@ -5974,6 +5997,7 @@ function renderCompletedConversation(details) {
   const stateInfo = buildRecordState(details);
 
   return [
+    renderAgentAnswerMessage(details),
     renderAgentRunCard({
       eyebrow: tr("运行结果", "Run result"),
       title: cleanRunTitle(details.task),
@@ -6007,7 +6031,7 @@ function renderCompletedConversation(details) {
       ]),
       variant: "complete",
     }),
-  ];
+  ].filter(Boolean);
 }
 
 function renderUserMessage(task) {
@@ -6268,6 +6292,21 @@ function renderInspector() {
   elements.runDetail.innerHTML = renderRunOverview(details);
 }
 
+function renderRunAnswerCard(details) {
+  const answer = normalizeText(details && details.answer);
+  if (!answer) return "";
+  return `
+    <article class="inspector-section-card inspector-section-card--answer agent-answer-card">
+      ${renderSectionLead({
+        eyebrow: tr("Agent 回复", "Agent reply"),
+        title: tr("任务结果", "Task result"),
+        description: tr("Agent 在对话里给出的执行结果。", "What the agent reports back from this run."),
+      })}
+      <div class="agent-answer-card__body">${escapeHtml(answer)}</div>
+    </article>
+  `;
+}
+
 function renderRunOverview(details) {
   const stateInfo = buildRecordState(details);
   const screenshots = collectRunScreenshots(details);
@@ -6294,6 +6333,8 @@ function renderRunOverview(details) {
           ${renderHumanVerificationChip(details)}
         </div>
       </article>
+
+      ${renderRunAnswerCard(details)}
 
       ${
         latestShot

@@ -325,6 +325,8 @@ class TaskQueue:
                 "requires_human": result.requires_human,
                 "interruption_kind": result.interruption_kind,
                 "interruption_reason": result.interruption_reason,
+                "answer": result.answer,
+                "skill": result.skill,
             }
             with self.lock:
                 if result.completed:

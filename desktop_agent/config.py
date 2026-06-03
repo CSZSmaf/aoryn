@@ -88,6 +88,8 @@ class AgentConfig:
     display_override_work_area_width: int | None = None
     display_override_work_area_height: int | None = None
     generic_app_launch_enabled: bool = True
+    task_skills_enabled: bool = True
+    research_tasks_use_agent: bool = True
     replan_on_recoverable_error: bool = True
     recoverable_error_retry_limit: int = 2
     run_root: Path = field(default_factory=default_run_root)
@@ -104,6 +106,7 @@ class AgentConfig:
             "excel": "excel.exe",
             "powerpoint": "powerpnt.exe",
             "vscode": "code.exe",
+            "qq": "QQ.exe",
         }
     )
     allowed_apps: list[str] = field(
@@ -118,6 +121,7 @@ class AgentConfig:
             "excel",
             "powerpoint",
             "vscode",
+            "qq",
         ]
     )
     blocked_app_launch_terms: list[str] = field(
