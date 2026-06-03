@@ -59,6 +59,9 @@ class TaskSkillResult:
     actions: list[Action] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
     error: str | None = None
+    requires_human: bool = False
+    interruption_kind: str | None = None
+    interruption_reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +526,7 @@ def write_beijing_docx(path: Path, *, search_excerpt: str | None = None) -> Path
 
 
 _TRAVEL_NOTE_FILENAME = "北京旅游攻略总结.txt"
+_TRAVEL_MIN_USABLE_PAGES = 2
 
 
 def _beijing_research_targets() -> tuple[tuple[str, str], ...]:
@@ -534,22 +538,33 @@ def _beijing_research_targets() -> tuple[tuple[str, str], ...]:
     )
 
 
+def _usable_travel_readings(readings: list[PageReading]) -> list[PageReading]:
+    return [reading for reading in readings if reading.usable]
+
+
+def has_enough_beijing_travel_evidence(readings: list[PageReading]) -> bool:
+    """Return whether the task can honestly produce a multi-page travel summary."""
+
+    return len(_usable_travel_readings(readings)) >= _TRAVEL_MIN_USABLE_PAGES
+
+
 def build_beijing_travel_summary(readings: list[PageReading]) -> str:
     """Build a Notepad-friendly Beijing travel summary from page readings.
 
-    The summary records which pages were actually opened/read, then gives a
-    conservative route plan that is stable enough for live demos even when a
-    search site blocks automation.
+    The summary records which pages were actually opened/read. It only gives a
+    final route plan when multiple pages were successfully read; otherwise it
+    writes an evidence report and says the conclusion is not reliable yet.
     """
 
-    usable = [reading for reading in readings if reading.usable]
+    usable = _usable_travel_readings(readings)
+    enough_evidence = has_enough_beijing_travel_evidence(readings)
     lines: list[str] = [
         "北京旅游攻略总结",
         "",
         "一、网页阅读情况",
     ]
     if not readings:
-        lines.append("1. 未读取到浏览器页面快照，以下为保底行程整理。")
+        lines.append("1. 未读取到浏览器页面快照。")
     else:
         for index, reading in enumerate(readings, start=1):
             title = reading.title or "(无标题)"
@@ -562,6 +577,19 @@ def build_beijing_travel_summary(readings: list[PageReading]) -> str:
                 page_excerpt = " ".join(excerpt(reading.text, limit=220).split())
                 if page_excerpt:
                     lines.append(f"   摘要：{page_excerpt}")
+    if not enough_evidence:
+        lines += [
+            "",
+            "二、结论",
+            f"未生成最终攻略：本次只成功读取 {len(usable)} 个有效网页，少于要求的 {_TRAVEL_MIN_USABLE_PAGES} 个有效网页。",
+            "为了避免把常识路线伪装成网页阅读结论，需要先处理验证/加载问题，读取到更多有效页面后再总结。",
+            "",
+            "三、下一步",
+            "1. 如果页面出现安全验证或人机验证，请先手动完成验证。",
+            "2. 验证完成后从历史记录或悬浮窗恢复任务，让系统继续读取网页。",
+            "3. 如果站点持续拦截，可改用已登录浏览器或换用可读的官方/攻略页面。",
+        ]
+        return "\r\n".join(lines).strip() + "\r\n"
     lines += [
         "",
         "二、综合建议",
@@ -573,10 +601,7 @@ def build_beijing_travel_summary(readings: list[PageReading]) -> str:
         "",
         "三、演示说明",
     ]
-    if usable:
-        lines.append(f"本次已成功读取 {len(usable)} 个网页的正文，上面的攻略综合了可读页面内容和稳定经典路线。")
-    else:
-        lines.append("本次网页可能被搜索引擎/旅游站点拦截或返回空正文，系统仍已打开多个网页并生成可展示的保底攻略。")
+    lines.append(f"本次已成功读取 {len(usable)} 个网页的正文，上面的攻略综合了多个可读页面内容和稳定经典路线。")
     return "\r\n".join(lines).strip() + "\r\n"
 
 
@@ -963,7 +988,28 @@ class TaskSkillRunner:
             ]
             ctx.execute(step_actions, f"打开并阅读北京旅游攻略网页 {index}：{label}")
             actions.extend(step_actions)
-            readings.append(classify_page(ctx.read_page()))
+            reading = classify_page(ctx.read_page())
+            readings.append(reading)
+            if reading.status == "verification":
+                answer = (
+                    "⚠️ 已暂停：当前网页出现安全验证/人机验证，不能继续自动读取或绕过验证。\n\n"
+                    f"页面：{reading.title or '(无标题)'}\n"
+                    f"地址：{reading.url or url}\n"
+                    f"原因：{reading.reason}\n\n"
+                    "请手动完成验证后，从历史记录或悬浮窗点击恢复，系统会重新进入该任务继续读取页面。"
+                )
+                return TaskSkillResult(
+                    handled=True,
+                    skill="travel_notepad",
+                    completed=False,
+                    answer=answer,
+                    headline="检测到人机验证，已暂停等待人工处理",
+                    actions=actions,
+                    error="human verification required",
+                    requires_human=True,
+                    interruption_kind="generic_human_verification",
+                    interruption_reason=reading.reason,
+                )
 
         summary = build_beijing_travel_summary(readings)
         artifacts: list[str] = []
@@ -996,21 +1042,34 @@ class TaskSkillRunner:
             notepad_status = "总结已直接写入记事本窗口。"
 
         usable_count = sum(1 for reading in readings if reading.usable)
-        headline = f"任务已完成：已阅读 {len(readings)} 个北京旅游相关网页，并把攻略总结写入记事本"
+        completed = has_enough_beijing_travel_evidence(readings)
+        headline = (
+            f"任务已完成：已读取 {usable_count} 个有效网页，并把北京旅游攻略总结写入记事本"
+            if completed
+            else f"任务未完成：只读取到 {usable_count} 个有效网页，已把阅读记录写入记事本"
+        )
+        lead = (
+            "✅ 任务已完成：已读取多个有效网页，并把北京旅游攻略总结写入记事本。"
+            if completed
+            else "⚠️ 任务未完成：有效网页不足，未生成最终北京旅游攻略；已把阅读记录和下一步建议写入记事本。"
+        )
         answer = (
-            "✅ 任务已完成：已打开浏览器搜索/阅读北京旅游攻略相关网页，并把总结内容写入记事本。\n\n"
+            f"{lead}\n\n"
             f"网页读取：共打开并读取 {len(readings)} 个页面，其中 {usable_count} 个页面读取到有效正文。\n"
+            f"最低要求：至少 {_TRAVEL_MIN_USABLE_PAGES} 个有效网页。\n"
             f"{notepad_status}\n\n"
             f"{summary}"
         )
+        error = None if completed else "insufficient readable travel pages"
         return TaskSkillResult(
             handled=True,
             skill="travel_notepad",
-            completed=True,
+            completed=completed,
             answer=answer.strip(),
             headline=headline,
             actions=actions,
             artifacts=artifacts,
+            error=error,
         )
 
     def _run_qq_group_message(self, task: str, ctx: "_SkillContext") -> TaskSkillResult:

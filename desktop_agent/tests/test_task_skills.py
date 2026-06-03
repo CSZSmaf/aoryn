@@ -27,6 +27,7 @@ from desktop_agent.task_skills import (
     extract_arithmetic_expression,
     extract_qq_group_message,
     format_number,
+    has_enough_beijing_travel_evidence,
     write_beijing_docx,
 )
 from desktop_agent.web_research import PageReading, classify_page, extract_brand_mentions, extract_prices
@@ -170,6 +171,22 @@ def test_build_beijing_travel_summary_records_page_readings():
     assert "北京攻略A" in summary
     assert "故宫" in summary
     assert "页面为空" in summary
+    assert not has_enough_beijing_travel_evidence(readings)
+    assert "未生成最终攻略" in summary
+    assert "二、综合建议" not in summary
+
+
+def test_build_beijing_travel_summary_requires_multiple_readable_pages():
+    readings = [
+        PageReading("ok", "https://example.test/a", "北京攻略A", "故宫 天安门 景山 预约 地铁 " * 20, "ok"),
+        PageReading("ok", "https://example.test/b", "北京攻略B", "长城 颐和园 胡同 烤鸭 " * 20, "ok"),
+    ]
+
+    summary = build_beijing_travel_summary(readings)
+
+    assert has_enough_beijing_travel_evidence(readings)
+    assert "二、综合建议" in summary
+    assert "本次已成功读取 2 个网页" in summary
 
 
 def test_extract_qq_group_message_accepts_quoted_instruction():
@@ -322,6 +339,57 @@ def test_run_travel_notepad_opens_multiple_pages_and_writes_text(workdir, runner
     assert "读取 4 个页面" in result.answer
 
 
+def test_run_travel_notepad_does_not_complete_with_one_readable_page(workdir, runner: TaskSkillRunner):
+    snapshots = [
+        {"url": "https://example.test/1", "title": "空页面", "text": ""},
+        {"url": "https://example.test/2", "title": "仍在加载", "text": "短"},
+        {"url": "https://example.test/3", "title": "北京旅游攻略", "text": "故宫 八达岭长城 颐和园 烤鸭 " * 20},
+        {"url": "https://example.test/4", "title": "拦截", "text": ""},
+    ]
+    executor = _FakeTravelExecutor(AgentConfig(), snapshots)
+
+    result = runner.run(
+        "travel_notepad",
+        "打开浏览器搜索北京旅游攻略，阅读多个网页后总结，并把总结内容写在记事本上",
+        executor=executor,
+        run_dir=workdir / "run",
+        output_dir=workdir / "out",
+        open_artifacts=False,
+    )
+
+    assert result.handled and not result.completed
+    assert result.error == "insufficient readable travel pages"
+    assert "有效网页不足" in result.answer
+    saved = (workdir / "out") / result.artifacts[0]
+    text = saved.read_text(encoding="utf-8-sig")
+    assert "未生成最终攻略" in text
+    assert "二、综合建议" not in text
+
+
+def test_run_travel_notepad_pauses_on_verification(runner: TaskSkillRunner):
+    snapshots = [
+        {
+            "url": "https://www.baidu.com/s?wd=x",
+            "title": "百度安全验证",
+            "text": "请完成安全验证后继续访问",
+        },
+        {"url": "https://example.test/2", "title": "北京攻略", "text": "故宫 " * 100},
+    ]
+    executor = _FakeTravelExecutor(AgentConfig(), snapshots)
+
+    result = runner.run(
+        "travel_notepad",
+        "打开浏览器搜索北京旅游攻略，阅读多个网页后总结，并把总结内容写在记事本上",
+        executor=executor,
+    )
+
+    assert result.handled and not result.completed
+    assert result.requires_human is True
+    assert result.interruption_kind == "generic_human_verification"
+    assert "人机验证" in result.answer or "安全验证" in result.answer
+    assert len([a for a in executor.executed if a.get("type") == "browser_open"]) == 1
+
+
 def test_run_qq_group_message_executes_search_and_send(runner: TaskSkillRunner):
     executor = MockExecutor(AgentConfig())
 
@@ -413,3 +481,24 @@ def test_controller_fast_path_skipped_in_dry_run(workdir):
         execution_state=None,
         step_offset=0,
     ) is None
+
+
+def test_controller_fast_path_can_resume_skill_without_execution_state(workdir):
+    agent, _config, json = _build_headless_agent(workdir)
+    run_dir = workdir / "resume-skill-run"
+    run_dir.mkdir()
+
+    result = agent._maybe_run_task_skill(
+        task="打开计算器计算1+1",
+        run_dir=run_dir,
+        started_at=0.0,
+        execution_state=None,
+        step_offset=3,
+    )
+
+    assert result is not None
+    assert result.completed is True
+    assert result.skill == "calculator"
+    assert (run_dir / "step_04.json").exists()
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["skill"] == "calculator"

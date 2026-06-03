@@ -1113,7 +1113,7 @@ class DesktopAgent:
             return None
         if self.config.dry_run:
             return None
-        if execution_state is not None or step_offset != 0:
+        if execution_state is not None:
             return None
         if self._stop_requested():
             return None
@@ -1123,7 +1123,13 @@ class DesktopAgent:
             skill = None
         if not skill:
             return None
-        return self._run_task_skill(skill=skill, task=task, run_dir=run_dir, started_at=started_at)
+        return self._run_task_skill(
+            skill=skill,
+            task=task,
+            run_dir=run_dir,
+            started_at=started_at,
+            step_offset=step_offset,
+        )
 
     def _run_task_skill(
         self,
@@ -1132,8 +1138,10 @@ class DesktopAgent:
         task: str,
         run_dir: Path,
         started_at: float,
+        step_offset: int = 0,
     ) -> AgentRunResult:
-        screenshot_path = run_dir / f"step_01.{self.config.screenshot_format}"
+        step_index = max(1, int(step_offset or 0) + 1)
+        screenshot_path = run_dir / f"step_{step_index:02d}.{self.config.screenshot_format}"
         executed: list[Action] = []
 
         def _emit(headline: str, actions: list[Action], step: int) -> None:
@@ -1230,27 +1238,42 @@ class DesktopAgent:
             current_focus=skill,
             reasoning=result.answer or None,
         )
+        challenge_payload = (
+            {
+                "kind": result.interruption_kind,
+                "summary": result.headline or "Human attention required.",
+                "detail": result.interruption_reason or result.error,
+                "requires_human": True,
+            }
+            if result.requires_human
+            else None
+        )
         try:
             self.logger.log_step(
                 run_dir=run_dir,
-                step_index=1,
+                step_index=step_index,
                 task=task,
                 screenshot_path=screenshot_path,
                 plan=plan,
                 executed_actions=list(actions),
                 error=result.error,
+                challenge=challenge_payload,
                 captured_at=captured_at if captured_at is not None else finished_at,
             )
         except Exception:
             pass
+        reported_steps = max(step_index, len(actions), 1)
         self.logger.log_summary(
             run_dir=run_dir,
             task=task,
             completed=result.completed,
-            steps=max(1, len(actions)),
+            steps=reported_steps,
             dry_run=self.config.dry_run,
             planner_mode=self.config.planner_mode,
             error=result.error,
+            requires_human=result.requires_human,
+            interruption_kind=result.interruption_kind,
+            interruption_reason=result.interruption_reason,
             started_at=started_at,
             finished_at=finished_at,
             architecture="task_skill_v1",
@@ -1262,7 +1285,7 @@ class DesktopAgent:
                 "task": task,
                 "run_dir": str(run_dir),
                 "run_id": run_dir.name,
-                "steps": max(1, len(actions)),
+                "steps": reported_steps,
                 "latest_screenshot": screenshot_path.name if screenshot_exists else None,
                 "latest_summary": result.headline or result.answer,
                 "latest_actions": [item.to_dict() for item in actions],
@@ -1271,18 +1294,24 @@ class DesktopAgent:
                 "answer": result.answer,
                 "skill": skill,
                 "error": result.error,
+                "requires_human": result.requires_human,
+                "interruption_kind": result.interruption_kind,
+                "interruption_reason": result.interruption_reason,
             }
         )
         return AgentRunResult(
             task=task,
             completed=result.completed,
-            steps=max(1, len(actions)),
+            steps=reported_steps,
             run_dir=run_dir,
             started_at=started_at,
             finished_at=finished_at,
             error=result.error,
             answer=result.answer or None,
             skill=skill,
+            requires_human=result.requires_human,
+            interruption_kind=result.interruption_kind,
+            interruption_reason=result.interruption_reason,
         )
 
     def _refresh_step_screenshot(self, screenshot_path: Path) -> float | None:
