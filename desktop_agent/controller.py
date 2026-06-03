@@ -41,6 +41,7 @@ from desktop_agent.surfaces import (
 )
 from desktop_agent.task_skills import TaskSkillRunner, resolve_user_output_dir
 from desktop_agent.version import APP_NAME
+from desktop_agent.windows_uia import capture_uia_tree
 from desktop_agent.workflow import (
     ExecutionState,
     PendingDecision,
@@ -1372,17 +1373,34 @@ class DesktopAgent:
         downloads = []
         if isinstance(browser_snapshot, dict) and isinstance(browser_snapshot.get("downloads"), list):
             downloads = [dict(item) for item in browser_snapshot.get("downloads", []) if isinstance(item, dict)]
+        uia_tree: list[dict[str, Any]] = []
+        enabled_capabilities = {
+            str(item).strip().lower()
+            for item in (getattr(self.config, "enabled_capabilities", []) or [])
+            if str(item).strip()
+        }
+        if "windows_uia" in enabled_capabilities and active_window_title and active_app not in {"browser"}:
+            uia_tree = capture_uia_tree(active_window_title=active_window_title)
         structured_sources: list[str] = []
         if browser_snapshot:
             structured_sources.append("browser_dom")
+        if uia_tree:
+            structured_sources.append("windows_uia")
         if environment is not None:
             structured_sources.append("windows_env")
         if clipboard_text:
             structured_sources.append("clipboard")
         fact_sources = list(structured_sources)
         fact_sources.append("screenshot")
-        dom_available = bool(browser_snapshot and any(str(browser_snapshot.get(key) or "").strip() for key in ("url", "title", "text")))
-        uia_available = bool(active_window_title and active_app not in {"browser"})
+        interactive_elements = browser_snapshot.get("interactive_elements") if isinstance(browser_snapshot, dict) else None
+        dom_available = bool(
+            browser_snapshot
+            and (
+                any(str(browser_snapshot.get(key) or "").strip() for key in ("url", "title", "text"))
+                or bool(interactive_elements)
+            )
+        )
+        uia_available = bool(uia_tree or (active_window_title and active_app not in {"browser"}))
         user_session = capture_user_desktop_session(environment=environment, focused_control=None)
         surface_kind = choose_surface_kind(
             config=self.config,
@@ -1394,6 +1412,7 @@ class DesktopAgent:
             active_window_title=active_window_title,
             browser_snapshot=browser_snapshot,
             visible_windows=visible_windows,
+            uia_tree=uia_tree,
             selection_text=selection_text or current_buffer_text or last_interaction_text,
         )
         if last_interaction_text:
@@ -1404,6 +1423,7 @@ class DesktopAgent:
             screenshot_path=screenshot_path,
             environment=environment,
             browser_snapshot=browser_snapshot,
+            uia_tree=uia_tree,
             downloads=downloads,
             visible_windows=visible_windows,
             fact_sources=fact_sources,
@@ -2145,7 +2165,8 @@ def _collect_anchor_candidates(
     active_window_title: str | None,
     browser_snapshot: dict[str, Any] | None,
     visible_windows: list[dict[str, Any]],
-    selection_text: str | None,
+    uia_tree: list[dict[str, Any]] | None = None,
+    selection_text: str | None = None,
 ) -> list[str]:
     anchors: list[str] = []
     if active_window_title:
@@ -2155,10 +2176,33 @@ def _collect_anchor_candidates(
             value = str(browser_snapshot.get(key) or "").strip()
             if value:
                 anchors.append(value[:200])
+        for element in browser_snapshot.get("interactive_elements", [])[:8]:
+            if not isinstance(element, dict):
+                continue
+            label = str(element.get("label") or "").strip()
+            selector = str(element.get("selector") or "").strip()
+            role = str(element.get("role") or element.get("tag") or "").strip()
+            if label:
+                anchors.append(label[:160])
+            if selector:
+                anchors.append(selector[:160])
+            if role and label:
+                anchors.append(f"{role}: {label}"[:160])
     for item in visible_windows[:6]:
         title = str(item.get("title") or "").strip()
         if title:
             anchors.append(title)
+    for item in (uia_tree or [])[:10]:
+        if not isinstance(item, dict):
+            continue
+        for key in ("name", "automation_id", "selector"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                anchors.append(value[:160])
+        control_type = str(item.get("control_type") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if control_type and name:
+            anchors.append(f"{control_type}: {name}"[:160])
     if selection_text:
         anchors.append(str(selection_text)[:200])
     deduped: list[str] = []

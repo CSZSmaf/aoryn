@@ -17,6 +17,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, quote_plus, urlparse
 
 from desktop_agent.browser_chrome import BrowserTabStrip, BrowserTopChrome
+from desktop_agent.browser_dom import INTERACTIVE_ELEMENTS_SCRIPT, normalize_interactive_elements
 from desktop_agent.browser_icons import browser_chrome_icon, browser_window_icon
 from desktop_agent.browser_internal_pages import build_internal_page_html
 from desktop_agent.browser_runtime import BrowserObservation, BrowserRuntimeError
@@ -1863,19 +1864,8 @@ if QApplication is not None:
             tab = self.active_tab()
             if tab is None:
                 return {"items": []}
-            script = """
-                (() => Array.from(document.querySelectorAll('button, input, textarea, select, a, [role]'))
-                  .slice(0, 100)
-                  .map((node, index) => ({
-                    index,
-                    tag: node.tagName.toLowerCase(),
-                    role: node.getAttribute('role') || '',
-                    text: String(node.innerText || node.textContent || node.value || '').trim().slice(0, 200),
-                    label: String(node.getAttribute('aria-label') || node.getAttribute('placeholder') || '').trim().slice(0, 200)
-                  })))();
-            """
-            items = _run_js_sync(tab.view.page(), script)
-            return {"items": items if isinstance(items, list) else [], "tab_id": tab.tab_id}
+            items = normalize_interactive_elements(_run_js_sync(tab.view.page(), INTERACTIVE_ELEMENTS_SCRIPT), limit=100)
+            return {"items": items, "tab_id": tab.tab_id}
 
         def annotate_page(self, *, selector: str | None = None, label: str | None = None) -> dict[str, Any]:
             tab = self.active_tab()
@@ -2091,12 +2081,21 @@ if QApplication is not None:
                 }
             else:
                 dom = self.query_dom(include_text=True)
+            interactive_elements = []
+            if active_tab is not None and not active_tab.internal_page:
+                try:
+                    interactive_elements = normalize_interactive_elements(
+                        _run_js_sync(active_tab.view.page(), INTERACTIVE_ELEMENTS_SCRIPT)
+                    )
+                except Exception:
+                    interactive_elements = []
             return {
                 "runtime": "aoryn_browser",
                 "status": "ready",
                 "url": dom.get("url"),
                 "title": dom.get("title"),
                 "text": dom.get("text"),
+                "interactive_elements": interactive_elements,
                 "active_tab_id": active_tab.tab_id if active_tab is not None else None,
                 "tab_count": self.tabs.count(),
                 "window_id": self.window_id,

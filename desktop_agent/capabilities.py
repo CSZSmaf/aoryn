@@ -358,6 +358,16 @@ class BrowserDOMCapability(CapabilityAdapter):
             facts.append(ObservedFact(source=self.name, key="title", value=str(browser_snapshot["title"])))
         if browser_snapshot.get("text"):
             facts.append(ObservedFact(source=self.name, key="text", value=str(browser_snapshot["text"])[:400], confidence=0.8))
+        interactive_elements = _format_interactive_elements(browser_snapshot.get("interactive_elements"))
+        if interactive_elements:
+            facts.append(
+                ObservedFact(
+                    source=self.name,
+                    key="interactive_elements",
+                    value=interactive_elements,
+                    confidence=0.85,
+                )
+            )
         return facts
 
     def extract_anchors(self, world_model: WorldModel) -> list[str]:
@@ -367,7 +377,18 @@ class BrowserDOMCapability(CapabilityAdapter):
             value = str(browser_snapshot.get(key) or "").strip()
             if value:
                 anchors.append(value[:200])
-        return anchors[:6]
+        for item in browser_snapshot.get("interactive_elements", [])[:8]:
+            if not isinstance(item, dict):
+                continue
+            for key in ("label", "selector", "href"):
+                value = str(item.get(key) or "").strip()
+                if value:
+                    anchors.append(value[:160])
+            role = str(item.get("role") or item.get("tag") or "").strip()
+            label = str(item.get("label") or "").strip()
+            if role and label:
+                anchors.append(f"{role}: {label}"[:160])
+        return anchors[:12]
 
     def can_handle(self, subgoal: Subgoal, world_model: WorldModel) -> float:
         text = _normalize_text(subgoal.title)
@@ -496,6 +517,32 @@ class BrowserDOMCapability(CapabilityAdapter):
         )
 
 
+def _format_interactive_elements(elements: Any, *, limit: int = 10) -> str:
+    if not isinstance(elements, list):
+        return ""
+    rows: list[str] = []
+    for element in elements[: max(0, int(limit))]:
+        if not isinstance(element, dict):
+            continue
+        label = " ".join(str(element.get("label") or "").split()).strip()
+        role = " ".join(str(element.get("role") or element.get("tag") or "").split()).strip()
+        selector = " ".join(str(element.get("selector") or "").split()).strip()
+        href = " ".join(str(element.get("href") or "").split()).strip()
+        index = element.get("index", len(rows))
+        pieces = [str(index)]
+        if role:
+            pieces.append(role[:40])
+        if label:
+            pieces.append(label[:120])
+        if selector:
+            pieces.append(f"selector={selector[:120]}")
+        elif href:
+            pieces.append(f"href={href[:120]}")
+        if len(pieces) > 1:
+            rows.append(": ".join((pieces[0], " | ".join(pieces[1:]))))
+    return "; ".join(rows)[:1200]
+
+
 class ClipboardCapability(CapabilityAdapter):
     name = "clipboard"
 
@@ -575,7 +622,13 @@ class WindowsUIACapability(CapabilityAdapter):
             name = str(item.get("name") or item.get("title") or "").strip()
             if name:
                 anchors.append(name)
-        return anchors[:8]
+            automation_id = str(item.get("automation_id") or "").strip()
+            if automation_id:
+                anchors.append(automation_id)
+            selector = str(item.get("selector") or "").strip()
+            if selector:
+                anchors.append(selector)
+        return anchors[:12]
 
 
 class GuardedShellRecipeCapability(CapabilityAdapter):

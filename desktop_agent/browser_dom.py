@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from desktop_agent.config import AgentConfig
 
@@ -23,6 +23,145 @@ class BrowserDOMStatus:
     available: bool
     backend: str
     detail: str
+
+
+INTERACTIVE_ELEMENTS_SCRIPT = r"""
+(() => {
+  const selectorFor = (node) => {
+    if (!node || !node.tagName) return "";
+    const tag = node.tagName.toLowerCase();
+    const id = node.getAttribute("id");
+    if (id && !/\s/.test(id)) return `${tag}#${CSS.escape(id)}`;
+    const testAttr = ["data-testid", "data-test", "data-qa"].find((attr) => node.getAttribute(attr));
+    if (testAttr) return `${tag}[${testAttr}="${CSS.escape(node.getAttribute(testAttr))}"]`;
+    const name = node.getAttribute("name");
+    if (name) return `${tag}[name="${CSS.escape(name)}"]`;
+    const aria = node.getAttribute("aria-label");
+    if (aria) return `${tag}[aria-label="${CSS.escape(aria.slice(0, 80))}"]`;
+    const parent = node.parentElement;
+    if (!parent) return tag;
+    const siblings = Array.from(parent.children).filter((item) => item.tagName === node.tagName);
+    const nth = siblings.indexOf(node) + 1;
+    const parentTag = parent.tagName ? parent.tagName.toLowerCase() : "";
+    return `${parentTag ? parentTag + " > " : ""}${tag}:nth-of-type(${Math.max(1, nth)})`;
+  };
+  const readableText = (node) => {
+    const aria = node.getAttribute("aria-label") || "";
+    const labelledBy = node.getAttribute("aria-labelledby") || "";
+    const labelledText = labelledBy
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || "")
+      .join(" ");
+    return [
+      aria,
+      labelledText,
+      node.getAttribute("placeholder") || "",
+      node.getAttribute("title") || "",
+      node.innerText || "",
+      node.textContent || "",
+      node.value || "",
+      node.getAttribute("href") || ""
+    ].map((value) => String(value || "").trim()).find(Boolean) || "";
+  };
+  const candidates = Array.from(document.querySelectorAll([
+    "a[href]",
+    "button",
+    "input",
+    "textarea",
+    "select",
+    "summary",
+    "[role]",
+    "[tabindex]",
+    "[contenteditable='true']"
+  ].join(",")));
+  return candidates
+    .map((node) => {
+      const style = window.getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      const tag = node.tagName.toLowerCase();
+      const role = node.getAttribute("role") || ({
+        a: "link",
+        button: "button",
+        input: node.type === "submit" || node.type === "button" ? "button" : "textbox",
+        textarea: "textbox",
+        select: "combobox",
+        summary: "button"
+      }[tag] || "");
+      return {
+        tag,
+        role,
+        type: node.getAttribute("type") || "",
+        label: readableText(node).replace(/\s+/g, " ").slice(0, 220),
+        selector: selectorFor(node),
+        href: node.getAttribute("href") || "",
+        disabled: Boolean(node.disabled || node.getAttribute("aria-disabled") === "true"),
+        visible: style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0,
+        rect: {
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        }
+      };
+    })
+    .filter((item) => item.visible && item.selector && (item.label || item.role || item.href))
+    .slice(0, 120)
+    .map((item, index) => ({ index, ...item }));
+})();
+"""
+
+
+def normalize_interactive_elements(raw: Any, *, limit: int = 80) -> list[dict[str, Any]]:
+    """Return a compact, LLM-friendly list of visible interactive elements."""
+
+    if not isinstance(raw, list):
+        return []
+    max_items = max(0, int(limit))
+    if max_items <= 0:
+        return []
+    normalized: list[dict[str, Any]] = []
+    for raw_item in raw:
+        if not isinstance(raw_item, dict):
+            continue
+        selector = str(raw_item.get("selector") or "").strip()
+        if not selector:
+            continue
+        label = _compact_dom_text(
+            raw_item.get("label")
+            or raw_item.get("text")
+            or raw_item.get("name")
+            or raw_item.get("placeholder")
+            or raw_item.get("href")
+        )
+        role = _compact_dom_text(raw_item.get("role"), limit=40)
+        tag = _compact_dom_text(raw_item.get("tag"), limit=24)
+        if not label and not role and not tag:
+            continue
+        item: dict[str, Any] = {
+            "index": len(normalized),
+            "selector": selector[:240],
+            "label": label[:220],
+            "role": role,
+            "tag": tag,
+        }
+        type_value = _compact_dom_text(raw_item.get("type"), limit=40)
+        if type_value:
+            item["type"] = type_value
+        href = _compact_dom_text(raw_item.get("href"), limit=240)
+        if href:
+            item["href"] = href
+        item["disabled"] = bool(raw_item.get("disabled"))
+        rect = raw_item.get("rect")
+        if isinstance(rect, dict):
+            item["rect"] = {
+                key: _safe_int(rect.get(key))
+                for key in ("x", "y", "width", "height")
+                if _safe_int(rect.get(key)) is not None
+            }
+        normalized.append(item)
+        if len(normalized) >= max_items:
+            break
+    return normalized
 
 
 def dom_backend_status(backend: str) -> BrowserDOMStatus:
@@ -151,12 +290,12 @@ class PlaywrightBrowserSession:
             self._ensure_not_stopped()
             return str(locator.text_content(timeout=self._action_timeout_ms(timeout_ms)) or "").strip()
 
-    def snapshot(self) -> dict[str, str | None] | None:
+    def snapshot(self) -> dict[str, Any] | None:
         self._ensure_not_stopped()
         if self._page is None:
             return None
 
-        snapshot: dict[str, str | None] = {"url": None, "title": None, "text": None}
+        snapshot: dict[str, Any] = {"url": None, "title": None, "text": None, "interactive_elements": []}
         try:
             snapshot["url"] = str(self._page.url or "").strip() or None
         except Exception:
@@ -174,6 +313,11 @@ class PlaywrightBrowserSession:
                 snapshot["text"] = body_text[:4000]
         except Exception:
             snapshot["text"] = None
+        try:
+            raw_items = self._page.evaluate(INTERACTIVE_ELEMENTS_SCRIPT)
+            snapshot["interactive_elements"] = normalize_interactive_elements(raw_items)
+        except Exception:
+            snapshot["interactive_elements"] = []
         self._ensure_not_stopped()
         return snapshot
 
@@ -333,3 +477,17 @@ def _optional_existing_path(path: str | None) -> str | None:
     if Path(candidate).is_file():
         return candidate
     return None
+
+
+def _compact_dom_text(value: Any, *, limit: int = 220) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
