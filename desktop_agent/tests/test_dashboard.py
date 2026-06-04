@@ -1673,7 +1673,8 @@ def test_dashboard_serves_help_route():
             assert payload["title"] == "帮助中心"
             assert payload["locale"] == "zh-CN"
             assert payload["audience"] == "user"
-            assert "第一次使用" in payload["markdown"]
+            assert "基础设置" in payload["markdown"]
+            assert "第一次使用" not in payload["markdown"]
             assert "本地优先" in payload["markdown"]
 
         with urllib.request.urlopen(f"{base_url}/api/help?locale=en-US") as response:
@@ -1682,7 +1683,8 @@ def test_dashboard_serves_help_route():
             assert payload["title"] == "Help Center"
             assert payload["locale"] == "en-US"
             assert payload["audience"] == "user"
-            assert "First run" in payload["markdown"]
+            assert "Setup" in payload["markdown"]
+            assert "four-step onboarding" not in payload["markdown"]
             assert "Advanced Docs" in payload["markdown"]
 
         with urllib.request.urlopen(f"{base_url}/api/help?locale=en-US&audience=developer") as response:
@@ -1713,8 +1715,9 @@ def test_chat_frontend_assets_include_avatar_timer_and_katex_hooks():
     assert "environment-check-grid" in app_source
     assert "openDeveloperDocsButton" in app_source
     assert "Help Center" in app_source
-    assert "Run starter task" in app_source
-    assert "Finish one successful run in four steps." in app_source
+    assert "Run starter task" not in app_source
+    assert "Finish one successful run in four steps." not in app_source
+    assert "elements.onboardingSection.hidden = true;" in app_source
     assert "assistant-pending-badge" in styles_source
     assert "assistant-avatar" in styles_source
     assert "assistant-math--katex" in styles_source
@@ -2821,7 +2824,8 @@ def test_dashboard_serves_help_route():
             assert payload["title"] == "帮助中心"
             assert payload["locale"] == "zh-CN"
             assert payload["audience"] == "user"
-            assert "第一次使用" in payload["markdown"]
+            assert "基础设置" in payload["markdown"]
+            assert "第一次使用" not in payload["markdown"]
             assert "本地优先" in payload["markdown"]
 
         with urllib.request.urlopen(f"{base_url}/api/help?locale=en-US") as response:
@@ -2830,7 +2834,8 @@ def test_dashboard_serves_help_route():
             assert payload["title"] == "Help Center"
             assert payload["locale"] == "en-US"
             assert payload["audience"] == "user"
-            assert "First run" in payload["markdown"]
+            assert "Setup" in payload["markdown"]
+            assert "First run" not in payload["markdown"]
             assert "Advanced Docs" in payload["markdown"]
 
         with urllib.request.urlopen(f"{base_url}/api/help?locale=en-US&audience=developer") as response:

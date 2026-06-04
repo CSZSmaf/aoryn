@@ -1517,10 +1517,7 @@ function isOnboardingComplete() {
 }
 
 function maybeAutoOpenOnboarding() {
-  if (state.onboardingPrompted || isOnboardingComplete()) return;
-  if (state.settingsOpen || state.helpOpen || state.aboutOpen || state.drawerOpen) return;
   state.onboardingPrompted = true;
-  openSettings();
 }
 
 async function updateUiPreferences(patch) {
@@ -7655,126 +7652,8 @@ function renderEnvironmentCheckGrid() {
 
 function renderOnboardingGuide() {
   if (!elements.onboardingSection) return;
-  const completed = isOnboardingComplete();
-  elements.onboardingSection.hidden = completed;
-  if (completed) {
-    elements.onboardingSection.innerHTML = "";
-    return;
-  }
-
-  const isEnglish = state.locale === "en-US";
-  const diagnostics = state.meta?.diagnostics || {};
-  const defaults = getEffectiveConfigDefaults();
-  const configDir = diagnostics.config_dir || "%APPDATA%\\\\Aoryn";
-  const runRoot = diagnostics.run_root || "%LOCALAPPDATA%\\\\Aoryn\\\\runs";
-  const starterItems = buildStarterSuggestions();
-  const recommendedTask = starterItems[0] || null;
-  const latestRun = state.runs?.[0] || null;
-  const environmentItems = Array.isArray(state.environmentCheck?.items) ? state.environmentCheck.items : [];
-  const environmentReady = environmentItems.length > 0 && environmentItems.every((item) => item.status === "Ready");
-  const providerChosen = Boolean(defaults.model_provider || defaults.model_name || defaults.model_auto_discover);
-  const firstRunDone = Boolean((state.runs || []).length || (state.jobs || []).length || state.activeJob);
-  const timelineOpened = Boolean(state.selectedRunDetails || (state.historySelection?.kind === "run" && state.historySelection.id));
-  const checklist = [
-    {
-      done: providerChosen,
-      title: isEnglish ? "1. Choose a model path" : "1. 选择模型路径",
-      detail: isEnglish
-        ? "Pick local LM Studio or a hosted compatible API before the first real run."
-        : "先决定使用本地 LM Studio 还是托管兼容 API，再开始第一条任务。",
-    },
-    {
-      done: environmentReady,
-      title: isEnglish ? "2. Check environment readiness" : "2. 检查环境是否就绪",
-      detail: isEnglish
-        ? "Confirm the provider connection, display correction, and runtime checks are ready."
-        : "确认模型连接、显示修正和运行环境检查都已经通过。",
-    },
-    {
-      done: firstRunDone,
-      title: isEnglish ? "3. Run one starter task" : "3. 跑通一条推荐任务",
-      detail: isEnglish
-        ? "Start with a low-risk browser task so you can verify the full execution loop."
-        : "先用低风险的浏览器任务验证完整执行链路。",
-    },
-    {
-      done: timelineOpened,
-      title: isEnglish ? "4. Review results and timeline" : "4. 查看结果与时间线",
-      detail: isEnglish
-        ? "Open the latest run to inspect screenshots, status updates, and recovery points."
-        : "打开最新运行，查看截图、状态变化和可恢复节点。",
-    },
-  ];
-
-  elements.onboardingSection.innerHTML = `
-    <div class="onboarding-card">
-      <div class="onboarding-card__head">
-        <div>
-          <p class="onboarding-card__eyebrow">${escapeHtml(isEnglish ? "First run guide" : "首次启动引导")}</p>
-          <h3 class="onboarding-card__title">${escapeHtml(isEnglish ? "Finish one successful run in four steps." : "用四步跑通第一条成功任务。")}</h3>
-          <p class="onboarding-card__body">${escapeHtml(
-            isEnglish
-              ? "Choose a model path, confirm the environment, run a starter task, and then inspect the timeline so the whole workflow is visible."
-              : "先选模型路径，再检查环境，接着运行推荐任务，最后查看时间线，让整条工作流都保持可见。"
-          )}</p>
-        </div>
-        <span class="onboarding-card__badge">${escapeHtml(isEnglish ? "4 steps" : "四步完成")}</span>
-      </div>
-
-      <div class="onboarding-tip">
-        <strong>${escapeHtml(isEnglish ? "Local-first data boundary" : "本地优先的数据边界")}</strong>
-        <span>${escapeHtml(
-          isEnglish
-            ? `Config and preferences stay in ${configDir}, while logs, cache, screenshots, and run history stay in ${runRoot}. Your account only handles identity and downloads.`
-            : `配置与偏好保存在 ${configDir}，日志、缓存、截图和运行记录保存在 ${runRoot}。账号只负责身份和下载权限。`
-        )}</span>
-      </div>
-
-      <div class="onboarding-checklist">
-        ${checklist
-          .map(
-            (item) => `
-              <div class="onboarding-check ${item.done ? "is-done" : ""}">
-                <span class="onboarding-check__dot" aria-hidden="true"></span>
-                <div>
-                  <strong>${escapeHtml(item.title)}</strong>
-                  <small>${escapeHtml(item.detail)}</small>
-                </div>
-              </div>
-            `
-          )
-          .join("")}
-      </div>
-
-      ${renderEnvironmentCheckGrid()}
-
-      <div class="onboarding-actions">
-        <button class="secondary-button" type="button" data-onboarding-provider="lmstudio_local">${escapeHtml(isEnglish ? "Use local LM Studio" : "使用本地 LM Studio")}</button>
-        <button class="secondary-button" type="button" data-onboarding-provider="openai_compatible">${escapeHtml(isEnglish ? "Use hosted / compatible API" : "使用兼容 API")}</button>
-        <button class="secondary-button" type="button" data-open-about="true">${escapeHtml(isEnglish ? "Open about & logs" : "打开关于与日志")}</button>
-      </div>
-      <div class="onboarding-actions">
-        ${
-          recommendedTask
-            ? `<button class="primary-button" type="button" data-start-agent-task="${escapeHtml(recommendedTask.task)}">${escapeHtml(
-                isEnglish ? "Run starter task" : "运行推荐任务"
-              )}</button>`
-            : ""
-        }
-        ${
-          latestRun
-            ? `<button class="secondary-button" type="button" data-open-run-id="${escapeHtml(latestRun.id || "")}">${escapeHtml(
-                isEnglish ? "Open latest timeline" : "打开最新时间线"
-              )}</button>`
-            : ""
-        }
-      </div>
-      <div class="onboarding-actions onboarding-actions--compact">
-        <button class="secondary-button" type="button" data-onboarding-later="true">${escapeHtml(isEnglish ? "Maybe later" : "稍后再说")}</button>
-        <button class="primary-button" type="button" data-onboarding-complete="true">${escapeHtml(isEnglish ? "Finish onboarding" : "完成引导")}</button>
-      </div>
-    </div>
-  `;
+  elements.onboardingSection.hidden = true;
+  elements.onboardingSection.innerHTML = "";
 }
 
 function renderAboutPanel() {

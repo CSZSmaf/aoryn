@@ -2595,10 +2595,10 @@ def _build_user_help_markdown(locale: str) -> str:
     if normalize_help_locale(locale) == "en-US":
         return f"""# {APP_NAME} Help Center
 
-## First run
+## Setup
 
-- Install the desktop app, launch it, and stay in the main workbench for your first task.
-- Use the four-step onboarding flow to pick a model path, confirm the environment, run a starter task, and review the timeline.
+- Install the desktop app, launch it, and work from the main task workspace.
+- Open **Settings** when you need to change the model provider, browser channel, or display correction.
 - Your account is only used for identity and download access. The desktop app does not require another sign-in gate after installation.
 
 ## Model and browser setup
@@ -2634,10 +2634,10 @@ def _build_user_help_markdown(locale: str) -> str:
 
     return f"""# {APP_NAME} 帮助中心
 
-## 第一次使用
+## 基础设置
 
-- 安装桌面版后直接进入工作台，从第一条任务开始，不需要再次登录。
-- 按四步引导完成首次启动：选择模型路径、检查环境、运行推荐任务、查看结果时间线。
+- 安装桌面版后直接进入任务工作台，不需要再次登录。
+- 需要调整模型、浏览器或显示修正时，打开 **设置** 进行配置。
 - 账号只负责身份和下载权限，不负责同步你的本地任务数据。
 
 ## 模型与浏览器设置
