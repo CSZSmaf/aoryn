@@ -7,6 +7,7 @@ from desktop_agent.executor import MockExecutor
 from desktop_agent.plugin_runtime import get_task_plugin, plugin_catalog
 from desktop_agent.task_skills import TaskSkillRunner
 from desktop_agent.task_plugins import office_common
+from desktop_agent.task_plugins.coding_assistant import plugin as coding_plugin
 from desktop_agent.task_plugins.matlab_plot import plugin as matlab_plugin
 
 
@@ -31,6 +32,15 @@ def test_office_plugins_are_discoverable(monkeypatch):
     assert next(item for item in items if item["id"] == "excel_report")["status"]["state"] == "available"
 
 
+def test_coding_plugin_is_discoverable():
+    items = plugin_catalog(config=AgentConfig())
+    coding = next(item for item in items if item["id"] == "coding_assistant")
+
+    assert coding["name"] == "Coding Assistant Plugin"
+    assert coding["status"]["state"] == "available"
+    assert "coding plugin" in coding["demo_task"].lower()
+
+
 def test_task_runner_routes_matlab_plot_to_plugin(monkeypatch):
     monkeypatch.setattr(matlab_plugin, "_find_matlab_executable", lambda config=None: Path("C:/MATLAB/bin/matlab.exe"))
 
@@ -47,6 +57,17 @@ def test_task_runner_routes_office_plugins(monkeypatch):
     assert runner.match("用 Excel 插件生成销售报表和图表") == "plugin:excel_report"
     assert runner.match("用 PowerPoint 插件生成 Aoryn 五分钟演示稿") == "plugin:powerpoint_deck"
     assert runner.match("用 Word 插件生成 Aoryn 插件能力报告") == "plugin:word_report"
+
+
+def test_task_runner_routes_coding_plugin():
+    runner = TaskSkillRunner(AgentConfig())
+
+    assert runner.match("Use the coding plugin to create a Python text statistics utility") == "plugin:coding_assistant"
+    assert runner.match("write code for a todo list and run tests") == "plugin:coding_assistant"
+
+
+def test_coding_plugin_matcher_stays_narrow_for_plain_search():
+    assert not coding_plugin.match_task("search the web for programming tutorials", manifest=None)  # type: ignore[arg-type]
 
 
 def test_matlab_plugin_generates_artifacts_without_real_matlab(monkeypatch):
@@ -162,5 +183,34 @@ def test_word_plugin_generates_docx(monkeypatch):
         assert (output_dir / "Aoryn_Word插件能力报告.docx").exists()
         assert (output_dir / "Aoryn_Word插件报告.md").exists()
         assert get_task_plugin("word_report") is not None
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_coding_plugin_generates_project_and_verification_artifacts():
+    temp_root = Path(tempfile.mkdtemp(prefix="aoryn_coding_plugin_test_"))
+    try:
+        config = AgentConfig()
+        executor = MockExecutor(config)
+        run_dir = temp_root / "run"
+        output_dir = temp_root / "out"
+
+        result = TaskSkillRunner(config).run(
+            "plugin:coding_assistant",
+            "Use the coding plugin to create a Python text statistics utility and run tests",
+            executor=executor,
+            run_dir=run_dir,
+            output_dir=output_dir,
+            open_artifacts=False,
+        )
+
+        assert result.handled and result.completed
+        assert (output_dir / "Aoryn_Coding_Plugin_Project.zip").exists()
+        assert (output_dir / "Aoryn_Coding_Plugin.patch").exists()
+        assert (output_dir / "Aoryn_Coding_Plugin_Report.md").exists()
+        verification = (output_dir / "Aoryn_Coding_Plugin_Verification.txt").read_text(encoding="utf-8")
+        assert "Result: PASS" in verification
+        assert (output_dir / "Aoryn_Coding_Plugin_Project" / "src" / "aoryn_text_stats" / "stats.py").exists()
+        assert get_task_plugin("coding_assistant") is not None
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)

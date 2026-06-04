@@ -1,0 +1,22 @@
+{
+  "id": "coding_assistant",
+  "name": "Coding Assistant Plugin",
+  "description": "Generates an isolated code project, runs verification, and writes a Codex-style implementation report.",
+  "app": "Aoryn",
+  "version": "1.0.0",
+  "triggers": [
+    "coding plugin",
+    "code plugin",
+    "codex",
+    "programming",
+    "python",
+    "javascript",
+    "write code"
+  ],
+  "capabilities": [
+    "Generate a small project from a programming request",
+    "Create source files, tests, README, and a patch preview",
+    "Run deterministic verification without editing the user workspace"
+  ],
+  "demo_task": "Use the coding plugin to create a Python text statistics utility, run tests, and write an implementation report."
+}

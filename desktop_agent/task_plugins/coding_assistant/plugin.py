@@ -1,0 +1,569 @@
+from __future__ import annotations
+
+import difflib
+import importlib.util
+import shutil
+import sys
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from desktop_agent.plugin_runtime import PluginManifest, PluginRunResult
+from desktop_agent.task_plugins import office_common
+
+
+_PLUGIN_TERMS = (
+    "coding plugin",
+    "code plugin",
+    "programming plugin",
+    "codex",
+    "\u7f16\u7a0b\u63d2\u4ef6",
+    "\u4ee3\u7801\u63d2\u4ef6",
+    "\u7c7b\u4f3ccodex",
+    "\u7c7b\u4f3c codex",
+)
+_CODE_TERMS = (
+    "python",
+    "javascript",
+    "typescript",
+    "html",
+    "css",
+    "code",
+    "coding",
+    "programming",
+    "unit test",
+    "tests",
+    "\u5199\u4ee3\u7801",
+    "\u751f\u6210\u4ee3\u7801",
+    "\u7f16\u7a0b",
+    "\u7a0b\u5e8f",
+    "\u5b9e\u73b0",
+    "\u6d4b\u8bd5",
+    "\u4fee\u590dbug",
+    "\u4fee\u590d bug",
+)
+
+
+@dataclass(slots=True)
+class GeneratedProject:
+    kind: str
+    title: str
+    summary: str
+    files: dict[str, str]
+
+
+def match_task(task: str, *, manifest: PluginManifest, config: Any | None = None) -> bool:
+    text = str(task or "")
+    lowered = text.lower()
+    has_plugin = any(term.lower() in lowered for term in _PLUGIN_TERMS)
+    has_code = any(term.lower() in lowered for term in _CODE_TERMS)
+    if has_plugin:
+        return True
+    if not has_code:
+        return False
+    # Keep the matcher narrow enough that ordinary browsing tasks about
+    # programming articles do not become code-generation tasks.
+    productive_terms = (
+        "write",
+        "create",
+        "generate",
+        "build",
+        "implement",
+        "fix",
+        "test",
+        "\u5199",
+        "\u751f\u6210",
+        "\u521b\u5efa",
+        "\u5b9e\u73b0",
+        "\u4fee\u590d",
+        "\u6d4b\u8bd5",
+    )
+    return any(term in lowered or term in text for term in productive_terms)
+
+
+def status(*, manifest: PluginManifest, config: Any | None = None) -> dict[str, Any]:
+    return {
+        "state": "available",
+        "label": "File output",
+        "detail": "Creates an isolated generated-code workspace and validates it in-process.",
+    }
+
+
+def run_task(
+    task: str,
+    context: Any,
+    *,
+    manifest: PluginManifest,
+    config: Any | None = None,
+) -> PluginRunResult:
+    output_dir = office_common.resolve_output_dir(context)
+    project = _build_project(task)
+    project_dir = output_dir / "Aoryn_Coding_Plugin_Project"
+    if project_dir.exists():
+        shutil.rmtree(project_dir)
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    actions = office_common.emit(context, "Coding plugin is generating an isolated project and verification report.")
+    _write_project_files(project_dir, project.files)
+    verification = _verify_project(project_dir, project)
+
+    patch_path = output_dir / "Aoryn_Coding_Plugin.patch"
+    patch_path.write_text(_build_patch(project.files), encoding="utf-8")
+    office_common.copy_to_run_dir(patch_path, context)
+
+    zip_path = output_dir / "Aoryn_Coding_Plugin_Project.zip"
+    _zip_project(project_dir, zip_path)
+    office_common.copy_to_run_dir(zip_path, context)
+
+    verification_path = office_common.write_text_artifact(
+        context,
+        "Aoryn_Coding_Plugin_Verification.txt",
+        verification,
+    )
+    report_path = office_common.write_text_artifact(
+        context,
+        "Aoryn_Coding_Plugin_Report.md",
+        _report(task=task, project=project, project_dir=project_dir, zip_path=zip_path, verification=verification),
+    )
+    office_common.open_artifacts(context, (report_path, zip_path))
+
+    artifacts = [
+        zip_path.name,
+        patch_path.name,
+        verification_path.name,
+        report_path.name,
+    ]
+    answer = (
+        "Coding plugin completed: generated an isolated project, created a patch preview, "
+        "ran deterministic verification, and wrote a report.\n\n"
+        f"Project type: {project.kind}\n"
+        f"Project folder: {project_dir}\n"
+        f"Project zip: {zip_path}\n"
+        f"Report: {report_path}"
+    )
+    return PluginRunResult(
+        completed=True,
+        headline=f"Coding plugin completed: {project.title}",
+        answer=answer,
+        actions=actions,
+        artifacts=artifacts,
+    )
+
+
+def _build_project(task: str) -> GeneratedProject:
+    lowered = str(task or "").lower()
+    if any(term in lowered or term in task for term in ("todo", "\u5f85\u529e", "\u4efb\u52a1\u5217\u8868")):
+        return _todo_project()
+    if any(term in lowered or term in task for term in ("html", "javascript", "frontend", "web", "\u524d\u7aef", "\u7f51\u9875")):
+        return _web_counter_project()
+    return _text_stats_project()
+
+
+def _text_stats_project() -> GeneratedProject:
+    files = {
+        "pyproject.toml": """[project]
+name = "aoryn-text-stats"
+version = "0.1.0"
+description = "Generated by the Aoryn coding assistant plugin."
+requires-python = ">=3.10"
+""",
+        "README.md": """# Aoryn Text Stats
+
+This small project was generated by the Aoryn coding assistant plugin.
+
+## What it does
+
+- Normalizes whitespace.
+- Counts words, unique words, sentences, and characters.
+- Returns a compact summary dictionary.
+
+## Verify
+
+The plugin already ran in-process checks. In a normal Python environment you can
+also run:
+
+```powershell
+python -m unittest discover -s tests
+```
+""",
+        "src/aoryn_text_stats/__init__.py": """from .stats import summarize_text, top_words
+
+__all__ = ["summarize_text", "top_words"]
+""",
+        "src/aoryn_text_stats/stats.py": '''from __future__ import annotations
+
+import re
+from collections import Counter
+
+
+WORD_RE = re.compile(r"[A-Za-z0-9']+")
+
+
+def normalize_text(text: str) -> str:
+    """Collapse repeated whitespace while preserving readable content."""
+    return " ".join(str(text or "").split())
+
+
+def words(text: str) -> list[str]:
+    """Return lowercase word tokens from text."""
+    return [match.group(0).lower() for match in WORD_RE.finditer(str(text or ""))]
+
+
+def top_words(text: str, limit: int = 5) -> list[tuple[str, int]]:
+    """Return the most common words in deterministic order."""
+    if limit <= 0:
+        return []
+    counts = Counter(words(text))
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+
+
+def summarize_text(text: str) -> dict[str, object]:
+    """Summarize text with counts useful for quick document inspection."""
+    normalized = normalize_text(text)
+    token_list = words(normalized)
+    sentence_count = len([part for part in re.split(r"[.!?]+", normalized) if part.strip()])
+    return {
+        "characters": len(normalized),
+        "words": len(token_list),
+        "unique_words": len(set(token_list)),
+        "sentences": sentence_count,
+        "top_words": top_words(normalized),
+    }
+''',
+        "tests/test_stats.py": '''from __future__ import annotations
+
+import unittest
+
+from aoryn_text_stats import summarize_text, top_words
+
+
+class TextStatsTests(unittest.TestCase):
+    def test_summarize_text_counts_words_and_sentences(self) -> None:
+        summary = summarize_text("Aoryn writes code. Aoryn verifies code!")
+        self.assertEqual(summary["words"], 6)
+        self.assertEqual(summary["unique_words"], 4)
+        self.assertEqual(summary["sentences"], 2)
+
+    def test_top_words_is_deterministic(self) -> None:
+        self.assertEqual(top_words("beta alpha beta alpha alpha", limit=2), [("alpha", 3), ("beta", 2)])
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+    }
+    return GeneratedProject(
+        kind="python_text_stats",
+        title="Python text statistics utility",
+        summary="A small Python package with unit tests for text summarization.",
+        files=files,
+    )
+
+
+def _todo_project() -> GeneratedProject:
+    files = {
+        "README.md": """# Aoryn Todo CLI Core
+
+Generated by the Aoryn coding assistant plugin.
+
+The project contains a dependency-free todo list domain model with deterministic
+JSON serialization and tests.
+""",
+        "src/aoryn_todo/__init__.py": """from .todo import TodoItem, TodoList
+
+__all__ = ["TodoItem", "TodoList"]
+""",
+        "src/aoryn_todo/todo.py": '''from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+import json
+
+
+@dataclass(slots=True)
+class TodoItem:
+    title: str
+    done: bool = False
+
+
+class TodoList:
+    def __init__(self, items: list[TodoItem] | None = None) -> None:
+        self.items = list(items or [])
+
+    def add(self, title: str) -> TodoItem:
+        clean = " ".join(str(title or "").split())
+        if not clean:
+            raise ValueError("Todo title cannot be empty.")
+        item = TodoItem(clean)
+        self.items.append(item)
+        return item
+
+    def complete(self, index: int) -> TodoItem:
+        item = self.items[index]
+        item.done = True
+        return item
+
+    def pending(self) -> list[TodoItem]:
+        return [item for item in self.items if not item.done]
+
+    def to_json(self) -> str:
+        return json.dumps([asdict(item) for item in self.items], ensure_ascii=False, indent=2)
+
+    @classmethod
+    def from_json(cls, payload: str) -> "TodoList":
+        rows = json.loads(payload or "[]")
+        return cls([TodoItem(str(row["title"]), bool(row.get("done"))) for row in rows])
+''',
+        "tests/test_todo.py": '''from __future__ import annotations
+
+import unittest
+
+from aoryn_todo import TodoList
+
+
+class TodoTests(unittest.TestCase):
+    def test_add_complete_and_roundtrip(self) -> None:
+        todos = TodoList()
+        todos.add("write demo")
+        todos.add("run tests")
+        todos.complete(0)
+        loaded = TodoList.from_json(todos.to_json())
+        self.assertEqual([item.title for item in loaded.pending()], ["run tests"])
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+    }
+    return GeneratedProject(
+        kind="python_todo",
+        title="Python todo-list core",
+        summary="A dependency-free todo model with JSON roundtrip tests.",
+        files=files,
+    )
+
+
+def _web_counter_project() -> GeneratedProject:
+    files = {
+        "README.md": """# Aoryn Web Counter
+
+Generated by the Aoryn coding assistant plugin.
+
+Open `index.html` in a browser to use the counter. The plugin performs static
+checks to make sure the expected HTML, CSS, and JavaScript hooks exist.
+""",
+        "index.html": """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aoryn Web Counter</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <h1>Aoryn Web Counter</h1>
+    <p id="count" aria-live="polite">0</p>
+    <div class="toolbar">
+      <button id="decrement" type="button">-</button>
+      <button id="increment" type="button">+</button>
+      <button id="reset" type="button">Reset</button>
+    </div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
+""",
+        "styles.css": """body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  font-family: Segoe UI, Arial, sans-serif;
+  background: #f5f7fb;
+  color: #172033;
+}
+
+.app-shell {
+  width: min(420px, calc(100vw - 32px));
+  padding: 28px;
+  border: 1px solid #d9e1ee;
+  border-radius: 8px;
+  background: white;
+}
+
+#count {
+  font-size: 64px;
+  margin: 16px 0;
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+}
+
+button {
+  min-width: 64px;
+  min-height: 40px;
+}
+""",
+        "app.js": """let value = 0;
+
+const count = document.querySelector("#count");
+const increment = document.querySelector("#increment");
+const decrement = document.querySelector("#decrement");
+const reset = document.querySelector("#reset");
+
+function render() {
+  count.textContent = String(value);
+}
+
+increment.addEventListener("click", () => {
+  value += 1;
+  render();
+});
+
+decrement.addEventListener("click", () => {
+  value -= 1;
+  render();
+});
+
+reset.addEventListener("click", () => {
+  value = 0;
+  render();
+});
+
+render();
+""",
+    }
+    return GeneratedProject(
+        kind="web_counter",
+        title="HTML and JavaScript counter",
+        summary="A small dependency-free web counter with static verification.",
+        files=files,
+    )
+
+
+def _write_project_files(project_dir: Path, files: dict[str, str]) -> None:
+    for relative, content in files.items():
+        target = project_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8", newline="\n")
+
+
+def _verify_project(project_dir: Path, project: GeneratedProject) -> str:
+    lines = [
+        "Aoryn Coding Plugin Verification",
+        f"Project kind: {project.kind}",
+        f"Generated files: {len(project.files)}",
+        "",
+    ]
+    for relative in sorted(project.files):
+        target = project_dir / relative
+        if not target.exists():
+            raise RuntimeError(f"Generated file missing: {relative}")
+        lines.append(f"exists: {relative}")
+
+    python_files = [relative for relative in project.files if relative.endswith(".py")]
+    for relative in python_files:
+        source = (project_dir / relative).read_text(encoding="utf-8")
+        compile(source, str(project_dir / relative), "exec")
+        lines.append(f"compiled: {relative}")
+
+    if project.kind == "python_text_stats":
+        module = _import_module(project_dir / "src" / "aoryn_text_stats" / "stats.py", "aoryn_text_stats_stats")
+        summary = module.summarize_text("Aoryn writes code. Aoryn verifies code!")
+        assert summary["words"] == 6
+        assert summary["sentences"] == 2
+        assert module.top_words("beta alpha beta alpha alpha", limit=2) == [("alpha", 3), ("beta", 2)]
+        lines.append("self-test: text statistics functions passed")
+    elif project.kind == "python_todo":
+        module = _import_module(project_dir / "src" / "aoryn_todo" / "todo.py", "aoryn_todo_todo")
+        todo_list = module.TodoList()
+        todo_list.add("write demo")
+        todo_list.add("run tests")
+        todo_list.complete(0)
+        loaded = module.TodoList.from_json(todo_list.to_json())
+        assert [item.title for item in loaded.pending()] == ["run tests"]
+        lines.append("self-test: todo model roundtrip passed")
+    elif project.kind == "web_counter":
+        html = (project_dir / "index.html").read_text(encoding="utf-8")
+        js = (project_dir / "app.js").read_text(encoding="utf-8")
+        css = (project_dir / "styles.css").read_text(encoding="utf-8")
+        assert 'id="count"' in html
+        assert "addEventListener" in js
+        assert ".app-shell" in css
+        lines.append("self-test: web counter static checks passed")
+
+    lines.append("")
+    lines.append("Result: PASS")
+    return "\n".join(lines) + "\n"
+
+
+def _import_module(path: Path, name: str) -> Any:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to import generated module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _build_patch(files: dict[str, str]) -> str:
+    chunks: list[str] = []
+    for relative in sorted(files):
+        content = files[relative]
+        chunks.extend(
+            difflib.unified_diff(
+                [],
+                content.splitlines(keepends=True),
+                fromfile="/dev/null",
+                tofile=f"b/{relative}",
+                lineterm="",
+            )
+        )
+        if chunks and not chunks[-1].endswith("\n"):
+            chunks[-1] += "\n"
+    return "".join(chunks)
+
+
+def _zip_project(project_dir: Path, zip_path: Path) -> None:
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(project_dir.rglob("*")):
+            if path.is_file():
+                archive.write(path, path.relative_to(project_dir.parent).as_posix())
+
+
+def _report(
+    *,
+    task: str,
+    project: GeneratedProject,
+    project_dir: Path,
+    zip_path: Path,
+    verification: str,
+) -> str:
+    file_list = "\n".join(f"- `{relative}`" for relative in sorted(project.files))
+    return (
+        "# Coding Assistant Plugin Report\n\n"
+        "## Task\n\n"
+        f"{task}\n\n"
+        "## Implementation Summary\n\n"
+        f"- Project type: `{project.kind}`\n"
+        f"- Title: {project.title}\n"
+        f"- Summary: {project.summary}\n"
+        "- Safety: generated in an isolated output folder; no existing user project files were modified.\n\n"
+        "## Generated Files\n\n"
+        f"{file_list}\n\n"
+        "## Artifacts\n\n"
+        f"- Project folder: `{project_dir}`\n"
+        f"- Project zip: `{zip_path}`\n"
+        "- Patch preview: `Aoryn_Coding_Plugin.patch`\n"
+        "- Verification log: `Aoryn_Coding_Plugin_Verification.txt`\n\n"
+        "## Verification\n\n"
+        "```text\n"
+        f"{verification.rstrip()}\n"
+        "```\n"
+    )
