@@ -1,0 +1,10 @@
+{
+  "id": "excel_report",
+  "name": "Excel 报表插件",
+  "description": "生成 Excel 数据工作簿、趋势图和简短分析报告，可在安装了 Excel 时直接打开。",
+  "app": "excel",
+  "version": "1.0.0",
+  "triggers": ["Excel", "excel", "xlsx", "销售报表", "数据图表", "表格插件", "利润分析"],
+  "capabilities": ["create_workbook", "generate_chart", "open_office_app", "write_report"],
+  "demo_task": "用 Excel 插件生成一份销售数据报表和趋势图"
+}

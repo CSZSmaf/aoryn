@@ -1,0 +1,10 @@
+{
+  "id": "word_report",
+  "name": "Word 报告插件",
+  "description": "生成 Word 兼容 DOCX 报告，用于展示插件架构、演示步骤和后续扩展计划。",
+  "app": "word",
+  "version": "1.0.0",
+  "triggers": ["Word 插件", "word plugin", "Aoryn 报告", "插件报告", "docx 插件"],
+  "capabilities": ["create_docx", "open_office_app", "write_report"],
+  "demo_task": "用 Word 插件生成一份 Aoryn 插件能力报告"
+}

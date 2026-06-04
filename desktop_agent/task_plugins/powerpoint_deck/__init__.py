@@ -1,0 +1,1 @@
+"""PowerPoint deck task plugin."""

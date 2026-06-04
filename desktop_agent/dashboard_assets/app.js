@@ -2466,8 +2466,7 @@ function buildPluginItems() {
         ready,
       };
     })
-    .filter((item) => item.id && item.name)
-    .slice(0, 3);
+    .filter((item) => item.id && item.name);
 }
 
 function localizeWorkflowRecipe(item) {

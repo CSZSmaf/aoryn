@@ -1,0 +1,10 @@
+{
+  "id": "powerpoint_deck",
+  "name": "PowerPoint 演示插件",
+  "description": "生成 Aoryn 功能展示演示稿，可在安装了 PowerPoint 时自动创建并打开 PPTX。",
+  "app": "powerpoint",
+  "version": "1.0.0",
+  "triggers": ["PowerPoint", "powerpoint", "PPT", "pptx", "幻灯片", "演示文稿", "演示稿"],
+  "capabilities": ["create_deck", "open_office_app", "fallback_html_deck", "write_report"],
+  "demo_task": "用 PowerPoint 插件生成一份 Aoryn 五分钟演示稿"
+}
