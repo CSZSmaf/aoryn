@@ -41,7 +41,7 @@ def run_task(
     output_dir = office_common.resolve_output_dir(context)
     pdf_path = output_dir / "Aoryn_PDF_Plugin_Report.pdf"
     report_path = output_dir / "Aoryn_PDF_Plugin_Report.md"
-    actions = office_common.emit(context, "PDF 插件正在生成演示报告和追溯说明")
+    actions = office_common.emit(context, "PDF 插件正在生成运行报告和追溯记录")
 
     lines = _pdf_lines(task)
     _write_simple_pdf(pdf_path, "Aoryn PDF Plugin Report", lines)
@@ -55,13 +55,13 @@ def run_task(
     office_common.open_artifacts(context, (pdf_path, markdown_path))
 
     answer = (
-        "PDF 插件任务已完成：已生成 PDF 交付文件和 Markdown 追溯说明。\n\n"
+        "PDF 插件任务已完成：已生成 PDF 交付文件和 Markdown 追溯记录。\n\n"
         f"PDF：{pdf_path}\n"
-        f"说明：{markdown_path}"
+        f"记录：{markdown_path}"
     )
     return PluginRunResult(
         completed=True,
-        headline="PDF 插件已完成：生成演示报告",
+        headline="PDF 插件已完成：生成运行报告",
         answer=answer,
         actions=actions,
         artifacts=[pdf_path.name, markdown_path.name],
@@ -75,15 +75,15 @@ def _pdf_lines(task: str) -> list[str]:
         f"Generated: {created}",
         "",
         "Task",
-        _ascii_line(task) or "Create a short Aoryn demonstration report.",
+        _ascii_line(task) or "Create a short Aoryn operations report.",
         "",
-        "What this plugin demonstrates",
+        "Report scope",
         "- Plugin discovery through plugin.json.",
         "- Routing through plugin:pdf_report.",
         "- Stable file generation without external office software.",
-        "- Traceable artifacts for live demos and handoff.",
+        "- Traceable artifacts for review and handoff.",
         "",
-        "Suggested demo narration",
+        "Operational note",
         "Aoryn can expose focused plugins for professional software and file workflows.",
         "The core agent can still use screen control, while plugins provide reliable shortcuts.",
     ]
@@ -91,16 +91,16 @@ def _pdf_lines(task: str) -> list[str]:
 
 def _markdown_report(*, task: str, pdf_path: Path) -> str:
     return (
-        "# PDF 报告插件演示\n\n"
+        "# PDF 报告插件记录\n\n"
         "## 任务\n\n"
         f"{task}\n\n"
         "## 产物\n\n"
         f"- PDF：`{pdf_path}`\n"
         "- Markdown：`Aoryn_PDF_Plugin_Report.md`\n\n"
-        "## 演示价值\n\n"
+        "## 运行价值\n\n"
         "- 插件无需依赖 Office 或 MATLAB，也能稳定生成可交付文件。\n"
         "- 任务通过插件发现和 `plugin:pdf_report` 路由执行。\n"
-        "- 适合说明系统可以把通用桌面代理扩展为专业能力市场。\n"
+        "- 适合把通用桌面代理扩展为专业文件处理能力。\n"
     )
 
 

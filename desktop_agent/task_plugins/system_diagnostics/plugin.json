@@ -1,7 +1,7 @@
 {
   "id": "system_diagnostics",
   "name": "系统诊断插件",
-  "description": "生成 Windows 环境快照、磁盘和运行时信息，适合演示本机应用支持与交付前自检。",
+  "description": "生成 Windows 环境快照、磁盘状态和运行时信息。",
   "app": "Windows",
   "version": "1.0.0",
   "triggers": [

@@ -192,7 +192,7 @@ def _write_csv(path: Path) -> None:
 def _report(*, task: str, mode: str, workbook: Path, chart: Path, csv_file: Path, com_error: str | None) -> str:
     warning = f"\n\n> Excel COM 失败后已降级为标准文件生成：{com_error}" if com_error else ""
     return (
-        "# Excel 插件演示报告\n\n"
+        "# Excel 插件报告\n\n"
         f"## 任务\n\n{task}\n\n"
         "## 产物\n\n"
         f"- 工作簿：{workbook}\n"
@@ -201,7 +201,7 @@ def _report(*, task: str, mode: str, workbook: Path, chart: Path, csv_file: Path
         f"- 执行方式：{mode}\n\n"
         "## 分析摘要\n\n"
         "- 收入从 1 月到 6 月持续增长。\n"
-        "- 利润也保持上升，说明演示数据中的成本增长没有吞掉全部增量。\n"
-        "- 该插件展示了软件插件可以直接生成专业应用可打开的结构化文件。\n"
+        "- 利润也保持上升，样例数据中的成本增长没有吞掉全部增量。\n"
+        "- 该插件用于生成专业应用可打开的结构化文件。\n"
         f"{warning}\n"
     )

@@ -857,8 +857,8 @@ def test_dashboard_chinese_copy_integrity_and_no_known_mojibake_tokens():
     app_js = (Path("desktop_agent") / "dashboard_assets" / "app.js").read_text(encoding="utf-8")
     zh_locale = (Path("desktop_agent") / "dashboard_assets" / "locales" / "zh-CN.js").read_text(encoding="utf-8")
 
-    assert "开始一个任务" in index_html
-    assert "输入目标后，执行过程和截图会出现在对话里。" in index_html
+    assert "任务工作台" in index_html
+    assert "描述要完成的任务" in index_html
     assert "语言" in zh_locale
     assert "任务" in zh_locale
     assert "设置" in zh_locale

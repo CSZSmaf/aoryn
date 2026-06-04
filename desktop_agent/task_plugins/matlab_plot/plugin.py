@@ -265,7 +265,7 @@ def _markdown_report(
     txt: Path | None,
 ) -> str:
     return (
-        "# MATLAB 插件演示报告\n\n"
+        "# MATLAB 插件报告\n\n"
         "## 任务\n\n"
         f"{task}\n\n"
         "## 插件执行\n\n"

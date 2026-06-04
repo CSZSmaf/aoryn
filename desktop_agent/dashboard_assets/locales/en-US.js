@@ -16,10 +16,10 @@ window.DASHBOARD_LOCALES["en-US"] = {
   },
   chat: {
     emptyEyebrow: "Aoryn",
-    emptyTitle: "What should it do?",
-    emptyBody: "Enter a goal and keep the run plus screenshots in the chat.",
+    emptyTitle: "Task workspace",
+    emptyBody: "Enter a goal. Runs and screenshots stay with the current task.",
     inputLabel: "Task",
-    inputPlaceholder: "Example: visit openai.com, click login, then type your email",
+    inputPlaceholder: "Describe the task to complete",
     inputHint: "Press Enter to send",
     stop: "Stop",
     send: "Send",

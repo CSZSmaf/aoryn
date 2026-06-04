@@ -16,10 +16,10 @@ window.DASHBOARD_LOCALES["zh-CN"] = {
   },
   chat: {
     emptyEyebrow: "Aoryn",
-    emptyTitle: "你想让它做什么？",
-    emptyBody: "输入目标，执行过程和截图会出现在对话里。",
+    emptyTitle: "任务工作台",
+    emptyBody: "输入目标，执行记录和截图会保存在当前任务中。",
     inputLabel: "任务",
-    inputPlaceholder: "例如：访问 openai.com，点击 login，然后输入邮箱",
+    inputPlaceholder: "描述要完成的任务",
     inputHint: "Enter 发送",
     stop: "停止",
     send: "发送",

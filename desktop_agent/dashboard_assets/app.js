@@ -23,14 +23,14 @@ const FALLBACK_COPY = {
     document: { title: "Aoryn" },
     sidebar: { appTitle: "Aoryn", appSubtitle: "任务", newTask: "新建", history: "历史" },
     topbar: { menu: "菜单", chatMode: "聊天", devMode: "诊断", settings: "设置" },
-    chat: { emptyEyebrow: "Aoryn", emptyTitle: "开始一个任务", emptyBody: "输入目标后，执行过程和截图会出现在对话里。" },
+    chat: { emptyEyebrow: "Aoryn", emptyTitle: "任务工作台", emptyBody: "输入目标，执行记录和截图会保存在当前任务中。" },
     common: { refresh: "刷新", close: "×", closeLabel: "关闭" },
   },
   "en-US": {
     document: { title: "Aoryn" },
     sidebar: { appTitle: "Aoryn", appSubtitle: "Tasks", newTask: "New", history: "History" },
     topbar: { menu: "Menu", chatMode: "Chat", devMode: "Diagnostics", settings: "Settings" },
-    chat: { emptyEyebrow: "Aoryn", emptyTitle: "Start a task", emptyBody: "Enter a goal and keep the run plus screenshots in chat." },
+    chat: { emptyEyebrow: "Aoryn", emptyTitle: "Task workspace", emptyBody: "Enter a goal. Runs and screenshots stay with the current task." },
     common: { refresh: "Refresh", close: "×", closeLabel: "Close" },
   },
 };
@@ -2543,11 +2543,11 @@ function pluginPresentation(item) {
 function renderPluginMarketplace(items) {
   const readyCount = items.filter((item) => item.ready).length;
   return `
-    <section class="plugin-marketplace" aria-label="${escapeHtml(tr("\u63d2\u4ef6\u5e02\u573a", "Plugin marketplace"))}">
+    <section class="plugin-marketplace" aria-label="${escapeHtml(tr("\u6269\u5c55", "Extensions"))}">
       <div class="plugin-marketplace__header">
         <div>
-          <p class="plugin-marketplace__eyebrow">${escapeHtml(tr("Aoryn \u63d2\u4ef6\u5e02\u573a", "Aoryn Plugin Marketplace"))}</p>
-          <h3>${escapeHtml(tr("\u5df2\u5b89\u88c5\u7684\u80fd\u529b", "Installed capabilities"))}</h3>
+          <p class="plugin-marketplace__eyebrow">${escapeHtml(tr("\u6269\u5c55", "Extensions"))}</p>
+          <h3>${escapeHtml(tr("\u5df2\u5b89\u88c5\u63d2\u4ef6", "Installed plugins"))}</h3>
         </div>
         <span class="plugin-marketplace__count">${escapeHtml(
           tr(`${readyCount} \u4e2a\u5df2\u5b89\u88c5`, `${readyCount} installed`)
@@ -2579,10 +2579,10 @@ function renderPluginMarketplaceCard(item) {
       ${
         item.task
           ? `<button class="plugin-marketplace-card__action" type="button" data-prefill-task="${escapeHtml(item.task)}">
-              ${escapeHtml(tr("\u8fd0\u884c\u6f14\u793a", "Run demo"))}
+              ${escapeHtml(tr("\u6267\u884c", "Run"))}
             </button>`
           : `<span class="plugin-marketplace-card__action plugin-marketplace-card__action--disabled">${escapeHtml(
-              tr("\u6682\u65e0\u6f14\u793a\u4efb\u52a1", "No demo task")
+              tr("\u672a\u914d\u7f6e\u9ed8\u8ba4\u4efb\u52a1", "No default task")
             )}</span>`
       }
     </article>
@@ -4406,7 +4406,7 @@ function buildChatSessionTitle(session) {
 
   if (!source) return tr("普通对话", "Chat");
   if (/lm studio|lmstudio|本地模型|模型/.test(lower + source)) return tr("模型配置", "Model setup");
-  if (/agent|模式|difference|区别|thinking|普通对话/.test(lower + source)) return tr("模式说明", "Mode guide");
+  if (/agent|模式|difference|区别|thinking|普通对话/.test(lower + source)) return tr("模式", "Modes");
   if (/browser|playwright|通道|浏览器/.test(lower + source)) return tr("浏览器设置", "Browser setup");
   if (/help|readme|文档|帮助/.test(lower + source)) return tr("帮助文档", "Help docs");
   if (/task|prompt|任务|提示词|改写/.test(lower + source)) return tr("任务整理", "Task drafting");
@@ -4653,14 +4653,14 @@ function renderWelcomeMessage() {
         <h2>${escapeHtml(t("chat.emptyTitle"))}</h2>
         <p>${escapeHtml(
           tr(
-            "把目标交给 Aoryn，执行过程、截图和恢复入口会留在同一个工作台里。",
-            "Hand a goal to Aoryn and keep execution, screenshots, and recovery paths inside one workbench."
+            "创建任务后，执行记录、截图和恢复入口会保存在同一个工作台里。",
+            "Create a task and keep run records, screenshots, and recovery paths in one workspace."
           )
         )}</p>
       </div>
       <aside class="chat-welcome__aside" aria-label="${escapeHtml(tr("工作台概览", "Workspace overview"))}">
         <section class="welcome-card">
-          <p class="welcome-card__eyebrow">${escapeHtml(tr("现在可以", "Ready for"))}</p>
+          <p class="welcome-card__eyebrow">${escapeHtml(tr("工作台", "Workspace"))}</p>
           <div class="welcome-card__list">
             ${capabilityItems
               .map(
@@ -4674,7 +4674,7 @@ function renderWelcomeMessage() {
           </div>
         </section>
         <section class="welcome-card">
-          <p class="welcome-card__eyebrow">${escapeHtml(tr("推荐起步任务", "Starter tasks"))}</p>
+          <p class="welcome-card__eyebrow">${escapeHtml(tr("建议任务", "Suggested tasks"))}</p>
           <div class="welcome-card__list">
             ${
               starterItems.length
@@ -4706,7 +4706,7 @@ function renderWelcomeMessage() {
           pluginItems.length
             ? `
         <section class="welcome-card">
-          <p class="welcome-card__eyebrow">${escapeHtml(tr("插件能力", "Plugins"))}</p>
+          <p class="welcome-card__eyebrow">${escapeHtml(tr("插件", "Plugins"))}</p>
           <div class="welcome-card__list">
             ${pluginItems
               .map(
@@ -4718,7 +4718,7 @@ function renderWelcomeMessage() {
                     ${
                       item.task
                         ? `<button class="suggestion-chip" type="button" data-start-agent-task="${escapeHtml(item.task)}">
-                            ${escapeHtml(tr("运行插件演示", "Run plugin demo"))}
+                            ${escapeHtml(tr("执行插件", "Run plugin"))}
                           </button>`
                         : ""
                     }
@@ -4836,8 +4836,8 @@ function renderNormalChat() {
         <h2>${escapeHtml(tr("你想先了解什么？", "What do you want to ask first?"))}</h2>
         <p>${escapeHtml(
           tr(
-            "可以直接问产品能力、LM Studio 配置、浏览器设置或排障。如果你想让系统真正执行任务，我会给你转到 Agent 的入口。",
-            "Ask about product features, LM Studio setup, browser settings, or troubleshooting. If you want real execution, I will offer an Agent handoff."
+            "可查询设置、连接状态、浏览器配置和排障信息。需要执行桌面任务时，请切换到 Agent。",
+            "Ask about settings, connection status, browser configuration, and troubleshooting. Switch to Agent for desktop execution."
           )
         )}</p>
       </div>
@@ -6782,7 +6782,7 @@ function renderRunTimeline(details) {
     return renderPanelEmptyState({
       eyebrow: tr("Timeline", "Timeline"),
       title: tr("暂无时间线", "No timeline yet"),
-      description: tr("这次运行在这里还没有可展示的步骤。", "There are no timeline steps to display yet."),
+      description: tr("这次运行在这里还没有可查看的步骤。", "There are no timeline steps to review yet."),
     });
   }
 
@@ -6875,7 +6875,7 @@ function renderHelpCenter() {
         ? tr("正在加载高级文档...", "Loading advanced docs...")
         : tr("正在加载帮助中心...", "Loading help center..."),
       description: isDeveloperAudience
-        ? tr("高级说明准备好后会显示在这里。", "Advanced documentation will appear here as soon as it is ready.")
+        ? tr("高级文档准备好后会显示在这里。", "Advanced documentation will appear here as soon as it is ready.")
         : tr("帮助内容准备好后会显示在这里。", "Help content will appear here as soon as it is ready."),
     });
     return;
