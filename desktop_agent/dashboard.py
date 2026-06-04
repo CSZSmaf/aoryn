@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import base64
+import binascii
 import mimetypes
 import os
 import re
@@ -75,8 +77,10 @@ class DashboardJob:
     dry_run: bool
     max_steps: int | None
     pause_after_action: float | None
+    execution_task: str | None = None
     resume_run_id: str | None = None
     config_overrides: dict[str, Any] = field(default_factory=dict)
+    attachments: list[dict[str, Any]] = field(default_factory=list)
     status: str = "queued"
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -95,12 +99,14 @@ class DashboardJob:
         return {
             "id": self.job_id,
             "task": self.task,
+            "execution_task": self.execution_task,
             "planner_mode": self.planner_mode,
             "dry_run": self.dry_run,
             "max_steps": self.max_steps,
             "pause_after_action": self.pause_after_action,
             "resume_run_id": self.resume_run_id,
             "config_overrides": self.config_overrides,
+            "attachments": self.attachments,
             "status": self.status,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -136,11 +142,14 @@ class TaskQueue:
         dry_run: bool,
         max_steps: int | None,
         pause_after_action: float | None,
+        execution_task: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
         config_overrides: dict[str, Any] | None = None,
     ) -> DashboardJob:
         clean_task = task.strip()
         if not clean_task:
             raise ValueError("Task is required.")
+        clean_execution_task = str(execution_task or clean_task).strip() or clean_task
 
         with self.lock:
             if self.active_job_id is not None:
@@ -162,6 +171,8 @@ class TaskQueue:
                 dry_run=config.dry_run,
                 max_steps=max_steps,
                 pause_after_action=pause_after_action,
+                execution_task=clean_execution_task,
+                attachments=list(attachments or []),
                 config_overrides=resolved_overrides,
             )
             self.jobs[job.job_id] = job
@@ -301,7 +312,7 @@ class TaskQueue:
         try:
             runner = resume_task if job.resume_run_id else run_task
             result = runner(
-                job.resume_run_id or job.task,
+                job.resume_run_id or job.execution_task or job.task,
                 config_path=self.config_path,
                 planner_mode=job.planner_mode,
                 dry_run=job.dry_run,
@@ -495,6 +506,9 @@ _MANAGED_BROWSER_STATUS_CACHE_SECONDS = 10.0
 _OVERVIEW_RUNS_CACHE_SECONDS = 1.0
 _PROVIDER_ENVIRONMENT_CACHE_SECONDS = 20.0
 _PROVIDER_ENVIRONMENT_REFRESH_TIMEOUT_SECONDS = 0.9
+_MAX_TASK_ATTACHMENTS = 8
+_MAX_TASK_ATTACHMENT_BYTES = 15 * 1024 * 1024
+_MAX_TASK_ATTACHMENT_TOTAL_BYTES = 60 * 1024 * 1024
 _VISION_MODEL_PATTERN = re.compile(r"(^|[\/._:-])vl([\/._:-]|$)")
 _MODEL_SIZE_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*([bm])", re.I)
 _MATH_LATEX_COMMAND_PATTERN = re.compile(
@@ -882,6 +896,79 @@ class DashboardApp:
         self._provider_environment_cache: dict[str, dict[str, Any]] = {}
         self._provider_environment_refreshing: set[str] = set()
 
+    def save_task_attachments(self, raw_attachments: Any) -> list[dict[str, Any]]:
+        if raw_attachments in (None, ""):
+            return []
+        if not isinstance(raw_attachments, list):
+            raise ValueError("attachments must be a list.")
+        if len(raw_attachments) > _MAX_TASK_ATTACHMENTS:
+            raise ValueError(f"At most {_MAX_TASK_ATTACHMENTS} attachments are allowed.")
+
+        batch_dir = self.run_root / "_uploads" / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        saved: list[dict[str, Any]] = []
+        total_bytes = 0
+        for index, item in enumerate(raw_attachments, start=1):
+            if not isinstance(item, dict):
+                raise ValueError("Each attachment must be an object.")
+            file_name = self._safe_attachment_name(item.get("name"), index)
+            mime_type = str(item.get("mime_type") or item.get("type") or "application/octet-stream").strip()
+            raw_data = str(item.get("data_base64") or item.get("data") or "").strip()
+            if "," in raw_data and raw_data.split(",", 1)[0].lower().startswith("data:"):
+                raw_data = raw_data.split(",", 1)[1]
+            try:
+                content = base64.b64decode(raw_data.encode("ascii"), validate=True)
+            except (binascii.Error, UnicodeEncodeError) as exc:
+                raise ValueError(f"Attachment {file_name} is not valid base64.") from exc
+
+            if len(content) > _MAX_TASK_ATTACHMENT_BYTES:
+                raise ValueError(f"Attachment {file_name} is too large.")
+            total_bytes += len(content)
+            if total_bytes > _MAX_TASK_ATTACHMENT_TOTAL_BYTES:
+                raise ValueError("Total attachment size is too large.")
+
+            batch_dir.mkdir(parents=True, exist_ok=True)
+            target = batch_dir / file_name
+            if target.exists():
+                target = batch_dir / f"{target.stem}-{index}{target.suffix}"
+            target.write_bytes(content)
+            saved.append(
+                {
+                    "name": file_name,
+                    "path": str(target),
+                    "size": len(content),
+                    "mime_type": mime_type,
+                }
+            )
+        return saved
+
+    @staticmethod
+    def _safe_attachment_name(name: Any, index: int) -> str:
+        candidate = Path(str(name or "").strip()).name
+        candidate = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", candidate).strip(" .")
+        if not candidate:
+            candidate = f"attachment-{index}"
+        if len(candidate) <= 120:
+            return candidate
+        suffix = "".join(Path(candidate).suffixes)[-20:]
+        stem = candidate[: max(1, 120 - len(suffix))]
+        return f"{stem}{suffix}"
+
+    @staticmethod
+    def task_with_attachments(task: str, attachments: list[dict[str, Any]]) -> str:
+        clean_task = str(task or "").strip()
+        if not attachments:
+            return clean_task
+        lines = [
+            "",
+            "Attached local files for this task:",
+            *[
+                f"- {item.get('name')}: {item.get('path')} ({item.get('mime_type') or 'application/octet-stream'}, {item.get('size')} bytes)"
+                for item in attachments
+            ],
+            "Use these local file paths when the task requires reading or referencing the uploaded files.",
+        ]
+        return f"{clean_task}\n" + "\n".join(lines)
+
     def create_server(self) -> ThreadingHTTPServer:
         app = self
 
@@ -951,8 +1038,14 @@ class DashboardApp:
                 if path == "/api/tasks":
                     try:
                         resolved_overrides = app._resolve_request_config_overrides(body.get("config_overrides"))
+                        task_text = str(body.get("task", "")).strip()
+                        if not task_text:
+                            raise ValueError("Task is required.")
+                        attachments = app.save_task_attachments(body.get("attachments"))
                         job = app.queue.submit(
-                            task=str(body.get("task", "")),
+                            task=task_text,
+                            execution_task=app.task_with_attachments(task_text, attachments),
+                            attachments=attachments,
                             planner_mode="auto",
                             dry_run=False,
                             max_steps=_optional_int(body.get("max_steps")),

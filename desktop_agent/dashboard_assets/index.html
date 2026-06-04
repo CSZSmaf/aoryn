@@ -152,8 +152,18 @@
                     placeholder="例如：访问 openai.com，点击 login，然后输入邮箱"
                   ></textarea>
                 </label>
+                <div class="composer-attachments" id="composerAttachments" hidden></div>
 
                 <div class="composer-toolbar">
+                  <div class="composer-tools">
+                    <button class="composer-plus-button" id="composerPlusButton" type="button" aria-label="打开工具菜单" title="工具">
+                      <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" />
+                      </svg>
+                    </button>
+                    <input id="composerFileInput" type="file" multiple hidden />
+                    <div class="composer-tool-menu" id="composerToolMenu" hidden></div>
+                  </div>
                   <p class="composer-hint" id="submitHint"></p>
 
                   <div class="composer-actions">

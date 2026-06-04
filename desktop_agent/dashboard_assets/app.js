@@ -15,6 +15,8 @@ const ACTIVE_CHAT_SESSION_SESSION_KEY = "desktop-agent-workspace.session-active-
 const CHAT_LAUNCH_SESSION_KEY = "desktop-agent-workspace.session-chat-launch-id";
 const CUSTOM_SELECT_IDS = ["languageSelect", "sendShortcutSelect", "modelProvider", "structuredOutput", "availableModels", "browserDomBackend", "browserChannel"];
 const DISPLAY_DEVICE_NAME_PATTERN = /DISPLAY(\d+)/i;
+const MAX_COMPOSER_ATTACHMENTS = 8;
+const MAX_COMPOSER_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 
 const FALLBACK_COPY = {
   "zh-CN": {
@@ -104,6 +106,9 @@ const state = {
   helpError: "",
   aboutOpen: false,
   aboutRestoreFocus: null,
+  composerToolMenuOpen: false,
+  composerPluginMenuOpen: false,
+  composerAttachments: [],
   onboardingPrompted: false,
   chatLaunchId: null,
   historySelection: null,
@@ -126,9 +131,14 @@ const elements = {
   topbarSubtitle: document.getElementById("topbarSubtitle"),
   chatStream: document.getElementById("chatStream"),
   chatScroll: document.getElementById("chatScroll"),
+  composerWrap: document.querySelector(".composer-wrap"),
   composerSuggestions: document.getElementById("composerSuggestions"),
   taskForm: document.getElementById("taskForm"),
   taskInput: document.getElementById("taskInput"),
+  composerPlusButton: document.getElementById("composerPlusButton"),
+  composerFileInput: document.getElementById("composerFileInput"),
+  composerAttachments: document.getElementById("composerAttachments"),
+  composerToolMenu: document.getElementById("composerToolMenu"),
   submitButton: document.getElementById("submitButton"),
   stopButton: document.getElementById("stopButton"),
   submitHint: document.getElementById("submitHint"),
@@ -352,6 +362,10 @@ function bindEvents() {
   elements.displayResetButton?.addEventListener("click", resetDisplayOverrides);
   elements.taskForm?.addEventListener("submit", handleSubmit);
   elements.taskInput?.addEventListener("keydown", handleTaskInputKeydown);
+  elements.composerPlusButton?.addEventListener("click", toggleComposerToolMenu);
+  elements.composerFileInput?.addEventListener("change", handleComposerFileSelection);
+  elements.composerAttachments?.addEventListener("click", handleComposerAttachmentClick);
+  elements.composerToolMenu?.addEventListener("click", handleComposerToolMenuClick);
   elements.stopButton?.addEventListener("click", handleStopTask);
   elements.sidebarRunList?.addEventListener("click", handleHistoryClick);
   elements.chatStream?.addEventListener("click", handleInteractiveClick);
@@ -1440,6 +1454,9 @@ async function handleJobDecision(jobId, decision) {
 }
 
 function handleGlobalPointerDown(event) {
+  if (state.composerToolMenuOpen && !event.target.closest(".composer-tools")) {
+    closeComposerToolMenu({ restoreFocus: false });
+  }
   if (!state.openCustomSelectId) return;
   if (event.target.closest(".custom-select")) return;
   closeCustomSelect({ restoreFocus: false });
@@ -2390,14 +2407,7 @@ function findProviderProfile(value = elements.modelProvider.value) {
 function buildStarterSuggestions() {
   const recipes = (state.meta?.workflow_recipes || []).map(localizeWorkflowRecipe);
   const presets = (state.meta?.presets || []).map(localizePreset);
-  const pluginSuggestions = buildPluginItems()
-    .filter((item) => item.task)
-    .map((item) => ({
-      label: item.name,
-      task: item.task,
-      description: item.description || item.statusDetail || item.statusLabel,
-    }));
-  const merged = [...pluginSuggestions, ...recipes, ...presets];
+  const merged = [...recipes, ...presets];
   const seen = new Set();
 
   return merged
@@ -2461,12 +2471,326 @@ function buildPluginItems() {
         name: normalizeText(plugin.name || plugin.id),
         description: normalizeText(plugin.description || ""),
         task: normalizeText(plugin.demo_task || ""),
+        app: normalizeText(plugin.app || ""),
+        version: normalizeText(plugin.version || ""),
+        capabilities: Array.isArray(plugin.capabilities)
+          ? plugin.capabilities.map((capability) => normalizeText(capability)).filter(Boolean)
+          : [],
+        triggers: Array.isArray(plugin.triggers)
+          ? plugin.triggers.map((trigger) => normalizeText(trigger)).filter(Boolean)
+          : [],
         statusLabel: normalizeText(status.label || (ready ? "Ready" : "Needs setup")),
         statusDetail: normalizeText(status.detail || ""),
         ready,
       };
     })
     .filter((item) => item.id && item.name);
+}
+
+function pluginPresentation(item) {
+  const presentations = {
+    coding_assistant: {
+      icon: "{}",
+      accent: "blue",
+      category: tr("\u7f16\u7a0b", "Coding"),
+      summary: tr("\u751f\u6210\u9694\u79bb\u4ee3\u7801\u9879\u76ee\u3001\u8865\u4e01\u9884\u89c8\u548c\u9a8c\u8bc1\u62a5\u544a\u3002", "Generate an isolated code project, patch preview, and verification report."),
+    },
+    excel_report: {
+      icon: "XL",
+      accent: "green",
+      category: tr("\u8868\u683c", "Sheets"),
+      summary: tr("\u751f\u6210 Excel \u5de5\u4f5c\u7c3f\u3001\u6570\u636e\u8868\u548c\u8d8b\u52bf\u56fe\u3002", "Create workbooks, data tables, and trend charts."),
+    },
+    matlab_plot: {
+      icon: "M",
+      accent: "amber",
+      category: tr("\u4e13\u4e1a\u8f6f\u4ef6", "Apps"),
+      summary: tr("\u8c03\u7528 MATLAB \u811a\u672c\u751f\u6210\u51fd\u6570\u66f2\u7ebf\u548c\u7ed3\u679c\u8bf4\u660e\u3002", "Run MATLAB scripts to produce plots and result notes."),
+    },
+    powerpoint_deck: {
+      icon: "P",
+      accent: "red",
+      category: tr("\u6f14\u793a", "Slides"),
+      summary: tr("\u751f\u6210 PowerPoint \u6f14\u793a\u7a3f\u548c HTML \u9884\u89c8\u3002", "Generate a presentation deck and HTML preview."),
+    },
+    word_report: {
+      icon: "W",
+      accent: "indigo",
+      category: tr("\u6587\u6863", "Docs"),
+      summary: tr("\u751f\u6210 Word \u517c\u5bb9 DOCX \u62a5\u544a\u548c Markdown \u8bf4\u660e\u3002", "Generate Word-compatible DOCX reports and Markdown notes."),
+    },
+  };
+  return presentations[item.id] || {
+    icon: (item.name || item.id || "?").slice(0, 2).toUpperCase(),
+    accent: "slate",
+    category: tr("\u63d2\u4ef6", "Plugin"),
+    summary: item.description,
+  };
+}
+
+function renderPluginMarketplace(items) {
+  const readyCount = items.filter((item) => item.ready).length;
+  return `
+    <section class="plugin-marketplace" aria-label="${escapeHtml(tr("\u63d2\u4ef6\u5e02\u573a", "Plugin marketplace"))}">
+      <div class="plugin-marketplace__header">
+        <div>
+          <p class="plugin-marketplace__eyebrow">${escapeHtml(tr("Aoryn \u63d2\u4ef6\u5e02\u573a", "Aoryn Plugin Marketplace"))}</p>
+          <h3>${escapeHtml(tr("\u5df2\u5b89\u88c5\u7684\u80fd\u529b", "Installed capabilities"))}</h3>
+        </div>
+        <span class="plugin-marketplace__count">${escapeHtml(
+          tr(`${readyCount} \u4e2a\u5df2\u5b89\u88c5`, `${readyCount} installed`)
+        )}</span>
+      </div>
+      <div class="plugin-marketplace__grid">
+        ${items.map(renderPluginMarketplaceCard).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderPluginMarketplaceCard(item) {
+  const presentation = pluginPresentation(item);
+  const description = presentation.summary || item.description || item.statusDetail;
+  const statusLabel = item.ready ? tr("\u53ef\u7528", "Ready") : item.statusLabel;
+  return `
+    <article class="plugin-marketplace-card plugin-marketplace-card--${escapeHtml(presentation.accent)}">
+      <div class="plugin-marketplace-card__top">
+        <span class="plugin-marketplace-card__icon" aria-hidden="true">${escapeHtml(presentation.icon)}</span>
+      </div>
+      <div class="plugin-marketplace-card__body">
+        <div class="plugin-marketplace-card__title-row">
+          <h4>${escapeHtml(item.name)}</h4>
+          <span class="plugin-marketplace-card__status ${item.ready ? "is-ready" : "is-warning"}">${escapeHtml(statusLabel)}</span>
+        </div>
+        <p>${escapeHtml(description || item.name)}</p>
+      </div>
+      ${
+        item.task
+          ? `<button class="plugin-marketplace-card__action" type="button" data-prefill-task="${escapeHtml(item.task)}">
+              ${escapeHtml(tr("\u8fd0\u884c\u6f14\u793a", "Run demo"))}
+            </button>`
+          : `<span class="plugin-marketplace-card__action plugin-marketplace-card__action--disabled">${escapeHtml(
+              tr("\u6682\u65e0\u6f14\u793a\u4efb\u52a1", "No demo task")
+            )}</span>`
+      }
+    </article>
+  `;
+}
+
+function renderComposerToolIcon(name) {
+  const icons = {
+    plus: '<path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" />',
+    paperclip:
+      '<path d="M8.5 12.5 15 6a3.2 3.2 0 0 1 4.5 4.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.2-8.2" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" />',
+    list: '<path d="M8 7h10M8 12h10M8 17h10M4.7 7h.1M4.7 12h.1M4.7 17h.1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" />',
+    target:
+      '<circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.7" /><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7" /><path d="M12 2.8v3M21.2 12h-3M12 21.2v-3M2.8 12h3" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.7" />',
+    plugins:
+      '<circle cx="8" cy="8" r="2.4" fill="none" stroke="currentColor" stroke-width="1.7" /><circle cx="16" cy="8" r="2.4" fill="none" stroke="currentColor" stroke-width="1.7" /><circle cx="8" cy="16" r="2.4" fill="none" stroke="currentColor" stroke-width="1.7" /><circle cx="16" cy="16" r="2.4" fill="none" stroke="currentColor" stroke-width="1.7" />',
+    chevron: '<path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" />',
+    shield:
+      '<path d="M12 3.5 18 6v4.5c0 4.1-2.5 7.6-6 9.1-3.5-1.5-6-5-6-9.1V6l6-2.5Z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.7" /><path d="M12 8.5v4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.7" /><path d="M12 15.8h.01" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2.2" />',
+  };
+  return `<svg class="tool-menu-icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.plugins}</svg>`;
+}
+
+function renderComposerPluginMenuItem(item) {
+  const presentation = pluginPresentation(item);
+  const action = item.task
+    ? `data-prefill-task="${escapeHtml(item.task)}"`
+    : `aria-disabled="true"`;
+  return `
+    <button class="tool-menu-plugin" type="button" ${action}>
+      <span class="tool-menu-plugin__avatar tool-menu-plugin__avatar--${escapeHtml(presentation.accent)}" aria-hidden="true">${escapeHtml(presentation.icon)}</span>
+      <span class="tool-menu-plugin__name">${escapeHtml(item.name)}</span>
+    </button>
+  `;
+}
+
+function formatAttachmentSize(size) {
+  const bytes = Number(size || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = String(reader.result || "");
+      const commaIndex = value.indexOf(",");
+      resolve(commaIndex >= 0 ? value.slice(commaIndex + 1) : value);
+    };
+    reader.onerror = () => reject(reader.error || new Error("Could not read file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleComposerFileSelection(event) {
+  const files = Array.from(event.target?.files || []);
+  if (elements.composerFileInput) {
+    elements.composerFileInput.value = "";
+  }
+  if (!files.length) return;
+
+  closeComposerToolMenu();
+  const remainingSlots = Math.max(0, MAX_COMPOSER_ATTACHMENTS - state.composerAttachments.length);
+  if (!remainingSlots) {
+    elements.submitHint.textContent = tr("\u6700\u591a\u53ea\u80fd\u6dfb\u52a0 8 \u4e2a\u6587\u4ef6", "You can attach up to 8 files.");
+    return;
+  }
+
+  const acceptedFiles = files.slice(0, remainingSlots);
+  let skipped = files.length - acceptedFiles.length;
+  for (const file of acceptedFiles) {
+    if (file.size > MAX_COMPOSER_ATTACHMENT_BYTES) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const dataBase64 = await readFileAsBase64(file);
+      state.composerAttachments.push({
+        id: `attachment-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        name: file.name || tr("\u672a\u547d\u540d\u6587\u4ef6", "Untitled file"),
+        size: file.size || 0,
+        type: file.type || "application/octet-stream",
+        dataBase64,
+      });
+    } catch {
+      skipped += 1;
+    }
+  }
+
+  elements.submitHint.textContent = skipped
+    ? tr(`\u5df2\u6dfb\u52a0 ${state.composerAttachments.length} \u4e2a\u6587\u4ef6\uff0c${skipped} \u4e2a\u6587\u4ef6\u8d85\u8fc7\u9650\u5236\u6216\u8bfb\u53d6\u5931\u8d25\u3002`, `${state.composerAttachments.length} file(s) attached; ${skipped} skipped.`)
+    : "";
+  renderComposerAttachments();
+  window.requestAnimationFrame(() => elements.taskInput?.focus());
+}
+
+function handleComposerAttachmentClick(event) {
+  const removeButton = event.target.closest("[data-remove-attachment]");
+  if (!removeButton) return;
+  const attachmentId = removeButton.dataset.removeAttachment || "";
+  state.composerAttachments = state.composerAttachments.filter((item) => item.id !== attachmentId);
+  renderComposerAttachments();
+}
+
+function renderComposerAttachments() {
+  if (!elements.composerAttachments || !elements.taskForm) return;
+  const attachments = state.composerAttachments || [];
+  const shouldShow = state.uiMode === "agent" && attachments.length > 0;
+  elements.taskForm.classList.toggle("composer--has-attachments", shouldShow);
+  elements.composerAttachments.hidden = !shouldShow;
+  if (!shouldShow) {
+    elements.composerAttachments.innerHTML = "";
+    return;
+  }
+  elements.composerAttachments.innerHTML = attachments
+    .map(
+      (item) => `
+        <span class="composer-attachment-chip" title="${escapeHtml(item.name)}">
+          <span class="composer-attachment-chip__name">${escapeHtml(item.name)}</span>
+          <span class="composer-attachment-chip__meta">${escapeHtml(formatAttachmentSize(item.size))}</span>
+          <button type="button" data-remove-attachment="${escapeHtml(item.id)}" aria-label="${escapeHtml(tr("\u79fb\u9664\u9644\u4ef6", "Remove attachment"))}">
+            ×
+          </button>
+        </span>
+      `
+    )
+    .join("");
+}
+
+function renderComposerToolMenu() {
+  if (!elements.composerToolMenu || !elements.composerPlusButton) return;
+
+  const available = state.uiMode === "agent" && !state.activeJob && !state.pendingTask;
+  if (!available) {
+    state.composerToolMenuOpen = false;
+    state.composerPluginMenuOpen = false;
+  }
+
+  elements.composerPlusButton.hidden = !available;
+  elements.composerPlusButton.disabled = !available;
+  elements.composerPlusButton.setAttribute("aria-expanded", state.composerToolMenuOpen ? "true" : "false");
+  elements.composerPlusButton.classList.toggle("is-open", Boolean(state.composerToolMenuOpen));
+  elements.composerToolMenu.hidden = !state.composerToolMenuOpen || !available;
+
+  if (!state.composerToolMenuOpen || !available) {
+    elements.composerToolMenu.innerHTML = "";
+    return;
+  }
+
+  const pluginItems = buildPluginItems();
+  const pluginList = pluginItems.length
+    ? pluginItems.map(renderComposerPluginMenuItem).join("")
+    : `<div class="tool-menu-empty">${escapeHtml(tr("暂无可用插件", "No plugins available"))}</div>`;
+
+  elements.composerToolMenu.innerHTML = `
+    <div class="tool-menu-panel" role="menu" aria-label="${escapeHtml(tr("工具菜单", "Tool menu"))}">
+      <button class="tool-menu-row" type="button" data-attach-files>
+        ${renderComposerToolIcon("paperclip")}
+        <span>${escapeHtml(tr("\u6dfb\u52a0\u7167\u7247\u548c\u6587\u4ef6", "Add photos and files"))}</span>
+      </button>
+      <div class="tool-menu-divider"></div>
+      <button class="tool-menu-row tool-menu-row--primary" type="button" data-toggle-plugin-menu aria-expanded="${state.composerPluginMenuOpen ? "true" : "false"}">
+        ${renderComposerToolIcon("plugins")}
+        <span>${escapeHtml(tr("插件", "Plugins"))}</span>
+        <span class="tool-menu-chevron ${state.composerPluginMenuOpen ? "is-open" : ""}">${renderComposerToolIcon("chevron")}</span>
+      </button>
+    </div>
+    <div class="tool-menu-flyout" ${state.composerPluginMenuOpen ? "" : "hidden"} role="menu" aria-label="${escapeHtml(tr("插件", "Plugins"))}">
+      <div class="tool-menu-flyout__title">${escapeHtml(
+        tr(`${pluginItems.length} 个已安装插件`, `${pluginItems.length} installed plugins`)
+      )}</div>
+      ${pluginList}
+    </div>
+  `;
+}
+
+function toggleComposerToolMenu(event) {
+  event?.preventDefault?.();
+  if (state.uiMode === "developer") return;
+  state.composerToolMenuOpen = !state.composerToolMenuOpen;
+  if (!state.composerToolMenuOpen) {
+    state.composerPluginMenuOpen = false;
+  }
+  renderComposerToolMenu();
+}
+
+function closeComposerToolMenu(options = {}) {
+  if (!state.composerToolMenuOpen && !state.composerPluginMenuOpen) return;
+  state.composerToolMenuOpen = false;
+  state.composerPluginMenuOpen = false;
+  renderComposerToolMenu();
+  if (options.restoreFocus) {
+    window.requestAnimationFrame(() => elements.composerPlusButton?.focus());
+  }
+}
+
+function handleComposerToolMenuClick(event) {
+  const attachTrigger = event.target.closest("[data-attach-files]");
+  if (attachTrigger) {
+    closeComposerToolMenu();
+    elements.composerFileInput?.click();
+    return;
+  }
+
+  const pluginToggle = event.target.closest("[data-toggle-plugin-menu]");
+  if (pluginToggle) {
+    state.composerPluginMenuOpen = !state.composerPluginMenuOpen;
+    renderComposerToolMenu();
+    return;
+  }
+
+  const prefillTrigger = event.target.closest("[data-prefill-task]");
+  if (prefillTrigger && !prefillTrigger.getAttribute("aria-disabled")) {
+    const task = prefillTrigger.dataset.prefillTask || "";
+    closeComposerToolMenu();
+    prefillTask(task);
+  }
 }
 
 function localizeWorkflowRecipe(item) {
@@ -4304,7 +4628,7 @@ function renderWelcomeMessage() {
   }
   const recentItems = buildWelcomeRecentItems();
   const starterItems = buildStarterSuggestions().slice(0, 3);
-  const pluginItems = buildPluginItems();
+  const pluginItems = [];
   const capabilityItems = [
     tr("可见执行与截图回放", "Visible runs and screenshot replay"),
     tr("本地优先的模型与浏览器设置", "Local-first model and browser setup"),
@@ -4473,6 +4797,8 @@ function renderAgentChat() {
   setConversationLayoutContext(`agent-${context.type}`);
   renderComposerSuggestions(context);
   renderComposerState(context);
+  renderComposerToolMenu();
+  renderComposerAttachments();
 
   if (context.type === "active" || context.type === "pending") {
     window.requestAnimationFrame(() => {
@@ -4521,6 +4847,8 @@ function renderNormalChat() {
   setConversationLayoutContext(!session || !(session.messages || []).length ? "chat-welcome" : "chat-thread");
   renderComposerSuggestions({ type: "chat" });
   renderComposerState({ type: "chat" });
+  renderComposerToolMenu();
+  renderComposerAttachments();
 
   window.requestAnimationFrame(() => {
     elements.chatScroll.scrollTop = elements.chatScroll.scrollHeight;
@@ -4528,7 +4856,13 @@ function renderNormalChat() {
 }
 
 function renderComposerSuggestions(context) {
+  const setSuggestionMode = (marketplace = false) => {
+    elements.composerSuggestions.classList.toggle("composer-suggestions--marketplace", marketplace);
+    elements.composerWrap?.classList.toggle("composer-wrap--marketplace", marketplace);
+  };
+
   if (state.uiMode === "chat") {
+    setSuggestionMode(false);
     const session = getSelectedChatSession();
     if (state.chatPending || session?.messages?.length) {
       elements.composerSuggestions.innerHTML = "";
@@ -4553,25 +4887,13 @@ function renderComposerSuggestions(context) {
   }
 
   if (state.activeJob || state.uiMode === "developer" || context.type !== "welcome") {
+    setSuggestionMode(false);
     elements.composerSuggestions.innerHTML = "";
     return;
   }
 
-  const items = buildStarterSuggestions();
-  if (!items.length) {
-    elements.composerSuggestions.innerHTML = "";
-    return;
-  }
-
-  elements.composerSuggestions.innerHTML = items
-    .map(
-      (item) => `
-        <button class="suggestion-chip" type="button" data-prefill-task="${escapeHtml(item.task)}" title="${escapeHtml(item.description || "")}">
-          ${escapeHtml(item.label)}
-        </button>
-      `
-    )
-    .join("");
+  setSuggestionMode(false);
+  elements.composerSuggestions.innerHTML = "";
 }
 
 function handleHistoryClick(event) {
@@ -4714,6 +5036,14 @@ async function submitAgentTask(taskText) {
     pause_after_action: elements.pauseInput.value ? Number(elements.pauseInput.value) : null,
     config_overrides: configOverrides,
   };
+  if (state.composerAttachments.length) {
+    payload.attachments = state.composerAttachments.map((item) => ({
+      name: item.name,
+      size: item.size,
+      mime_type: item.type,
+      data_base64: item.dataBase64,
+    }));
+  }
 
   if (!payload.task) {
     elements.submitHint.textContent = tr("先输入任务", "Enter a task");
@@ -4753,6 +5083,8 @@ async function submitAgentTask(taskText) {
   persistAgentSessions();
   elements.taskInput.value = "";
   elements.submitHint.textContent = tr("任务已发送", "Queued");
+  state.composerAttachments = [];
+  renderComposerAttachments();
   await refreshOverview({ forceLatest: true });
 }
 
@@ -4801,6 +5133,12 @@ async function clearHistoryRecords() {
 }
 
 function handleGlobalKeydown(event) {
+  if (state.composerToolMenuOpen && event.key === "Escape") {
+    event.preventDefault();
+    closeComposerToolMenu({ restoreFocus: true });
+    return;
+  }
+
   if (state.openCustomSelectId && event.key === "Escape") {
     event.preventDefault();
     closeCustomSelect({ restoreFocus: true });

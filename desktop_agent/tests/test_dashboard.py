@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 import shutil
@@ -1104,6 +1105,74 @@ def test_dashboard_task_route_merges_runtime_preferences_with_request_overrides(
             "model_base_url": "https://override.example.com/v1",
             "model_api_key": "runtime-secret",
         }
+    finally:
+        server.shutdown()
+        server.server_close()
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_dashboard_task_route_saves_attachments_and_keeps_display_task(monkeypatch):
+    temp_root = Path(__file__).resolve().parents[2] / ".pytest-local" / f"aoryn-dashboard-attachments-{uuid4().hex}"
+    run_root = temp_root / "runs"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    config_path = temp_root / "config.yaml"
+    config_path.write_text(f'run_root: "{run_root.as_posix()}"\n', encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+    captured: dict[str, object] = {}
+
+    def _submit(**kwargs):
+        captured.update(kwargs)
+        return DashboardJob(
+            job_id="job-attachments",
+            task=kwargs["task"],
+            planner_mode=kwargs.get("planner_mode") or "auto",
+            dry_run=bool(kwargs.get("dry_run")),
+            max_steps=kwargs.get("max_steps"),
+            pause_after_action=kwargs.get("pause_after_action"),
+            execution_task=kwargs.get("execution_task"),
+            attachments=list(kwargs.get("attachments") or []),
+            config_overrides=dict(kwargs.get("config_overrides") or {}),
+        )
+
+    monkeypatch.setattr(app.queue, "submit", _submit)
+
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        request = urllib.request.Request(
+            f"{base_url}/api/tasks",
+            data=json.dumps(
+                {
+                    "task": "summarize the attached note",
+                    "attachments": [
+                        {
+                            "name": "note.txt",
+                            "mime_type": "text/plain",
+                            "data_base64": base64.b64encode(b"hello from attachment").decode("ascii"),
+                        }
+                    ],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 202
+            assert payload["id"] == "job-attachments"
+            assert payload["task"] == "summarize the attached note"
+
+        assert captured["task"] == "summarize the attached note"
+        attachments = captured["attachments"]
+        assert isinstance(attachments, list)
+        assert attachments[0]["name"] == "note.txt"
+        saved_path = Path(attachments[0]["path"])
+        assert saved_path.read_bytes() == b"hello from attachment"
+        assert "note.txt" in str(captured["execution_task"])
+        assert str(saved_path) in str(captured["execution_task"])
     finally:
         server.shutdown()
         server.server_close()

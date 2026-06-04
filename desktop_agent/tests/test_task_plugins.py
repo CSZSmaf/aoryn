@@ -36,7 +36,7 @@ def test_coding_plugin_is_discoverable():
     items = plugin_catalog(config=AgentConfig())
     coding = next(item for item in items if item["id"] == "coding_assistant")
 
-    assert coding["name"] == "Coding Assistant Plugin"
+    assert coding["name"] == "编程助手插件"
     assert coding["status"]["state"] == "available"
     assert "coding plugin" in coding["demo_task"].lower()
 

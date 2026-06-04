@@ -1,6 +1,6 @@
 {
   "id": "coding_assistant",
-  "name": "Coding Assistant Plugin",
+  "name": "编程助手插件",
   "description": "Generates an isolated code project, runs verification, and writes a Codex-style implementation report.",
   "app": "Aoryn",
   "version": "1.0.0",
