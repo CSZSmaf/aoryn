@@ -2519,6 +2519,18 @@ function pluginPresentation(item) {
       category: tr("\u6587\u6863", "Docs"),
       summary: tr("\u751f\u6210 Word \u517c\u5bb9 DOCX \u62a5\u544a\u548c Markdown \u8bf4\u660e\u3002", "Generate Word-compatible DOCX reports and Markdown notes."),
     },
+    pdf_report: {
+      icon: "PDF",
+      accent: "cyan",
+      category: tr("\u6587\u6863", "Docs"),
+      summary: tr("\u751f\u6210 PDF \u4ea4\u4ed8\u6587\u4ef6\u548c Markdown \u8ffd\u6eaf\u62a5\u544a\u3002", "Generate PDF deliverables and Markdown trace reports."),
+    },
+    system_diagnostics: {
+      icon: "PC",
+      accent: "slate",
+      category: tr("\u7cfb\u7edf", "System"),
+      summary: tr("\u751f\u6210 Windows \u73af\u5883\u5feb\u7167\u3001JSON \u6570\u636e\u548c\u8bca\u65ad\u8bf4\u660e\u3002", "Generate Windows environment snapshots, JSON data, and diagnostics notes."),
+    },
   };
   return presentations[item.id] || {
     icon: (item.name || item.id || "?").slice(0, 2).toUpperCase(),

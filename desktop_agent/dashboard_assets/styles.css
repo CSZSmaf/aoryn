@@ -181,6 +181,8 @@ body[data-sidebar-collapsed="true"] .app-shell {
 .plugin-marketplace-card--amber::before { background: #d97706; }
 .plugin-marketplace-card--red::before { background: #dc2626; }
 .plugin-marketplace-card--indigo::before { background: #4f46e5; }
+.plugin-marketplace-card--cyan::before { background: #0891b2; }
+.plugin-marketplace-card--slate::before { background: #475569; }
 
 .plugin-marketplace-card:hover {
   border-color: rgba(15, 23, 42, 0.16);
@@ -214,6 +216,8 @@ body[data-sidebar-collapsed="true"] .app-shell {
 .plugin-marketplace-card--amber .plugin-marketplace-card__icon { background: #b45309; }
 .plugin-marketplace-card--red .plugin-marketplace-card__icon { background: #b91c1c; }
 .plugin-marketplace-card--indigo .plugin-marketplace-card__icon { background: #4338ca; }
+.plugin-marketplace-card--cyan .plugin-marketplace-card__icon { background: #0e7490; }
+.plugin-marketplace-card--slate .plugin-marketplace-card__icon { background: #334155; }
 
 .plugin-marketplace-card__status {
   border-radius: 999px;
@@ -7347,6 +7351,7 @@ body::before {
 .tool-menu-plugin__avatar--amber { background: #b45309; }
 .tool-menu-plugin__avatar--red { background: #b91c1c; }
 .tool-menu-plugin__avatar--indigo { background: #4338ca; }
+.tool-menu-plugin__avatar--cyan { background: #0e7490; }
 .tool-menu-plugin__avatar--slate { background: #475569; }
 
 .tool-menu-plugin__body {
@@ -7590,29 +7595,46 @@ body::before {
 }
 
 /* Final Codex-like neutral tone for the + menu. */
+.composer-tool-menu {
+  color: #111827;
+}
+
 .tool-menu-panel,
 .tool-menu-flyout {
-  border-color: rgba(255, 255, 255, 0.10);
-  background: rgba(43, 43, 43, 0.98);
+  border-color: rgba(15, 23, 42, 0.10);
+  background: rgba(255, 255, 255, 0.98);
   backdrop-filter: blur(18px);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.14);
 }
 
 .tool-menu-row,
 .tool-menu-plugin {
-  color: #e8e8e8;
+  color: #111827;
 }
 
 .tool-menu-row:hover,
 .tool-menu-row--primary,
 .tool-menu-plugin:hover,
 .tool-menu-plugin:focus-visible {
-  background: rgba(255, 255, 255, 0.11);
+  background: rgba(15, 23, 42, 0.06);
 }
 
 .tool-menu-flyout__title {
-  color: #a8a8a8;
+  color: #6b7280;
 }
 
 .tool-menu-icon {
-  color: #b8b8b8;
+  color: #6b7280;
+}
+
+.tool-menu-divider {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+.tool-menu-plugin__name {
+  color: #111827;
+}
+
+.tool-menu-empty {
+  color: #6b7280;
 }

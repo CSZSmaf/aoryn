@@ -1,0 +1,21 @@
+{
+  "id": "system_diagnostics",
+  "name": "系统诊断插件",
+  "description": "生成 Windows 环境快照、磁盘和运行时信息，适合演示本机应用支持与交付前自检。",
+  "app": "Windows",
+  "version": "1.0.0",
+  "triggers": [
+    "系统诊断插件",
+    "电脑诊断",
+    "环境诊断",
+    "system diagnostics",
+    "diagnose system",
+    "windows snapshot"
+  ],
+  "capabilities": [
+    "collect_system_snapshot",
+    "write_json_report",
+    "write_markdown_report"
+  ],
+  "demo_task": "用系统诊断插件生成一份本机环境快照报告"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "pdf_report",
+  "name": "PDF 报告插件",
+  "description": "生成可交付 PDF 报告和 Markdown 追溯说明，适合演示文件产物类插件能力。",
+  "app": "Aoryn",
+  "version": "1.0.0",
+  "triggers": [
+    "PDF 插件",
+    "PDF 报告",
+    "pdf plugin",
+    "pdf report",
+    "create pdf",
+    "生成 PDF"
+  ],
+  "capabilities": [
+    "create_pdf",
+    "write_markdown_report",
+    "file_output"
+  ],
+  "demo_task": "用 PDF 插件生成一份 Aoryn 演示总结报告"
+}

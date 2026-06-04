@@ -41,6 +41,15 @@ def test_coding_plugin_is_discoverable():
     assert "coding plugin" in coding["demo_task"].lower()
 
 
+def test_file_output_plugins_are_discoverable():
+    items = plugin_catalog(config=AgentConfig())
+    ids = {item["id"] for item in items}
+
+    assert {"pdf_report", "system_diagnostics"}.issubset(ids)
+    assert next(item for item in items if item["id"] == "pdf_report")["status"]["state"] == "available"
+    assert next(item for item in items if item["id"] == "system_diagnostics")["status"]["state"] == "available"
+
+
 def test_task_runner_routes_matlab_plot_to_plugin(monkeypatch):
     monkeypatch.setattr(matlab_plugin, "_find_matlab_executable", lambda config=None: Path("C:/MATLAB/bin/matlab.exe"))
 
@@ -64,6 +73,13 @@ def test_task_runner_routes_coding_plugin():
 
     assert runner.match("Use the coding plugin to create a Python text statistics utility") == "plugin:coding_assistant"
     assert runner.match("write code for a todo list and run tests") == "plugin:coding_assistant"
+
+
+def test_task_runner_routes_file_output_plugins():
+    runner = TaskSkillRunner(AgentConfig())
+
+    assert runner.match("用 PDF 插件生成一份 Aoryn 演示总结报告") == "plugin:pdf_report"
+    assert runner.match("用系统诊断插件生成一份本机环境快照报告") == "plugin:system_diagnostics"
 
 
 def test_coding_plugin_matcher_stays_narrow_for_plain_search():
@@ -212,5 +228,55 @@ def test_coding_plugin_generates_project_and_verification_artifacts():
         assert "Result: PASS" in verification
         assert (output_dir / "Aoryn_Coding_Plugin_Project" / "src" / "aoryn_text_stats" / "stats.py").exists()
         assert get_task_plugin("coding_assistant") is not None
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_pdf_plugin_generates_report_artifacts():
+    temp_root = Path(tempfile.mkdtemp(prefix="aoryn_pdf_plugin_test_"))
+    try:
+        config = AgentConfig()
+        executor = MockExecutor(config)
+        run_dir = temp_root / "run"
+        output_dir = temp_root / "out"
+
+        result = TaskSkillRunner(config).run(
+            "plugin:pdf_report",
+            "用 PDF 插件生成一份 Aoryn 演示总结报告",
+            executor=executor,
+            run_dir=run_dir,
+            output_dir=output_dir,
+            open_artifacts=False,
+        )
+
+        assert result.handled and result.completed
+        assert (output_dir / "Aoryn_PDF_Plugin_Report.pdf").exists()
+        assert (output_dir / "Aoryn_PDF_Plugin_Report.md").exists()
+        assert get_task_plugin("pdf_report") is not None
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_system_diagnostics_plugin_generates_snapshot_artifacts():
+    temp_root = Path(tempfile.mkdtemp(prefix="aoryn_system_plugin_test_"))
+    try:
+        config = AgentConfig()
+        executor = MockExecutor(config)
+        run_dir = temp_root / "run"
+        output_dir = temp_root / "out"
+
+        result = TaskSkillRunner(config).run(
+            "plugin:system_diagnostics",
+            "用系统诊断插件生成一份本机环境快照报告",
+            executor=executor,
+            run_dir=run_dir,
+            output_dir=output_dir,
+            open_artifacts=False,
+        )
+
+        assert result.handled and result.completed
+        assert (output_dir / "Aoryn_System_Diagnostics.md").exists()
+        assert (output_dir / "Aoryn_System_Diagnostics.json").exists()
+        assert get_task_plugin("system_diagnostics") is not None
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
