@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import math
 import os
 import re
@@ -10,6 +11,7 @@ import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from ctypes import wintypes
 
 from desktop_agent.actions import Action
 from desktop_agent.browser_runtime import BrowserRuntimeBridge, BrowserRuntimeError
@@ -51,6 +53,7 @@ class BaseExecutor:
         self._active_stop_requested: Callable[[], bool] | None = None
         self._run_stop_requested: Callable[[], bool] | None = None
         self._action_progress_callback: Callable[[dict[str, Any]], None] | None = None
+        self._last_agent_physical_action_at: float = 0.0
 
     def execute(self, action: Action) -> None:
         raise NotImplementedError
@@ -83,6 +86,8 @@ class BaseExecutor:
                         exc.executed_actions = list(executed_actions)
                     raise
                 executed_actions.append(action)
+                if _action_may_generate_desktop_input(action):
+                    self._last_agent_physical_action_at = time.time()
                 self._ensure_not_stopped(executed_actions=executed_actions)
                 if pause_after_action > 0:
                     try:
@@ -108,6 +113,11 @@ class BaseExecutor:
     def _ensure_not_stopped(self, *, executed_actions: list[Action] | None = None) -> None:
         if self._stop_requested():
             raise ExecutionCancelled(executed_actions=executed_actions)
+        if self._user_input_preempted():
+            raise ExecutionCancelled(
+                "User activity detected. Automation paused so it does not fight for control.",
+                executed_actions=executed_actions,
+            )
 
     def _sleep_interruptibly(self, seconds: float, *, poll_interval: float = 0.05) -> None:
         remaining = max(0.0, float(seconds or 0.0))
@@ -116,6 +126,17 @@ class BaseExecutor:
             chunk = min(remaining, poll_interval)
             time.sleep(chunk)
             remaining -= chunk
+
+    def _user_input_preempted(self) -> bool:
+        config = getattr(self, "config", None)
+        if str(getattr(config, "user_input_preemption_policy", "") or "").strip().lower() != "pause_and_resume":
+            return False
+        if self._last_agent_physical_action_at <= 0:
+            return False
+        if time.time() - self._last_agent_physical_action_at <= 1.5:
+            return False
+        age = _last_input_age_seconds()
+        return age is not None and age <= 0.2
 
     def _emit_action_progress(self, payload: dict[str, Any]) -> None:
         if self._action_progress_callback is None:
@@ -151,6 +172,10 @@ class RealDesktopExecutor(ActionExecutor):
                 self._launch_app(action.app or "")
             elif action.type == "open_app_if_needed":
                 self._open_app_if_needed(action.app or "")
+            elif action.type == "focus_app":
+                self._focus_app_window(action.app or "")
+            elif action.type == "maximize_app":
+                self._maximize_app_window(action.app or "")
             elif action.type == "focus_window":
                 self._focus_window(action.title or action.text or "")
             elif action.type == "minimize_window":
@@ -182,8 +207,21 @@ class RealDesktopExecutor(ActionExecutor):
                     button=action.button,
                     clicks=action.clicks,
                 )
+            elif action.type == "relative_drag":
+                self._relative_drag_in_window(
+                    action,
+                    app=action.app,
+                    title=action.title or action.text,
+                    relative_x=float(action.relative_x or 0.0),
+                    relative_y=float(action.relative_y or 0.0),
+                    end_relative_x=float(action.end_relative_x or 0.0),
+                    end_relative_y=float(action.end_relative_y or 0.0),
+                    button=action.button,
+                )
             elif action.type == "browser_open":
                 self._open_browser_target(action.text or "", target_scope=action.target_scope)
+            elif action.type == "browser_gui_open":
+                self._open_browser_target_gui(action.text or "")
             elif action.type == "browser_search":
                 self._search_in_browser(action.text or "", target_scope=action.target_scope)
             elif action.type == "browser_dom_click":
@@ -252,7 +290,17 @@ class RealDesktopExecutor(ActionExecutor):
                 )
             elif action.type == "scroll":
                 gui = _load_pyautogui()
-                gui.scroll(action.amount or 0)
+                if action.x is not None and action.y is not None:
+                    try:
+                        gui.moveTo(int(action.x), int(action.y), duration=0.05)
+                    except TypeError:
+                        gui.moveTo(int(action.x), int(action.y))
+                    try:
+                        gui.scroll(action.amount or 0, x=int(action.x), y=int(action.y))
+                    except TypeError:
+                        gui.scroll(action.amount or 0)
+                else:
+                    gui.scroll(action.amount or 0)
             elif action.type == "shell_recipe_request":
                 self._run_shell_recipe(recipe=action.recipe or "", arguments=action.text or "")
             elif action.type == "wait":
@@ -314,16 +362,96 @@ class RealDesktopExecutor(ActionExecutor):
         resolved_app = (app or "").strip()
         if not resolved_app:
             raise ExecutionError("Missing app name.")
+        if resolved_app.lower() == "browser":
+            self._open_native_browser_if_needed()
+            return
         self._refresh_environment()
         match = _find_existing_app_window(self.current_environment, resolved_app)
         if match is not None:
-            if not focus_window(match.handle):
+            if not self._focus_snapshot_window(match, resolved_app):
                 raise ExecutionError(f"Could not focus window: {resolved_app}")
             return
         self._launch_app(resolved_app)
         wait_query = _default_window_hint(resolved_app) or resolved_app
         if not (resolved_app.lower() == "browser" and self._prefers_dom_navigation()):
             self._wait_for_launched_app_window(wait_query)
+
+    def _focus_app_window(self, app: str) -> WindowSnapshot:
+        resolved_app = (app or "").strip()
+        if not resolved_app:
+            raise ExecutionError("Missing app name.")
+        self._refresh_environment()
+        match = _find_existing_app_window(self.current_environment, resolved_app)
+        if match is None:
+            self._launch_app(resolved_app)
+            self._wait_for_launched_app_window(_default_window_hint(resolved_app) or resolved_app)
+            self._refresh_environment()
+            match = _find_existing_app_window(self.current_environment, resolved_app)
+        if match is None or match.rect is None:
+            raise ExecutionError(f"Could not find app window: {resolved_app}")
+        if not self._focus_snapshot_window(match, resolved_app):
+            raise ExecutionError(f"Could not focus app window: {resolved_app}")
+        self._sleep_interruptibly(0.2)
+        self._refresh_environment()
+        refreshed = _find_existing_app_window(self.current_environment, resolved_app)
+        return refreshed if refreshed is not None and refreshed.rect is not None else match
+
+    def _focus_snapshot_window(self, match: WindowSnapshot, label: str) -> bool:
+        if match.rect is None:
+            return False
+        if focus_window(match.handle):
+            self._sleep_interruptibly(0.1)
+            return True
+        rect = match.rect
+        try:
+            gui = _load_pyautogui()
+            title_x = rect.left + max(16, min(120, max(16, rect.width - 16)))
+            title_y = rect.top + max(8, min(24, max(8, rect.height - 8)))
+            gui.click(int(title_x), int(title_y))
+        except Exception:
+            return False
+        self._sleep_interruptibly(0.2)
+        self._refresh_environment()
+        foreground = self.current_environment.foreground_window if self.current_environment is not None else None
+        if foreground is None:
+            refreshed = _find_existing_app_window(self.current_environment, label)
+            return refreshed is not None and refreshed.handle == match.handle
+        return foreground.handle == match.handle
+
+    def _maximize_app_window(self, app: str) -> None:
+        match = self._focus_app_window(app)
+        if not maximize_window(match.handle):
+            raise ExecutionError(f"Could not maximize app window: {app}")
+        self._sleep_interruptibly(0.25)
+        self._refresh_environment()
+
+    def _open_native_browser_if_needed(self) -> None:
+        self._refresh_environment()
+        self._ensure_not_stopped()
+        browser_window = _find_existing_browser_window(self.current_environment)
+        self._dismiss_known_blockers()
+        self._ensure_not_stopped()
+        self._minimize_browser_conflicts(browser_window)
+        self._ensure_not_stopped()
+        if browser_window is not None:
+            if not focus_window(browser_window.handle):
+                raise ExecutionError("Could not focus browser window.")
+            self._sleep_interruptibly(0.25)
+            return
+
+        self._open_browser_with_fallback(self.config.app_launch_map.get("browser"), "about:blank")
+        deadline = time.time() + max(float(self.config.window_match_timeout or 0), 5.0)
+        while time.time() < deadline:
+            self._ensure_not_stopped()
+            self._sleep_interruptibly(0.15)
+            self._refresh_environment()
+            browser_window = _find_existing_browser_window(self.current_environment)
+            if browser_window is not None:
+                if not focus_window(browser_window.handle):
+                    raise ExecutionError("Could not focus browser window.")
+                self._sleep_interruptibly(0.25)
+                return
+        raise ExecutionError("Could not find browser window after launch.")
 
     def _wait_for_launched_app_window(self, title: str) -> None:
         timeout_seconds = max(float(self.config.window_match_timeout or 0), 5.0)
@@ -361,6 +489,11 @@ class RealDesktopExecutor(ActionExecutor):
             return
         browser_target = self.config.app_launch_map.get("browser")
         self._open_browser_with_fallback(browser_target, normalized)
+
+    def _open_browser_target_gui(self, target: str) -> None:
+        self._prepare_for_browser_task()
+        normalized = self.config.normalize_browser_url(target)
+        self._open_browser_with_fallback(self.config.app_launch_map.get("browser"), normalized)
 
     def _open_browser_with_fallback(self, binary: str | None, target: str | None = None) -> None:
         resolved_binary = _resolve_browser_binary(binary)
@@ -629,6 +762,9 @@ class RealDesktopExecutor(ActionExecutor):
         gui = _load_pyautogui()
         if not text:
             return
+        if len(text) > 40 or re.match(r"^https?://", text, re.I):
+            if _paste_text_via_clipboard(gui, text):
+                return
         if _is_ascii_text(text):
             gui.write(text, interval=0.02)
             return
@@ -711,6 +847,53 @@ class RealDesktopExecutor(ActionExecutor):
         click_x = rect.left + _resolve_relative_axis(relative_x, rect.width)
         click_y = rect.top + _resolve_relative_axis(relative_y, rect.height)
         self._click_at(action, x=click_x, y=click_y, clicks=clicks, button=button)
+
+    def _relative_drag_in_window(
+        self,
+        action: Action,
+        *,
+        app: str | None,
+        title: str | None,
+        relative_x: float,
+        relative_y: float,
+        end_relative_x: float,
+        end_relative_y: float,
+        button: str,
+    ) -> None:
+        self._refresh_environment()
+        match: WindowSnapshot | None = None
+        target_label = (app or title or "").strip()
+        if app:
+            match = _find_existing_app_window(self.current_environment, app)
+        if match is None and title:
+            match = find_window(self.current_environment, title)
+        if match is None or match.rect is None:
+            raise ExecutionError(f"Could not find target window for relative drag: {target_label}")
+        foreground = self.current_environment.foreground_window if self.current_environment is not None else None
+        if foreground is None:
+            if not self._focus_snapshot_window(match, target_label):
+                raise ExecutionError(
+                    f"Target window foreground could not be confirmed for relative drag: {target_label}. "
+                    "Stopping to avoid drawing in another app."
+                )
+            self._refresh_environment()
+            refreshed = _find_existing_app_window(self.current_environment, app) if app else None
+            if refreshed is None and title:
+                refreshed = find_window(self.current_environment, title)
+            if refreshed is not None and refreshed.rect is not None:
+                match = refreshed
+            foreground = self.current_environment.foreground_window if self.current_environment is not None else None
+        if foreground is not None and foreground.handle != match.handle:
+            raise ExecutionError(
+                f"Target window is no longer foreground for relative drag: {target_label}. "
+                "Stopping to avoid drawing in another app."
+            )
+        rect = match.rect
+        start_x = rect.left + _resolve_relative_axis(relative_x, rect.width)
+        start_y = rect.top + _resolve_relative_axis(relative_y, rect.height)
+        end_x = rect.left + _resolve_relative_axis(end_relative_x, rect.width)
+        end_y = rect.top + _resolve_relative_axis(end_relative_y, rect.height)
+        self._drag_between(action, start_x=start_x, start_y=start_y, end_x=end_x, end_y=end_y, button=button)
 
     def _dismiss_known_blockers(self) -> None:
         mode = self.config.desktop_autonomy_mode.lower().strip()
@@ -1033,7 +1216,7 @@ class MockExecutor(ActionExecutor):
             self.state.text_buffers.setdefault(app, "")
             self.state.address_bar_active = False
             return
-        if action.type == "open_app_if_needed":
+        if action.type in {"open_app_if_needed", "focus_app", "maximize_app"}:
             app = action.app or ""
             self.state.open_apps.add(app)
             self.state.active_app = app
@@ -1057,7 +1240,18 @@ class MockExecutor(ActionExecutor):
             if target:
                 self.state.active_app = _infer_mock_app_from_title(target) or self.state.active_app
             return
-        if action.type == "browser_open":
+        if action.type == "relative_drag":
+            app = action.app or ""
+            if app:
+                self.state.open_apps.add(app)
+                self.state.active_app = app
+                self.state.text_buffers.setdefault(app, "")
+                return
+            target = (action.title or action.text or "").strip().lower()
+            if target:
+                self.state.active_app = _infer_mock_app_from_title(target) or self.state.active_app
+            return
+        if action.type in {"browser_open", "browser_gui_open"}:
             self._open_browser_target(action.text or "")
             return
         if action.type == "browser_search":
@@ -1216,6 +1410,13 @@ def _windows_search_app_term(app: str) -> str:
         "notepad": "Notepad",
         "paint": "Paint",
         "mspaint": "Paint",
+        "clock": "Clock",
+        "timer": "Clock",
+        "alarm": "Clock",
+        "alarms": "Clock",
+        "时钟": "时钟",
+        "闹钟": "时钟",
+        "计时器": "时钟",
         "settings": "Settings",
         "snipping tool": "Snipping Tool",
         "screenshot tool": "Snipping Tool",
@@ -1257,7 +1458,7 @@ def _paste_text_via_clipboard(gui, text: str) -> bool:
         return False
     try:
         gui.hotkey("ctrl", "v")
-        time.sleep(0.08)
+        time.sleep(0.18)
         return True
     finally:
         if previous_text is not None:
@@ -1351,12 +1552,55 @@ def _set_gui_pause(gui, value):
     return previous
 
 
+def _action_may_generate_desktop_input(action: Action) -> bool:
+    return action.type in {
+        "click",
+        "relative_click",
+        "relative_drag",
+        "drag",
+        "hotkey",
+        "clipboard_copy",
+        "clipboard_paste",
+        "press",
+        "type",
+        "scroll",
+        "uia_invoke",
+        "uia_set_value",
+        "uia_select",
+        "uia_expand",
+    }
+
+
+def _last_input_age_seconds() -> float | None:
+    if os.name != "nt":
+        return None
+
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+    info = LASTINPUTINFO()
+    info.cbSize = ctypes.sizeof(LASTINPUTINFO)
+    try:
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            return None
+        tick_now = ctypes.windll.kernel32.GetTickCount()
+        return max(0.0, float(int(tick_now) - int(info.dwTime)) / 1000.0)
+    except Exception:
+        return None
+
+
 def _summarize_live_action(action: Action) -> str:
     if action.type == "click":
         return f"click({action.x},{action.y})"
     if action.type == "relative_click":
         target = action.title or action.text or "window"
         return f"relative_click({target})"
+    if action.type == "relative_drag":
+        target = action.app or action.title or action.text or "window"
+        return (
+            f"relative_drag({target}:"
+            f"{action.relative_x},{action.relative_y}->{action.end_relative_x},{action.end_relative_y})"
+        )
     if action.type == "drag":
         return f"drag({action.x},{action.y}->{action.end_x},{action.end_y})"
     if action.type == "type":
@@ -1509,12 +1753,20 @@ def _default_window_hint(app: str) -> str | None:
         "calculator": "calculator",
         "explorer": "file explorer",
         "paint": "paint",
+        "clock": "clock",
+        "timer": "clock",
+        "alarm": "clock",
+        "alarms": "clock",
+        "时钟": "时钟",
+        "闹钟": "时钟",
+        "计时器": "时钟",
         "settings": "settings",
         "word": "word",
         "excel": "excel",
         "powerpoint": "powerpoint",
         "ppt": "powerpoint",
         "vscode": "visual studio code",
+        "matlab": "matlab",
         "wechat": "wechat",
         "weixin": "wechat",
         "微信": "微信",
@@ -1538,6 +1790,8 @@ def _infer_mock_app_from_title(title: str) -> str | None:
         return "explorer"
     if "paint" in title:
         return "paint"
+    if "clock" in title or "alarm" in title or "timer" in title or "时钟" in title or "闹钟" in title or "计时器" in title:
+        return "clock"
     if "settings" in title:
         return "settings"
     if "word" in title:
@@ -1548,6 +1802,8 @@ def _infer_mock_app_from_title(title: str) -> str | None:
         return "powerpoint"
     if "visual studio code" in title or "vscode" in title:
         return "vscode"
+    if "matlab" in title:
+        return "matlab"
     if "wechat" in title or "微信" in title:
         return "wechat"
     if "qq" in title or "腾讯qq" in title:
@@ -1562,10 +1818,12 @@ def _infer_mock_app_from_title(title: str) -> str | None:
 def _find_existing_browser_window(environment: DesktopEnvironment | None) -> WindowSnapshot | None:
     if environment is None:
         return None
-    for query in ("edge", "chrome", "firefox", "msedge.exe", "chrome.exe", "firefox.exe"):
-        match = find_window(environment, query)
-        if match is not None:
-            return match
+    foreground = environment.foreground_window
+    if foreground is not None and _is_browser_window(foreground) and not foreground.is_minimized:
+        return foreground
+    for window in environment.visible_windows:
+        if _is_browser_window(window) and not window.is_minimized:
+            return window
     return None
 
 
@@ -1591,12 +1849,46 @@ def _find_existing_app_window(environment: DesktopEnvironment | None, app: str) 
 
 
 def _is_browser_window(window: WindowSnapshot) -> bool:
-    haystacks = [
-        (window.title or "").lower(),
-        (window.class_name or "").lower(),
-        (window.process_name or "").lower(),
-    ]
-    return any(token in item for item in haystacks for token in ("edge", "chrome", "firefox", "msedge.exe", "chrome.exe", "firefox.exe"))
+    process_name = (window.process_name or "").strip().lower()
+    title = (window.title or "").strip().lower()
+    class_name = (window.class_name or "").strip().lower()
+    if not window.is_visible or window.is_minimized:
+        return False
+    if window.rect is not None and (window.rect.width < 240 or window.rect.height < 160):
+        return False
+    if title in {"hintwnd", "default ime", "sogou_tsf_ui"} or class_name in {"ime", "sopy_hint", "sogou_tsf_ui"}:
+        return False
+    if process_name in {
+        "codex.exe",
+        "code.exe",
+        "cursor.exe",
+        "electron.exe",
+        "slack.exe",
+        "teams.exe",
+        "discord.exe",
+        "wechat.exe",
+        "qq.exe",
+    }:
+        return False
+    if process_name in {
+        "msedge.exe",
+        "chrome.exe",
+        "firefox.exe",
+        "brave.exe",
+        "opera.exe",
+        "browser.exe",
+    }:
+        return True
+
+    browser_title_tokens = (
+        "microsoft edge",
+        "google chrome",
+        "mozilla firefox",
+        "brave",
+        "opera",
+        "msedge",
+    )
+    return any(token in title for token in browser_title_tokens)
 
 
 def _is_protected_window(window: WindowSnapshot) -> bool:
@@ -1606,6 +1898,7 @@ def _is_protected_window(window: WindowSnapshot) -> bool:
     if not title and class_name in {"shell_traywnd", "progman"}:
         return True
     protected_patterns = (
+        "codex",
         "visual studio code",
         "cursor",
         "pycharm",
@@ -1615,7 +1908,7 @@ def _is_protected_window(window: WindowSnapshot) -> bool:
     )
     if any(pattern in title for pattern in protected_patterns):
         return True
-    return process_name in {"code.exe", "cursor.exe"} or class_name in {"dwm"}
+    return process_name in {"codex.exe", "code.exe", "cursor.exe"} or class_name in {"dwm"}
 
 
 def _is_known_blocker_window(window: WindowSnapshot) -> bool:

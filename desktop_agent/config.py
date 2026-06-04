@@ -101,12 +101,16 @@ class AgentConfig:
             "explorer": "explorer.exe",
             "browser": "msedge.exe",
             "paint": "mspaint.exe",
+            "clock": "ms-clock:",
+            "timer": "ms-clock:",
+            "alarm": "ms-clock:",
             "settings": "ms-settings:",
             "word": "winword.exe",
             "excel": "excel.exe",
             "powerpoint": "powerpnt.exe",
             "vscode": "code.exe",
             "qq": "QQ.exe",
+            "matlab": "matlab.exe",
         }
     )
     allowed_apps: list[str] = field(
@@ -116,12 +120,16 @@ class AgentConfig:
             "explorer",
             "browser",
             "paint",
+            "clock",
+            "timer",
+            "alarm",
             "settings",
             "word",
             "excel",
             "powerpoint",
             "vscode",
             "qq",
+            "matlab",
         ]
     )
     blocked_app_launch_terms: list[str] = field(

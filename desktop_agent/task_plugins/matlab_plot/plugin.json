@@ -1,0 +1,10 @@
+{
+  "id": "matlab_plot",
+  "name": "MATLAB 绘图插件",
+  "description": "发现并调用 MATLAB，为函数曲线、矩阵计算等专业软件任务生成可见结果文件。",
+  "app": "matlab",
+  "version": "1.0.0",
+  "triggers": ["MATLAB", "matlab", "绘图", "函数曲线", "矩阵计算", "plot", "sin(x)"],
+  "capabilities": ["discover_app", "run_script", "plot", "save_figure", "write_report"],
+  "demo_task": "用 MATLAB 绘制 y=sin(x) 曲线，保存图像并写出结果说明"
+}

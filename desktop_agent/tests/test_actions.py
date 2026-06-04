@@ -71,5 +71,30 @@ def test_plan_result_accepts_relative_click_action():
     )
 
     assert plan.actions[0].type == "relative_click"
-    assert plan.actions[0].relative_x == 0.5
-    assert plan.actions[0].relative_y == 0.25
+
+
+def test_plan_result_accepts_app_relative_drag_action():
+    plan = PlanResult.from_payload(
+        {
+            "status_summary": "draw",
+            "done": False,
+            "actions": [
+                {
+                    "type": "relative_drag",
+                    "app": "paint",
+                    "relative_x": 0.3,
+                    "relative_y": 0.4,
+                    "end_relative_x": 0.5,
+                    "end_relative_y": 0.6,
+                }
+            ],
+        }
+    )
+
+    action = plan.actions[0]
+    assert action.type == "relative_drag"
+    assert action.app == "paint"
+    assert action.relative_x == 0.3
+    assert action.relative_y == 0.4
+    assert action.end_relative_x == 0.5
+    assert action.end_relative_y == 0.6

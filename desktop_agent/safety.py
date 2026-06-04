@@ -17,7 +17,7 @@ class ActionGuard:
     config: AgentConfig
 
     def validate(self, action: Action, screen_width: int | None = None, screen_height: int | None = None) -> None:
-        if action.type == "launch_app":
+        if action.type in {"launch_app", "focus_app", "maximize_app"}:
             if not _is_allowed_app_intent(action.app, self.config):
                 raise SafetyError(f"App is not allowed: {action.app}")
         elif action.type == "open_app_if_needed":
@@ -56,6 +56,20 @@ class ActionGuard:
                 raise SafetyError("relative_click.relative_y must be in [0, 1].")
             if action.clicks < 1 or action.clicks > 3:
                 raise SafetyError("clicks must be in [1, 3].")
+        elif action.type == "relative_drag":
+            target = (action.app or action.title or action.text or "").strip()
+            if not target:
+                raise SafetyError("relative_drag requires app, title, or text.")
+            for field_name, value in (
+                ("relative_x", action.relative_x),
+                ("relative_y", action.relative_y),
+                ("end_relative_x", action.end_relative_x),
+                ("end_relative_y", action.end_relative_y),
+            ):
+                if value is None:
+                    raise SafetyError(f"relative_drag.{field_name} is required.")
+                if not (0.0 <= value <= 1.0):
+                    raise SafetyError(f"relative_drag.{field_name} must be in [0, 1].")
         elif action.type == "hotkey":
             combo = tuple(key.lower() for key in action.keys)
             if combo not in self.config.hotkey_set():
@@ -103,10 +117,10 @@ class ActionGuard:
                 raise SafetyError("browser_search requires text.")
             if len(query) > self.config.max_text_length:
                 raise SafetyError("Search query exceeds max_text_length.")
-        elif action.type == "browser_open":
+        elif action.type in {"browser_open", "browser_gui_open"}:
             target = (action.text or "").strip()
             if not target:
-                raise SafetyError("browser_open requires text.")
+                raise SafetyError(f"{action.type} requires text.")
             if len(target) > self.config.max_browser_target_length:
                 raise SafetyError("Browser target exceeds max_browser_target_length.")
             if not _is_allowed_browser_target(target, self.config.allowed_browser_schemes):
@@ -201,7 +215,7 @@ def _looks_like_action_literal(text: str) -> bool:
     if not stripped:
         return False
     if re.search(
-        r"\b(?:launch_app|open_app_if_needed|browser_open|browser_search|focus_window|minimize_window|close_window|dismiss_popup|maximize_window|move_resize_window|wait_for_window|relative_click|hotkey|press|click|scroll|wait)\s*\(",
+        r"\b(?:launch_app|open_app_if_needed|focus_app|maximize_app|browser_open|browser_search|focus_window|minimize_window|close_window|dismiss_popup|maximize_window|move_resize_window|wait_for_window|relative_click|relative_drag|hotkey|press|click|scroll|wait)\s*\(",
         stripped,
         re.I,
     ):

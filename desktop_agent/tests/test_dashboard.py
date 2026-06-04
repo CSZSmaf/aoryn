@@ -72,6 +72,28 @@ def test_clean_config_overrides_accepts_model_browser_and_display_fields():
     }
 
 
+def test_dashboard_meta_and_plugins_route_expose_task_plugins(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    app = DashboardApp(host="127.0.0.1", port=0, config_path=config_path)
+
+    meta = app.meta()
+    assert any(item["id"] == "matlab_plot" for item in meta["task_plugins"])
+
+    server = app.create_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        with urllib.request.urlopen(f"{base_url}/api/plugins") as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+            assert any(item["id"] == "matlab_plot" for item in payload["items"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_dashboard_meta_exposes_dom_and_model_defaults(monkeypatch):
     monkeypatch.setattr(
         "desktop_agent.dashboard.dom_backend_status",

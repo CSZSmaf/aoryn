@@ -109,6 +109,39 @@ def test_guard_rejects_out_of_range_relative_click():
         guard.validate(action)
 
 
+def test_guard_accepts_app_relative_drag_action():
+    guard = ActionGuard(AgentConfig())
+    action = Action.from_dict(
+        {
+            "type": "relative_drag",
+            "app": "paint",
+            "relative_x": 0.3,
+            "relative_y": 0.4,
+            "end_relative_x": 0.5,
+            "end_relative_y": 0.6,
+        }
+    )
+
+    guard.validate(action)
+
+
+def test_guard_rejects_out_of_range_relative_drag():
+    guard = ActionGuard(AgentConfig())
+    action = Action.from_dict(
+        {
+            "type": "relative_drag",
+            "app": "paint",
+            "relative_x": 1.2,
+            "relative_y": 0.4,
+            "end_relative_x": 0.5,
+            "end_relative_y": 0.6,
+        }
+    )
+
+    with pytest.raises(SafetyError):
+        guard.validate(action)
+
+
 def test_guard_accepts_safe_generic_app_intent():
     guard = ActionGuard(AgentConfig())
     action = Action.from_dict({"type": "open_app_if_needed", "app": "snipping tool"})

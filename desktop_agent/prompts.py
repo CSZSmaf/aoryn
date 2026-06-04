@@ -20,6 +20,8 @@ Expected JSON shape:
 Allowed action.type values:
 - launch_app: {"type":"launch_app","app":"installed app name, English or Chinese"}
 - open_app_if_needed: {"type":"open_app_if_needed","app":"installed app name, English or Chinese"}
+- focus_app: {"type":"focus_app","app":"installed app name, English or Chinese"}
+- maximize_app: {"type":"maximize_app","app":"installed app name, English or Chinese"}
 - browser_open: {"type":"browser_open","text":"https://openai.com"}
 - browser_search: {"type":"browser_search","text":"OpenAI desktop agent"}
 - browser_dom_click: {"type":"browser_dom_click","text":"Log in"} or {"type":"browser_dom_click","selector":"button[data-testid='login']"}
@@ -35,6 +37,7 @@ Allowed action.type values:
 - move_resize_window: {"type":"move_resize_window","title":"Notepad","x":100,"y":80,"width":1200,"height":860}
 - wait_for_window: {"type":"wait_for_window","title":"Calculator","seconds":2.0}
 - relative_click: {"type":"relative_click","title":"Calculator","relative_x":0.5,"relative_y":0.6,"button":"left","clicks":1}
+- relative_drag: {"type":"relative_drag","app":"paint","relative_x":0.4,"relative_y":0.5,"end_relative_x":0.6,"end_relative_y":0.5,"button":"left"}
 - hotkey: {"type":"hotkey","keys":["ctrl","l"]}
 - press: {"type":"press","key":"enter"}
 - type: {"type":"type","text":"text to type"}

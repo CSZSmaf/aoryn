@@ -33,6 +33,7 @@ from desktop_agent.chat_support import (
 )
 from desktop_agent.controller import discover_config_path, load_agent_config, resume_task, run_task
 from desktop_agent.history import clear_runs, list_runs, load_run_details, resolve_artifact_path
+from desktop_agent.plugin_runtime import plugin_catalog
 from desktop_agent.provider_tools import (
     ProviderModelEntry,
     ProviderSnapshot,
@@ -899,6 +900,8 @@ class DashboardApp:
                     return self._serve_asset(path)
                 if path == "/api/meta":
                     return self._send_json(app.meta())
+                if path == "/api/plugins":
+                    return self._send_json({"items": app.plugins()})
                 if path == "/api/runtime-preferences":
                     return self._send_json(app.runtime_preferences.snapshot())
                 if path == "/api/system/paths":
@@ -1176,6 +1179,7 @@ class DashboardApp:
         dom_status = dom_backend_status(config.browser_dom_backend)
         diagnostics = self.system_paths()
         managed_browser = self._managed_browser_status(config)
+        task_plugins = plugin_catalog(config=config)
         return {
             "title": APP_NAME,
             "version": APP_VERSION,
@@ -1237,6 +1241,7 @@ class DashboardApp:
                 "detail": dom_status.detail,
             },
             "managed_browser_status": managed_browser,
+            "task_plugins": task_plugins,
             "planner_modes": [
                 {"value": "auto", "label": "Auto"},
                 {"value": "rule", "label": "Rule"},
@@ -1335,6 +1340,11 @@ class DashboardApp:
                 {"id": "visit_docs", "label": "Open Docs", "task": "visit openai.com/docs"},
                 {"id": "dom_follow_up", "label": "Open and Continue", "task": "visit openai.com and click login"},
                 {"id": "shopping_search", "label": "Find a Product", "task": "shop for high-value men's pants on amazon"},
+                {
+                    "id": "matlab_plot",
+                    "label": "MATLAB Plot",
+                    "task": "用 MATLAB 绘制 y=sin(x) 曲线，保存图像并写出结果说明",
+                },
             ],
             "workflow_recipes": [
                 {
@@ -1423,6 +1433,10 @@ class DashboardApp:
             "jobs": self.queue.list_jobs(limit=8),
             "runs": self._overview_runs(limit=12),
         }
+
+    def plugins(self) -> list[dict[str, Any]]:
+        config = load_agent_config(self.config_path)
+        return plugin_catalog(config=config)
 
     def clear_history(self) -> dict[str, Any]:
         jobs_cleared = self.queue.clear_history()

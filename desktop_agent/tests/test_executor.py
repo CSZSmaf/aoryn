@@ -7,7 +7,9 @@ from desktop_agent.executor import (
     ExecutionCancelled,
     ExecutionError,
     RealDesktopExecutor,
+    _find_existing_browser_window,
     _find_known_blockers,
+    _is_browser_window,
     _resolve_browser_binary,
 )
 from desktop_agent.windows_env import DesktopEnvironment, MonitorSnapshot, Rect, WindowSnapshot
@@ -70,6 +72,30 @@ def test_browser_open_falls_back_to_default_browser(monkeypatch):
     assert opened == ["https://openai.com"]
 
 
+def test_browser_gui_open_skips_dom_and_managed_browser(monkeypatch):
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False, managed_browser_enabled=True, browser_control_mode="hybrid"))
+    executor.managed_browser = object()
+    opened: list[str] = []
+
+    monkeypatch.setattr(executor, "_prepare_for_browser_task", lambda: None)
+    monkeypatch.setattr(
+        executor,
+        "_attempt_managed_browser",
+        lambda operation, action_scope=None: (_ for _ in ()).throw(AssertionError("managed browser should not be used")),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_attempt_dom_navigation",
+        lambda operation: (_ for _ in ()).throw(AssertionError("DOM navigation should not be used")),
+    )
+    monkeypatch.setattr("desktop_agent.executor._resolve_browser_binary", lambda binary: None)
+    monkeypatch.setattr("desktop_agent.executor.webbrowser.open", lambda url: opened.append(url) or True)
+
+    executor.execute(Action.from_dict({"type": "browser_gui_open", "text": "https://cn.bing.com/search?q=test"}))
+
+    assert opened == ["https://cn.bing.com/search?q=test"]
+
+
 def test_launch_browser_raises_if_no_fallback_available(monkeypatch):
     executor = RealDesktopExecutor(AgentConfig(dry_run=False, cursor_motion_enabled=True))
     executor.managed_browser = None
@@ -92,6 +118,31 @@ def test_resolve_browser_binary_uses_known_installation_path(monkeypatch):
     monkeypatch.setattr("desktop_agent.executor.Path.is_file", lambda self: str(self) == known_path)
 
     assert _resolve_browser_binary("msedge.exe") == known_path
+
+
+def test_browser_window_detection_ignores_codex_chromium_shell():
+    codex = WindowSnapshot(
+        handle=1,
+        title="Codex",
+        class_name="Chrome_WidgetWin_1",
+        process_name="Codex.exe",
+    )
+    edge = WindowSnapshot(
+        handle=2,
+        title="北京旅游攻略 - Microsoft Edge",
+        class_name="Chrome_WidgetWin_1",
+        process_name="msedge.exe",
+    )
+    environment = DesktopEnvironment(
+        platform="windows",
+        virtual_bounds=Rect(0, 0, 1920, 1080),
+        foreground_window=codex,
+        visible_windows=[codex, edge],
+    )
+
+    assert not _is_browser_window(codex)
+    assert _is_browser_window(edge)
+    assert _find_existing_browser_window(environment) == edge
 
 
 def test_browser_open_uses_dom_session_in_hybrid_mode(monkeypatch):
@@ -493,6 +544,62 @@ def test_relative_click_targets_window_rect(monkeypatch):
     assert ("focus", 21) in events
     assert any(name == "moveTo" for name, _payload in events)
     assert ("click", (None, None, 2, "left", (300, 350))) in events
+
+
+def test_relative_drag_stops_when_target_app_is_not_foreground(monkeypatch):
+    paint = WindowSnapshot(
+        handle=21,
+        title="Untitled - Paint",
+        class_name="MSPaintApp",
+        process_name="mspaint.exe",
+        rect=Rect(100, 100, 900, 700),
+    )
+    codex = WindowSnapshot(
+        handle=99,
+        title="Codex",
+        class_name="Chrome_WidgetWin_1",
+        process_name="Codex.exe",
+        rect=Rect(0, 0, 1200, 900),
+    )
+    environment = DesktopEnvironment(
+        platform="windows",
+        virtual_bounds=Rect(0, 0, 1920, 1080),
+        monitors=[],
+        foreground_window=codex,
+        visible_windows=[codex, paint],
+    )
+
+    monkeypatch.setattr(
+        "desktop_agent.executor.capture_effective_desktop_environment",
+        lambda config=None: environment,
+    )
+    monkeypatch.setattr(
+        "desktop_agent.executor.find_window",
+        lambda env, query: next(
+            (
+                item
+                for item in env.visible_windows
+                if query.lower() in (item.title or "").lower()
+                or query.lower() in (item.process_name or "").lower()
+            ),
+            None,
+        ),
+    )
+
+    executor = RealDesktopExecutor(AgentConfig(dry_run=False))
+    with pytest.raises(ExecutionError):
+        executor.execute(
+            Action.from_dict(
+                {
+                    "type": "relative_drag",
+                    "app": "paint",
+                    "relative_x": 0.2,
+                    "relative_y": 0.3,
+                    "end_relative_x": 0.4,
+                    "end_relative_y": 0.5,
+                }
+            )
+        )
 
 
 def test_click_action_moves_cursor_before_click_and_emits_progress(monkeypatch):

@@ -847,7 +847,7 @@ def test_build_floating_view_state_running_stopping_and_queued_input():
     stopping = build_floating_view_state(active_job={**active_job, "status": "stopping", "cancel_requested": True})
 
     assert running.mode == "running"
-    assert (running.width, running.height) == (280, 46)
+    assert (running.width, running.height) == (360, 46)
     assert running.show_timer is True
     assert running.show_stop is True
     assert running.show_open is True
@@ -889,14 +889,14 @@ def test_build_floating_view_state_approval_resume_and_waiting_follow_up():
     editing = build_floating_view_state(follow_up_draft="继续整理结果", input_expanded=True)
 
     assert approval.mode == "approval"
-    assert (approval.width, approval.height) == (360, 50)
+    assert (approval.width, approval.height) == (420, 54)
     assert approval.show_continue is True
     assert approval.continue_label == "批准"
     assert approval.show_stop is True
     assert approval.stop_label == "驳回"
 
     assert resume.mode == "resume"
-    assert (resume.width, resume.height) == (360, 50)
+    assert (resume.width, resume.height) == (420, 54)
     assert resume.show_continue is True
     assert resume.continue_label == "恢复"
     assert resume.show_open is True

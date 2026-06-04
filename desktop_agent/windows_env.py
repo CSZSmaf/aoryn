@@ -216,7 +216,10 @@ def focus_window(handle: int) -> bool:
     if user32.IsIconic(handle):
         user32.ShowWindow(handle, 9)
     user32.ShowWindow(handle, 5)
-    return bool(user32.SetForegroundWindow(handle))
+    if user32.GetForegroundWindow() == handle:
+        return True
+    focused = bool(user32.SetForegroundWindow(handle))
+    return focused or user32.GetForegroundWindow() == handle
 
 
 def maximize_window(handle: int) -> bool:

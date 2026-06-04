@@ -1539,6 +1539,7 @@ def _app_aliases(expected: str) -> set[str]:
         "powerpoint": {"powerpoint", "ppt", "powerpnt", "powerpnt.exe"},
         "vscode": {"vscode", "visual studio code", "cursor", "code.exe", "cursor.exe"},
         "paint": {"paint", "mspaint", "mspaint.exe", "画图"},
+        "clock": {"clock", "alarms", "alarm", "timer", "时钟", "闹钟", "计时器"},
         "settings": {"settings", "systemsettings", "systemsettings.exe", "设置"},
         "wechat": {"wechat", "weixin", "wechat.exe", "weixin.exe", "微信"},
         "dingtalk": {"dingtalk", "dingtalk.exe", "钉钉"},

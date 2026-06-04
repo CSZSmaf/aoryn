@@ -16,10 +16,13 @@ Nothing here invents product prices, ratings, or search results.
 
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import re
 import socket
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -84,10 +87,10 @@ def classify_page(snapshot: dict[str, Any] | None) -> PageReading:
     ):
         if len(text) < 600:
             return PageReading("login", url, title, text, "页面跳转到登录，未能在未登录状态下获取真实数据。")
-    if len(text) < 80:
-        return PageReading("empty", url, title, text, "页面几乎没有可读取的文本（可能仍在加载或被拦截）。")
     if _looks_like_search_results_page(url=url, title=title, text=text):
         return PageReading("search_results", url, title, text, "这是搜索结果页，不是可直接引用的攻略正文页。")
+    if len(text) < 80:
+        return PageReading("empty", url, title, text, "页面几乎没有可读取的文本（可能仍在加载或被拦截）。")
     return PageReading("ok", url, title, text, "已成功读取页面文本内容。")
 
 
@@ -173,6 +176,98 @@ def model_chat(config: Any, system: str, user: str, *, max_tokens: int = 700) ->
         return None
     content = _extract_message_content(data)
     return content or None
+
+
+def capture_screen_image(path: str | Path) -> Path | None:
+    """Capture the current desktop image for visual reading.
+
+    This is intentionally a screenshot capture, not a DOM/page-source read. The
+    resulting image is resized before saving so it is practical to send to a
+    remote vision/OCR API.
+    """
+
+    target = Path(path)
+    try:
+        from PIL import ImageGrab
+    except Exception:
+        return None
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        image = ImageGrab.grab()
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.thumbnail((2600, 2600))
+        if target.suffix.lower() in {".jpg", ".jpeg"}:
+            image.save(target, format="JPEG", quality=88, optimize=True)
+        else:
+            image.save(target)
+        return target
+    except Exception:
+        return None
+
+
+def model_vision_ocr(config: Any, image_path: str | Path, prompt: str, *, max_tokens: int = 1200) -> str | None:
+    """Best-effort OCR via the configured OpenAI-compatible vision API."""
+
+    base_url = str(getattr(config, "model_base_url", "") or "").strip()
+    if not base_url or not endpoint_reachable(base_url, timeout=1.5):
+        return None
+    try:
+        import requests
+    except Exception:
+        return None
+    path = Path(image_path)
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if not raw:
+        return None
+
+    model_name = str(getattr(config, "model_name", "") or "").strip() or "auto"
+    if model_name == "auto":
+        model_name = _discover_model_name(requests, base_url, config) or "gpt-4o-mini"
+    api_key = str(getattr(config, "model_api_key", "") or "").strip()
+    mime_type = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+    data_url = f"data:{mime_type};base64,{base64.b64encode(raw).decode('ascii')}"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是严谨的屏幕 OCR 助手。只根据截图中肉眼可见的内容识别文字，"
+                    "不要补全、不要根据网页知识猜测。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            },
+        ],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    try:
+        response = requests.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=min(float(getattr(config, "model_request_timeout", 90.0) or 90.0), 90.0),
+        )
+        if response.status_code >= 400:
+            return None
+        data = response.json()
+    except Exception:
+        return None
+    return _extract_message_content(data) or None
 
 
 def _discover_model_name(requests_module: Any, base_url: str, config: Any) -> str | None:

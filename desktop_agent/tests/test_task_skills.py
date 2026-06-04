@@ -20,6 +20,9 @@ def workdir():
         shutil.rmtree(path, ignore_errors=True)
 from desktop_agent.task_skills import (
     TaskSkillRunner,
+    _extract_timer_duration,
+    _parse_model_strokes,
+    _parse_visual_ocr_response,
     build_beijing_plan_text,
     build_beijing_travel_summary,
     compose_poem,
@@ -49,6 +52,11 @@ def runner() -> TaskSkillRunner:
         ("open calculator and calculate 1+1", "calculator"),
         ("打开记事本写一首诗", "notepad_poem"),
         ("用记事本写诗", "notepad_poem"),
+        ("用画图工具画一只猫", "paint_drawing"),
+        ("open paint and draw a cat", "paint_drawing"),
+        ("用画图工具画一个房子", "paint_drawing"),
+        ("用计时器定一个1分钟闹钟", "clock_timer_alarm"),
+        ("open clock and set a 30 second timer", "clock_timer_alarm"),
         ("上购物网站搜索男性裤子并分析性价比", "shopping_pants"),
         ("shop for high-value men's pants on amazon", "shopping_pants"),
         ("打开浏览器搜索北京旅游攻略，阅读多个网页后总结，并把总结内容写在记事本上", "travel_notepad"),
@@ -207,6 +215,33 @@ def test_build_beijing_travel_summary_requires_multiple_readable_pages():
     assert "本次已成功读取 2 个网页" in summary
 
 
+def test_parse_visual_ocr_response_accepts_json_fence():
+    raw = '```json\n{"title":"Visible Beijing Guide","visible_text":"Forbidden City Great Wall Hutong"}\n```'
+
+    title, text = _parse_visual_ocr_response(raw, default_title="fallback")
+
+    assert title == "Visible Beijing Guide"
+    assert "Forbidden City" in text
+
+
+def test_parse_visual_ocr_response_accepts_jsonish_text():
+    raw = '```json\n{"title":"Visible Beijing Guide","visible_text":"Forbidden City\\nGreat Wall"}\n```'
+
+    title, text = _parse_visual_ocr_response(raw, default_title="fallback")
+
+    assert title == "Visible Beijing Guide"
+    assert "Great Wall" in text
+
+
+def test_parse_visual_ocr_response_accepts_truncated_visible_text():
+    raw = '```json\n{"title":"Visible Beijing Guide","visible_text":"Forbidden City\\nGreat Wall'
+
+    title, text = _parse_visual_ocr_response(raw, default_title="fallback")
+
+    assert title == "Visible Beijing Guide"
+    assert text == "Forbidden City\nGreat Wall"
+
+
 def test_extract_qq_group_message_accepts_quoted_instruction():
     request = extract_qq_group_message("打开QQ在群聊“项目演示群”发送消息“今天的演示已准备好”")
 
@@ -219,6 +254,19 @@ def test_extract_qq_group_message_accepts_labels():
 
     assert request.group_name == "课程实训群"
     assert request.message == "演示开始"
+
+
+@pytest.mark.parametrize(
+    "task, seconds, label",
+    [
+        ("用计时器定一个1分钟闹钟", 60, "1分钟"),
+        ("open clock and set a 30 second timer", 30, "30秒"),
+        ("设置两分钟计时器", 120, "2分钟"),
+        ("定个闹钟", 60, "1分钟"),
+    ],
+)
+def test_extract_timer_duration(task: str, seconds: int, label: str):
+    assert _extract_timer_duration(task) == (seconds, label)
 
 
 # --- end-to-end via MockExecutor ------------------------------------------
@@ -262,6 +310,166 @@ def test_run_notepad_poem_writes_text_file(workdir, runner: TaskSkillRunner):
     assert "《" in result.answer
 
 
+def test_run_paint_drawing_uses_cat_fallback_when_api_unavailable(workdir, runner: TaskSkillRunner):
+    executor = MockExecutor(AgentConfig())
+    out = workdir / "out"
+
+    result = runner.run(
+        "paint_drawing",
+        "用画图工具画一只猫",
+        executor=executor,
+        run_dir=workdir / "run",
+        output_dir=out,
+        open_artifacts=False,
+    )
+
+    assert result.handled and result.completed
+    assert not result.artifacts
+    assert executor.executed[0]["type"] == "launch_app"
+    assert executor.executed[0]["app"] == "paint"
+    assert any(item.get("type") == "maximize_app" and item.get("app") == "paint" for item in executor.executed)
+    drag_actions = [item for item in executor.executed if item.get("type") == "relative_drag"]
+    assert len(drag_actions) >= 80
+    assert all(item.get("app") == "paint" for item in drag_actions)
+    assert all(0 <= float(item.get("relative_x")) <= 1 for item in drag_actions)
+    assert all(0 <= float(item.get("end_relative_x")) <= 1 for item in drag_actions)
+    assert "拖拽" in result.answer and "逐笔" in result.answer
+    assert "内置猫咪兜底笔画" in result.answer
+
+
+def test_run_paint_drawing_uses_model_generated_strokes(workdir, monkeypatch):
+    config = AgentConfig(
+        model_provider="openai_compatible",
+        model_base_url="https://api.example.com/v1",
+        model_api_key="test-key",
+    )
+    executor = MockExecutor(config)
+    captured: dict[str, str] = {}
+
+    def fake_model_chat(config, system, user, *, max_tokens=700):
+        captured["user"] = user
+        return """
+        {"description":"房子简笔画","strokes":[
+          [[0.2,0.55],[0.5,0.25],[0.8,0.55],[0.2,0.55]],
+          [[0.28,0.55],[0.28,0.85],[0.72,0.85],[0.72,0.55]],
+          [[0.45,0.85],[0.45,0.68],[0.56,0.68],[0.56,0.85]],
+          [[0.34,0.62],[0.42,0.62],[0.42,0.70],[0.34,0.70]],
+          [[0.60,0.62],[0.68,0.62],[0.68,0.70],[0.60,0.70]]
+        ]}
+        """
+
+    monkeypatch.setattr("desktop_agent.task_skills.model_chat", fake_model_chat)
+
+    result = TaskSkillRunner(config).run(
+        "paint_drawing",
+        "用画图工具画一个房子",
+        executor=executor,
+        run_dir=workdir / "run",
+        output_dir=workdir / "out",
+        open_artifacts=False,
+    )
+
+    assert result.handled and result.completed
+    assert "房子" in captured["user"]
+    assert "API 模型生成笔画计划" in result.answer
+    drag_actions = [item for item in executor.executed if item.get("type") == "relative_drag"]
+    assert len(drag_actions) == 15
+    assert all(item.get("app") == "paint" for item in drag_actions)
+
+
+def test_parse_model_strokes_accepts_json_comments_from_api():
+    raw = """
+    {
+      "description": "simple house",
+      "strokes": [
+        [[0.3, 0.5], [0.3, 0.8]],  // left wall
+        [[0.7, 0.5], [0.7, 0.8]],  // right wall
+        [[0.3, 0.8], [0.5, 1.0]],  // roof
+        [[0.7, 0.8], [0.5, 1.0]],  // roof
+      ]
+    }
+    """
+
+    strokes = _parse_model_strokes(raw)
+
+    assert strokes is not None
+    assert len(strokes) == 4
+
+
+def test_run_paint_drawing_prefers_smart_gptsapi_models(workdir, monkeypatch):
+    config = AgentConfig(
+        model_provider="openai_compatible",
+        model_base_url="https://api.gptsapi.net/v1",
+        model_name="gpt-4o-mini",
+        model_api_key="test-key",
+    )
+    executor = MockExecutor(config)
+    attempted: list[str] = []
+
+    def fake_model_chat(config, system, user, *, max_tokens=700):
+        attempted.append(config.model_name)
+        if config.model_name == "claude-opus-4-8":
+            return "not json"
+        return """
+        {"description":"house","strokes":[
+          [[0.2,0.55],[0.5,0.25]],
+          [[0.5,0.25],[0.8,0.55]],
+          [[0.28,0.55],[0.28,0.85]],
+          [[0.72,0.55],[0.72,0.85]]
+        ]}
+        """
+
+    monkeypatch.setattr("desktop_agent.task_skills.model_chat", fake_model_chat)
+
+    result = TaskSkillRunner(config).run(
+        "paint_drawing",
+        "用画图工具画一个房子",
+        executor=executor,
+        run_dir=workdir / "run",
+        output_dir=workdir / "out",
+        open_artifacts=False,
+    )
+
+    assert result.handled and result.completed
+    assert attempted[:2] == ["claude-opus-4-8", "claude-sonnet-4-6"]
+    assert "claude-sonnet-4-6" in result.answer
+
+
+def test_run_paint_drawing_requires_model_for_non_fallback_subject(workdir, runner: TaskSkillRunner):
+    executor = MockExecutor(AgentConfig())
+
+    result = runner.run(
+        "paint_drawing",
+        "用画图工具画一辆汽车",
+        executor=executor,
+        run_dir=workdir / "run",
+        output_dir=workdir / "out",
+        open_artifacts=False,
+    )
+
+    assert result.handled and not result.completed
+    assert result.requires_human
+    assert "没有可用的非本地 API 模型" in result.answer
+    assert not [item for item in executor.executed if item.get("type") == "relative_drag"]
+
+
+def test_run_clock_timer_alarm_opens_clock_in_dry_run(runner: TaskSkillRunner):
+    config = AgentConfig(dry_run=True)
+    executor = MockExecutor(config)
+
+    result = TaskSkillRunner(config).run(
+        "clock_timer_alarm",
+        "用计时器定一个1分钟闹钟",
+        executor=executor,
+    )
+
+    assert result.handled and result.completed
+    assert executor.state.active_app == "clock"
+    assert executor.executed[0]["type"] == "open_app_if_needed"
+    assert executor.executed[0]["app"] == "clock"
+    assert "1分钟" in result.answer
+
+
 class _FakePageExecutor(MockExecutor):
     """MockExecutor whose browser_snapshot returns a fixed real-looking page."""
 
@@ -274,11 +482,42 @@ class _FakePageExecutor(MockExecutor):
 
 
 class _FakeTravelExecutor(MockExecutor):
-    """Returns a different browser snapshot for each opened travel page."""
+    """Returns a different visual/OCR snapshot for each opened travel page."""
 
     def __init__(self, config, snapshots: list[dict]):
         super().__init__(config)
         self._snapshots = snapshots
+
+    def visual_browser_decision(self, *, kind: str, index: int, prompt: str):
+        if kind == "search_home":
+            return {
+                "state": "search_home",
+                "search_box": {"x": 640, "y": 360},
+                "visible_text": "Bing 搜索",
+            }
+        if kind == "search_results":
+            return {
+                "state": "search_results",
+                "human_verification": False,
+                "candidates": [
+                    {
+                        "label": snapshot.get("title", f"结果 {candidate_index}"),
+                        "url": snapshot.get("url", ""),
+                        "x": 360,
+                        "y": 180 + candidate_index * 80,
+                        "reason": "攻略结果",
+                    }
+                    for candidate_index, snapshot in enumerate(self._snapshots, start=1)
+                ],
+            }
+        return {}
+
+    def visual_page_snapshot(self, *, url: str, label: str, index: int):
+        snapshot_index = max(0, min(index - 1, len(self._snapshots) - 1))
+        snapshot = dict(self._snapshots[snapshot_index])
+        snapshot.setdefault("url", url)
+        snapshot.setdefault("title", label)
+        return snapshot
 
     def browser_snapshot(self):
         index = max(0, len(self.state.browser_history) - 1)
@@ -348,13 +587,61 @@ def test_run_travel_notepad_opens_multiple_pages_and_writes_text(workdir, runner
     )
 
     assert result.handled and result.completed
-    assert len([a for a in executor.executed if a.get("type") == "browser_open"]) == 4
+    gui_targets = [a.get("text") for a in executor.executed if a.get("type") == "browser_gui_open"]
+    assert any("cn.bing.com/search?q=Beijing+travel+guide+3+day+itinerary" in str(text) for text in gui_targets)
+    assert len([text for text in gui_targets if "bing.com/search?q=Beijing+travel+guide+3+day+itinerary" in str(text)]) >= 3
+    assert len([a for a in executor.executed if a.get("type") == "click"]) >= 3
+    assert not [a for a in executor.executed if a.get("type") == "hotkey" and a.get("keys") == ["alt", "left"]]
+    assert not [a for a in executor.executed if a.get("type") == "browser_open"]
     assert result.artifacts and result.artifacts[0].endswith(".txt")
     saved = (workdir / "out") / result.artifacts[0]
     text = saved.read_text(encoding="utf-8-sig")
     assert "北京旅游攻略总结" in text
+    assert "多模态视觉分析" in text
     assert "故宫" in text and "长城" in text and "颐和园" in text
-    assert "读取 4 个页面" in result.answer
+    assert "读取 3 个页面" in result.answer
+
+
+def test_run_travel_notepad_recovers_when_result_click_stays_on_search_page(workdir, runner: TaskSkillRunner):
+    class MissedClickExecutor(_FakeTravelExecutor):
+        def __init__(self, config, snapshots: list[dict]):
+            super().__init__(config, snapshots)
+            self.page_calls = 0
+
+        def visual_page_snapshot(self, *, url: str, label: str, index: int):
+            self.page_calls += 1
+            if self.page_calls == 1:
+                return {
+                    "url": "https://www.bing.com/search?q=Beijing+travel+guide+3+day+itinerary",
+                    "title": "Bing 搜索结果页",
+                    "text": "北京 Beijing travel guide 约 24,600 个结果 网页 图片 视频",
+                }
+            snapshot_index = max(0, min(self.page_calls - 2, len(self._snapshots) - 1))
+            snapshot = dict(self._snapshots[snapshot_index])
+            snapshot.setdefault("url", url)
+            snapshot.setdefault("title", label)
+            return snapshot
+
+    snapshots = [
+        {"url": "https://example.test/1", "title": "北京旅游攻略一", "text": "故宫 天安门 景山 王府井 预约 地铁 " * 20},
+        {"url": "https://example.test/2", "title": "北京旅游攻略二", "text": "长城 八达岭 慕田峪 鸟巢 水立方 " * 20},
+        {"url": "https://example.test/3", "title": "北京旅游攻略三", "text": "颐和园 圆明园 胡同 什刹海 南锣鼓巷 " * 20},
+    ]
+    executor = MissedClickExecutor(AgentConfig(), snapshots)
+
+    result = runner.run(
+        "travel_notepad",
+        "北京旅游多页阅读写记事本",
+        executor=executor,
+        run_dir=workdir / "run",
+        output_dir=workdir / "out",
+        open_artifacts=False,
+    )
+
+    assert result.handled and result.completed
+    assert executor.page_calls >= 3
+    assert len([a for a in executor.executed if a.get("type") == "click"]) >= 3
+    assert "2 个页面读取到有效正文" in result.answer or "3 个页面读取到有效正文" in result.answer
 
 
 def test_run_travel_notepad_uses_model_summary_when_available(workdir, monkeypatch):
@@ -420,6 +707,61 @@ def test_run_travel_notepad_does_not_complete_with_one_readable_page(workdir, ru
     assert "二、综合建议" not in text
 
 
+def test_run_travel_notepad_rejects_non_target_ocr_window(workdir, runner: TaskSkillRunner):
+    snapshots = [
+        {
+            "url": "https://example.test/wrong",
+            "title": "Codex",
+            "text": "修复悬浮窗并增强 computeruse desktop_agent_project PROGRESS 打开浏览器搜索北京旅游攻略",
+        }
+        for _ in range(4)
+    ]
+    executor = _FakeTravelExecutor(AgentConfig(), snapshots)
+
+    result = runner.run(
+        "travel_notepad",
+        "打开浏览器搜索北京旅游攻略，阅读多个网页后总结，并把总结内容写在记事本上",
+        executor=executor,
+        run_dir=workdir / "run",
+        output_dir=workdir / "out",
+        open_artifacts=False,
+    )
+
+    assert result.handled and not result.completed
+    assert result.error == "insufficient readable travel pages"
+    saved = (workdir / "out") / result.artifacts[0]
+    text = saved.read_text(encoding="utf-8-sig")
+    assert "当前工作窗口" in text
+    assert "本次已成功读取 4 个网页" not in text
+
+
+def test_run_travel_notepad_rejects_bing_image_preview(workdir, runner: TaskSkillRunner):
+    snapshots = [
+        {
+            "url": "https://www.bing.com/images/search?view=detail",
+            "title": "Ultimate Beijing 3-Day Itinerary",
+            "text": "访问网站 此网站上的更多图像 视觉搜索 保存 查看图片 Beijing itinerary",
+        }
+        for _ in range(4)
+    ]
+    executor = _FakeTravelExecutor(AgentConfig(), snapshots)
+
+    result = runner.run(
+        "travel_notepad",
+        "打开浏览器搜索北京旅游攻略，阅读多个网页后总结，并把总结内容写在记事本上",
+        executor=executor,
+        run_dir=workdir / "run",
+        output_dir=workdir / "out",
+        open_artifacts=False,
+    )
+
+    assert result.handled and not result.completed
+    saved = (workdir / "out") / result.artifacts[0]
+    text = saved.read_text(encoding="utf-8-sig")
+    assert "图片预览层" in text
+    assert "本次已成功读取 4 个网页" not in text
+
+
 def test_run_travel_notepad_pauses_on_verification(runner: TaskSkillRunner):
     snapshots = [
         {
@@ -441,7 +783,8 @@ def test_run_travel_notepad_pauses_on_verification(runner: TaskSkillRunner):
     assert result.requires_human is True
     assert result.interruption_kind == "generic_human_verification"
     assert "人机验证" in result.answer or "安全验证" in result.answer
-    assert len([a for a in executor.executed if a.get("type") == "browser_open"]) == 1
+    assert [a for a in executor.executed if a.get("type") == "click"]
+    assert not [a for a in executor.executed if a.get("type") == "browser_open"]
 
 
 def test_run_qq_group_message_executes_search_and_send(runner: TaskSkillRunner):
@@ -460,6 +803,26 @@ def test_run_qq_group_message_executes_search_and_send(runner: TaskSkillRunner):
     typed = [item.get("text") for item in executor.executed if item.get("type") == "type"]
     assert typed == ["项目演示群", "今天的演示已准备好"]
     assert [item.get("key") for item in executor.executed if item.get("type") == "press"].count("enter") == 2
+
+
+def test_run_qq_group_message_pauses_when_group_not_verified(runner: TaskSkillRunner):
+    class UnverifiedQQExecutor(MockExecutor):
+        def qq_group_verification(self, *, group_name: str):
+            return {"matched": False, "reason": f"未看到目标群聊 {group_name}"}
+
+    executor = UnverifiedQQExecutor(AgentConfig(dry_run=False))
+
+    result = runner.run(
+        "qq_group_message",
+        "打开QQ在群聊“项目演示群”发送消息“今天的演示已准备好”",
+        executor=executor,
+    )
+
+    assert result.handled and not result.completed
+    assert result.requires_human is True
+    assert result.interruption_kind == "qq_group_verification"
+    typed = [item.get("text") for item in executor.executed if item.get("type") == "type"]
+    assert typed == ["项目演示群"]
 
 
 def test_run_qq_group_message_requires_group_and_message(runner: TaskSkillRunner):

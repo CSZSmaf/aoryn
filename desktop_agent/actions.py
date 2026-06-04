@@ -27,6 +27,8 @@ class Action:
     end_y: int | None = None
     relative_x: float | None = None
     relative_y: float | None = None
+    end_relative_x: float | None = None
+    end_relative_y: float | None = None
     button: str = "left"
     clicks: int = 1
     seconds: float | None = None
@@ -59,6 +61,8 @@ class Action:
             end_y=_optional_int(payload.get("end_y")),
             relative_x=_optional_float(payload.get("relative_x")),
             relative_y=_optional_float(payload.get("relative_y")),
+            end_relative_x=_optional_float(payload.get("end_relative_x")),
+            end_relative_y=_optional_float(payload.get("end_relative_y")),
             button=str(payload.get("button", "left")).strip().lower() or "left",
             clicks=int(payload.get("clicks", 1) or 1),
             seconds=_optional_float(payload.get("seconds")),
@@ -78,6 +82,9 @@ class Action:
         elif self.type == "open_app_if_needed":
             if not self.app:
                 raise ActionValidationError("open_app_if_needed requires app.")
+        elif self.type in {"focus_app", "maximize_app"}:
+            if not self.app:
+                raise ActionValidationError(f"{self.type} requires app.")
         elif self.type in {
             "focus_window",
             "minimize_window",
@@ -100,6 +107,15 @@ class Action:
                 raise ActionValidationError("relative_click requires relative_x and relative_y.")
             if self.button not in {"left", "right", "middle"}:
                 raise ActionValidationError("relative_click.button must be left/right/middle.")
+        elif self.type == "relative_drag":
+            if not (self.app or (self.title or "").strip() or (self.text or "").strip()):
+                raise ActionValidationError("relative_drag requires app, title, or text.")
+            if None in {self.relative_x, self.relative_y, self.end_relative_x, self.end_relative_y}:
+                raise ActionValidationError(
+                    "relative_drag requires relative_x, relative_y, end_relative_x, and end_relative_y."
+                )
+            if self.button not in {"left", "right", "middle"}:
+                raise ActionValidationError("relative_drag.button must be left/right/middle.")
         elif self.type == "hotkey":
             if not self.keys:
                 raise ActionValidationError("hotkey requires keys.")
@@ -114,7 +130,7 @@ class Action:
         elif self.type == "type":
             if self.text is None:
                 raise ActionValidationError("type requires text.")
-        elif self.type in {"browser_open", "browser_search"}:
+        elif self.type in {"browser_open", "browser_search", "browser_gui_open"}:
             if not (self.text or "").strip():
                 raise ActionValidationError(f"{self.type} requires text.")
         elif self.type == "browser_dom_click":
@@ -175,6 +191,8 @@ class Action:
             "end_y": self.end_y,
             "relative_x": self.relative_x,
             "relative_y": self.relative_y,
+            "end_relative_x": self.end_relative_x,
+            "end_relative_y": self.end_relative_y,
             "button": self.button,
             "clicks": self.clicks,
             "seconds": self.seconds,

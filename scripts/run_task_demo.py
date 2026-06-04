@@ -1,12 +1,13 @@
-"""Run the three required live-demo desktop tasks.
+"""Run the live-demo desktop tasks.
 
 This drives the real desktop executor. It opens Calculator, the browser,
-Notepad, and optionally QQ.
+Typora-compatible Markdown reports, Paint, Clock, and optionally QQ.
 
 Usage:
     python scripts/run_task_demo.py
     python scripts/run_task_demo.py 1 2
     python scripts/run_task_demo.py 3 --qq-group "项目演示群" --qq-message "今天的演示已准备好"
+    python scripts/run_task_demo.py 4 5
 
 Environment fallback for task #3:
     AORYN_DEMO_QQ_GROUP
@@ -30,15 +31,17 @@ from desktop_agent.controller import run_task  # noqa: E402
 BASE_TASKS: dict[int, tuple[str, str]] = {
     1: ("计算器 1+1", "打开计算器计算1+1"),
     2: (
-        "北京旅游攻略 -> 记事本",
-        "打开浏览器搜索北京旅游攻略，阅读多个网页后总结，并把总结内容写在记事本上",
+        "北京旅游攻略 -> Typora 报告",
+        "打开浏览器搜索北京旅游攻略，阅读多个网页后总结，并用 Typora 写一份 Markdown 报告",
     ),
+    4: ("画图画猫", "用画图工具画一只猫"),
+    5: ("计时器闹钟", "用计时器定一个1分钟闹钟"),
 }
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the three Aoryn live-demo tasks.")
-    parser.add_argument("tasks", nargs="*", type=int, help="Task numbers to run: 1, 2, 3. Defaults to all.")
+    parser = argparse.ArgumentParser(description="Run the Aoryn live-demo tasks.")
+    parser.add_argument("tasks", nargs="*", type=int, help="Task numbers to run: 1, 2, 3, 4, 5. Defaults to 1, 2, 3.")
     parser.add_argument("--qq-group", default=os.environ.get("AORYN_DEMO_QQ_GROUP", ""), help="Target QQ group name.")
     parser.add_argument("--qq-message", default=os.environ.get("AORYN_DEMO_QQ_MESSAGE", ""), help="Message to send.")
     return parser
@@ -74,8 +77,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(list(sys.argv[1:] if argv is None else argv))
     selected = _select_tasks(args.tasks, qq_group=args.qq_group, qq_message=args.qq_message)
     print("=" * 72)
-    print(" Aoryn 桌面智能代理 - 三项演示任务")
-    print(" 将操作真实桌面：计算器、浏览器、记事本；选择任务 3 时还会操作 QQ。")
+    print(" Aoryn 桌面智能代理 - 演示任务")
+    print(" 将操作真实桌面：计算器、浏览器、Markdown/Typora、画图、时钟；选择任务 3 时还会操作 QQ。")
     print("=" * 72)
 
     for ordinal, (label, task) in enumerate(selected, start=1):

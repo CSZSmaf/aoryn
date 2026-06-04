@@ -2390,7 +2390,14 @@ function findProviderProfile(value = elements.modelProvider.value) {
 function buildStarterSuggestions() {
   const recipes = (state.meta?.workflow_recipes || []).map(localizeWorkflowRecipe);
   const presets = (state.meta?.presets || []).map(localizePreset);
-  const merged = [...recipes, ...presets];
+  const pluginSuggestions = buildPluginItems()
+    .filter((item) => item.task)
+    .map((item) => ({
+      label: item.name,
+      task: item.task,
+      description: item.description || item.statusDetail || item.statusLabel,
+    }));
+  const merged = [...pluginSuggestions, ...recipes, ...presets];
   const seen = new Set();
 
   return merged
@@ -2434,6 +2441,7 @@ function localizePreset(item) {
     visit_docs: { label: "浏览文档", description: "打开文档页面。" },
     dom_follow_up: { label: "登录流程", description: "验证点击和后续输入。" },
     shopping_search: { label: "购物搜索", description: "测试搜索、筛选和排序。" },
+    matlab_plot: { label: "MATLAB 插件", description: "调用专业软件插件生成函数曲线。" },
   }[item.id];
 
   return {
@@ -2441,6 +2449,25 @@ function localizePreset(item) {
     task: item.task,
     description: state.locale === "zh-CN" && localized ? localized.description : item.label || item.task,
   };
+}
+
+function buildPluginItems() {
+  return (state.meta?.task_plugins || [])
+    .map((plugin) => {
+      const status = plugin.status || {};
+      const ready = status.state === "ready" || status.state === "available";
+      return {
+        id: normalizeText(plugin.id),
+        name: normalizeText(plugin.name || plugin.id),
+        description: normalizeText(plugin.description || ""),
+        task: normalizeText(plugin.demo_task || ""),
+        statusLabel: normalizeText(status.label || (ready ? "Ready" : "Needs setup")),
+        statusDetail: normalizeText(status.detail || ""),
+        ready,
+      };
+    })
+    .filter((item) => item.id && item.name)
+    .slice(0, 3);
 }
 
 function localizeWorkflowRecipe(item) {
@@ -4278,6 +4305,7 @@ function renderWelcomeMessage() {
   }
   const recentItems = buildWelcomeRecentItems();
   const starterItems = buildStarterSuggestions().slice(0, 3);
+  const pluginItems = buildPluginItems();
   const capabilityItems = [
     tr("可见执行与截图回放", "Visible runs and screenshot replay"),
     tr("本地优先的模型与浏览器设置", "Local-first model and browser setup"),
@@ -4339,6 +4367,35 @@ function renderWelcomeMessage() {
             }
           </div>
         </section>
+        ${
+          pluginItems.length
+            ? `
+        <section class="welcome-card">
+          <p class="welcome-card__eyebrow">${escapeHtml(tr("插件能力", "Plugins"))}</p>
+          <div class="welcome-card__list">
+            ${pluginItems
+              .map(
+                (item) => `
+                  <div class="welcome-card__item">
+                    <span class="welcome-card__badge">${escapeHtml(item.statusLabel)}</span>
+                    <strong>${escapeHtml(item.name)}</strong>
+                    <span>${escapeHtml(item.statusDetail || item.description)}</span>
+                    ${
+                      item.task
+                        ? `<button class="suggestion-chip" type="button" data-start-agent-task="${escapeHtml(item.task)}">
+                            ${escapeHtml(tr("运行插件演示", "Run plugin demo"))}
+                          </button>`
+                        : ""
+                    }
+                  </div>
+                `
+              )
+              .join("")}
+          </div>
+        </section>
+            `
+            : ""
+        }
         <section class="welcome-card">
           <p class="welcome-card__eyebrow">${escapeHtml(tr("最近记录", "Recent history"))}</p>
           <div class="welcome-card__list">

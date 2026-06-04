@@ -80,13 +80,13 @@ class DesktopShellUnavailable(RuntimeError):
 
 
 _FLOATING_IDLE_WIDTH = 220
-_FLOATING_RUNNING_WIDTH = 280
+_FLOATING_RUNNING_WIDTH = 360
 _FLOATING_EXPANDED_WIDTH = 440
-_FLOATING_DECISION_WIDTH = 360
+_FLOATING_DECISION_WIDTH = 420
 _FLOATING_IDLE_HEIGHT = 46
 _FLOATING_EXPANDED_HEIGHT = 54
-_FLOATING_DECISION_HEIGHT = 50
-_FLOATING_TITLE_LIMIT = 22
+_FLOATING_DECISION_HEIGHT = 54
+_FLOATING_TITLE_LIMIT = 38
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,6 +604,7 @@ if QApplication is not None:
             self.task_label.setObjectName("floatingTaskLabel")
             self.task_label.setMinimumWidth(0)
             self.task_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            self.task_label.setWordWrap(False)
             card_layout.addWidget(self.task_label, 1)
 
             self.timer_label = QLabel("--", self.card)
@@ -620,25 +621,25 @@ if QApplication is not None:
 
             self.submit_button = QPushButton("排队", self.card)
             self.submit_button.setObjectName("floatingPrimaryButton")
-            self.submit_button.setMinimumWidth(50)
+            self.submit_button.setMinimumWidth(54)
             self.submit_button.clicked.connect(self._handle_submit)
             card_layout.addWidget(self.submit_button)
 
             self.continue_button = QPushButton("继续", self.card)
             self.continue_button.setObjectName("floatingPrimaryButton")
-            self.continue_button.setMinimumWidth(50)
+            self.continue_button.setMinimumWidth(56)
             self.continue_button.clicked.connect(self._handle_continue_follow_up)
             card_layout.addWidget(self.continue_button)
 
             self.stop_button = QPushButton("停止", self.card)
             self.stop_button.setObjectName("floatingDangerButton")
-            self.stop_button.setMinimumWidth(46)
+            self.stop_button.setMinimumWidth(54)
             self.stop_button.clicked.connect(self._handle_stop_action)
             card_layout.addWidget(self.stop_button)
 
             self.open_button = QPushButton("打开", self.card)
             self.open_button.setObjectName("floatingGhostButton")
-            self.open_button.setMinimumWidth(44)
+            self.open_button.setMinimumWidth(50)
             self.open_button.clicked.connect(self._on_open_main)
             card_layout.addWidget(self.open_button)
 
