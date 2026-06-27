@@ -1,6 +1,6 @@
 export const siteCopy = {
   "zh-CN": {
-    brandDescriptor: "可见执行，本地优先",
+    brandDescriptor: "证据优先，本地执行",
     langSwitch: "EN",
     nav: {
       home: "首页",
@@ -65,7 +65,7 @@ export const siteCopy = {
       },
     },
     footer: {
-      tagline: "身份在云端，工作流和运行记录留在本地。",
+      tagline: "官网展示产品与下载入口，桌面端保留工作流、截图和运行记录。",
       copyright: "Aoryn. All rights reserved.",
     },
     pages: {
@@ -77,7 +77,7 @@ export const siteCopy = {
         hero: {
           eyebrow: "本地优先的桌面 Agent",
           title: "让桌面执行清晰、可控、可恢复。",
-          body: "Aoryn 把对话、执行、截图和时间线收进同一个工作台，让每一次自动化都有可观察的过程和可接手的状态。",
+          body: "Aoryn 是本地优先的 Windows 桌面 AI Agent / 工作台。它把任务规划、视觉分析、网页研究、执行日志和证据结果放在同一个界面，让复杂任务真实可见、稳定完成。",
           primaryCta: "下载桌面版",
           secondaryCta: "查看工作台",
           tertiaryCta: "了解产品",
@@ -101,7 +101,7 @@ export const siteCopy = {
         ],
         stage: {
           eyebrow: "工作台视角",
-          title: "执行留在本地，访问由账号管理。",
+          title: "生成桌面智能代理系统成果交付报告",
           body: "桌面应用负责真实执行和回放，官网账号只负责身份、下载和访问边界。",
           windowLabel: "Aoryn Workbench",
           windowMeta: "Visible runs, local history, recoverable workflow",
@@ -109,8 +109,8 @@ export const siteCopy = {
           railLabel: "Workbench",
           railItems: ["Agent", "Chat", "Timeline", "History"],
           focusLabel: "当前主线",
-          focusTitle: "任务 / 执行 / 时间线",
-          focusBody: "把一次桌面任务整理成可观察、可暂停、可恢复的工作链。",
+          focusTitle: "计划 / 执行 / 证据 / 结果",
+          focusBody: "把一次桌面任务整理成可观察、可暂停、可恢复、可交付的工作链。",
           chips: ["Visible execution", "Local-first data", "Recoverable runs"],
           metrics: [
             { label: "云端保存", value: "身份与下载权限" },

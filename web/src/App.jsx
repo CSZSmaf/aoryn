@@ -142,6 +142,217 @@ function SectionHeading({ eyebrow, title, body }) {
   );
 }
 
+function WorkbenchMockup({ pageCopy, stageBody, stageFocusBody, stageStatus, isZh }) {
+  const progressSteps = isZh
+    ? ["理解目标", "拆解计划", "选择工具", "执行中", "验证结果", "完成"]
+    : ["Understand", "Plan", "Select tools", "Executing", "Verify", "Done"];
+  const sidebarItems = isZh
+    ? ["概览", "计划", "执行", "文件", "知识库", "工具", "设置"]
+    : ["Overview", "Plan", "Run", "Files", "Knowledge", "Tools", "Settings"];
+  const timeline = isZh
+    ? [
+        ["09:41", "读取需求文档", "docs/PRD.md"],
+        ["09:43", "生成执行计划", "plan.md"],
+        ["09:45", "检查相关资料", "12 个结果"],
+        ["09:47", "分析代码分支", "已分析 320 个文件"],
+        ["09:50", "生成报告", "report.md"],
+        ["09:52", "验证与总结", "所有结论通过"],
+      ]
+    : [
+        ["09:41", "Read source brief", "docs/PRD.md"],
+        ["09:43", "Draft execution plan", "plan.md"],
+        ["09:45", "Inspect references", "12 results"],
+        ["09:47", "Analyze codebase", "320 files scanned"],
+        ["09:50", "Generate report", "report.md"],
+        ["09:52", "Verify and close", "All checks passed"],
+      ];
+  const evidenceCards = isZh
+    ? [
+        ["代码分析结果", "src/agent/planner.py", "code"],
+        ["需求文档", "docs/PRD.md", "doc"],
+        ["性能测试结果", "bench/summary.csv", "chart"],
+        ["运行截图", "6 张截图", "shot"],
+      ]
+    : [
+        ["Code analysis", "src/agent/planner.py", "code"],
+        ["Requirement doc", "docs/PRD.md", "doc"],
+        ["Benchmark results", "bench/summary.csv", "chart"],
+        ["Run screenshots", "6 captures", "shot"],
+      ];
+  const logLines = isZh
+    ? [
+        "[INFO] 开始生成报告...",
+        "[INFO] 聚合分析结果",
+        "[INFO] 生成 markdown 报告",
+        "[INFO] 附加证据索引",
+        "[INFO] 验证路径完整性",
+        "[INFO] 所有检查通过",
+      ]
+    : [
+        "[INFO] Starting report run...",
+        "[INFO] Merging analysis",
+        "[INFO] Creating markdown",
+        "[INFO] Attaching evidence index",
+        "[INFO] Validating paths",
+        "[INFO] All checks passed",
+      ];
+  const proofCards = isZh
+    ? [
+        {
+          index: "01",
+          title: "证据优先的计划",
+          body: "先理解，再规划。每一步都带依据，计划可审查可调整。",
+        },
+        {
+          index: "02",
+          title: "可视化的执行过程",
+          body: "时间线、日志、证据一体呈现。过程透明，结果可信。",
+        },
+        {
+          index: "03",
+          title: "本地模型基准测试",
+          body: "多模型、本地环境实测对比，选择最适合你的配置。",
+        },
+      ]
+    : [
+        {
+          index: "01",
+          title: "Evidence-first planning",
+          body: "Understand, then plan. Every step carries evidence and stays adjustable.",
+        },
+        {
+          index: "02",
+          title: "Visible execution",
+          body: "Timeline, logs, and evidence stay together so the run remains auditable.",
+        },
+        {
+          index: "03",
+          title: "Local model benchmark",
+          body: "Compare local model behavior and pick the setup that fits your machine.",
+        },
+      ];
+
+  return (
+    <div className="hero-stage reveal" aria-label={pageCopy.stage.title} style={getRevealStyle(1, 120, 120)}>
+      <article className="workbench-window">
+        <div className="workbench-window__bar">
+          <div className="workbench-window__brand">
+            <img src="/aoryn-logo-web-transparent.png" alt="" />
+            <span>{pageCopy.stage.windowLabel}</span>
+          </div>
+          <div className="workbench-window__controls" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        </div>
+
+        <div className="workbench-window__body">
+          <aside className="workbench-sidebar" aria-label={isZh ? "工作台导航" : "Workbench navigation"}>
+            {sidebarItems.map((item, index) => (
+              <span className={index === 0 ? "workbench-sidebar__item is-active" : "workbench-sidebar__item"} key={item}>
+                <i aria-hidden="true" />
+                {item}
+              </span>
+            ))}
+            <div className="workbench-sidebar__machine">
+              <span>{isZh ? "本地模式" : "Local mode"}</span>
+              <small>Windows 11 · Intel i7 · 32GB RAM</small>
+            </div>
+          </aside>
+
+          <div className="workbench-main">
+            <header className="workbench-task">
+              <div>
+                <span className="workbench-task__label">{stageStatus}</span>
+                <h2>{pageCopy.stage.title}</h2>
+                <p>{stageBody}</p>
+              </div>
+              <span className="workbench-status">
+                <i aria-hidden="true" />
+                {isZh ? "运行中" : "Running"}
+              </span>
+            </header>
+
+            <div className="workbench-progress" aria-label={pageCopy.stage.railLabel}>
+              {progressSteps.map((step, index) => (
+                <div className={index < 3 ? "workbench-progress__step is-complete" : index === 3 ? "workbench-progress__step is-current" : "workbench-progress__step"} key={step}>
+                  <span />
+                  <small>{step}</small>
+                </div>
+              ))}
+            </div>
+
+            <div className="workbench-panels">
+              <section className="workbench-card workbench-card--timeline">
+                <strong>{isZh ? "执行时间线" : "Execution timeline"}</strong>
+                <div className="timeline-list">
+                  {timeline.map(([time, title, detail]) => (
+                    <div className="timeline-row" key={`${time}-${title}`}>
+                      <span>{time}</span>
+                      <div>
+                        <b>{title}</b>
+                        <small>{detail}</small>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="workbench-card workbench-card--evidence">
+                <div className="workbench-tabs">
+                  <span>{isZh ? "执行日志" : "Log"}</span>
+                  <span className="is-active">{isZh ? "证据" : "Evidence"}</span>
+                  <span>{isZh ? "结果" : "Result"}</span>
+                </div>
+                <div className="evidence-grid">
+                  {evidenceCards.map(([title, detail, variant]) => (
+                    <article className={`evidence-tile evidence-tile--${variant}`} key={title}>
+                      <div className="evidence-tile__preview" aria-hidden="true">
+                        <span />
+                        <span />
+                        <span />
+                      </div>
+                      <strong>{title}</strong>
+                      <small>{detail}</small>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            <section className="workbench-card workbench-card--log">
+              <strong>{isZh ? "执行日志（实时）" : "Live execution log"}</strong>
+              <div>
+                {logLines.map((line, index) => (
+                  <code key={line}>
+                    <span>{`09:50:${String(index + 11).padStart(2, "0")}`}</span>
+                    {line}
+                  </code>
+                ))}
+              </div>
+            </section>
+          </div>
+        </div>
+      </article>
+
+      <div className="hero-proof-grid">
+        {proofCards.map((item) => (
+          <article className="hero-proof-card" key={item.index}>
+            <span>{item.index}</span>
+            <h3>{item.title}</h3>
+            <p>{item.body}</p>
+          </article>
+        ))}
+      </div>
+
+      <div className="hero-stage__sr-copy">
+        <p>{stageFocusBody}</p>
+      </div>
+    </div>
+  );
+}
+
 function HomePage({ copy, authenticated, openAuthModal, locale }) {
   const pageCopy = copy.pages.home;
   const isZh = locale === "zh-CN";
@@ -193,7 +404,6 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
     <>
       <section className="hero-shell">
         <div className="hero-copy reveal" style={getRevealStyle(0, 40, 120)}>
-          <span className="section-heading__eyebrow">{pageCopy.hero.eyebrow}</span>
           <h1>{pageCopy.hero.title}</h1>
           <p>{pageCopy.hero.body}</p>
           <div className="button-row">
@@ -208,55 +418,20 @@ function HomePage({ copy, authenticated, openAuthModal, locale }) {
             </Link>
           </div>
           <div className="hero-marquee">
+            <span>{pageCopy.hero.eyebrow}</span>
             <span>{pageCopy.stage.windowLabel}</span>
             <span>{stageStatus}</span>
-            <span>{pageCopy.stage.windowMeta}</span>
+            <span>{siteConfig.domain}</span>
           </div>
         </div>
 
-        <div className="hero-stage reveal" aria-label={pageCopy.stage.title} style={getRevealStyle(1, 120, 120)}>
-          <article className="hero-stage__frame">
-            <div className="hero-stage__heading">
-              <span className="section-heading__eyebrow">{pageCopy.stage.eyebrow}</span>
-              <strong>{pageCopy.stage.title}</strong>
-              <p>{stageBody}</p>
-            </div>
-
-            <div className="hero-stage__flow" role="list" aria-label={pageCopy.stage.railLabel}>
-              {pageCopy.stage.railItems.map((item, index) => (
-                <div className="hero-flow-step" key={item} role="listitem">
-                  <span className="hero-flow-step__index">{String(index + 1).padStart(2, "0")}</span>
-                  <strong>{item}</strong>
-                </div>
-              ))}
-            </div>
-
-            <div className="hero-stage__band">
-              <div className="hero-stage__focus-copy">
-                <span>{pageCopy.stage.focusLabel}</span>
-                <strong>{pageCopy.stage.focusTitle}</strong>
-                <p>{stageFocusBody}</p>
-              </div>
-
-              <div className="hero-stage__chips">
-                {pageCopy.stage.chips.map((chip) => (
-                  <span className="chip" key={chip}>
-                    {chip}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div className="hero-stage__metrics">
-              {pageCopy.stage.metrics.map((item) => (
-                <div className="hero-metric" key={item.label}>
-                  <span>{item.label}</span>
-                  <strong>{item.value}</strong>
-                </div>
-              ))}
-            </div>
-          </article>
-        </div>
+        <WorkbenchMockup
+          pageCopy={pageCopy}
+          stageBody={stageBody}
+          stageFocusBody={stageFocusBody}
+          stageStatus={stageStatus}
+          isZh={isZh}
+        />
       </section>
 
       <section className="section-shell section-shell--compact">
@@ -718,10 +893,10 @@ function AuthModal({
 }
 
 function getPreferredTheme() {
-  if (typeof window === "undefined") return "light";
+  if (typeof window === "undefined") return "dark";
   const stored = window.localStorage.getItem("aoryn-theme");
   if (stored === "light" || stored === "dark") return stored;
-  return "light";
+  return "dark";
 }
 
 function AppFrame() {
@@ -1190,6 +1365,7 @@ function AppFrame() {
         <div className="site-footer__brand">
           <strong>{siteConfig.siteName}</strong>
           <p>{copy.footer.tagline}</p>
+          <a href={`https://${siteConfig.domain}`}>{siteConfig.domain}</a>
         </div>
 
         <div className="site-footer__links">

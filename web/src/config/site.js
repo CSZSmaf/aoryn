@@ -1,4 +1,4 @@
-const releaseVersion = "0.1.22";
+const releaseVersion = "0.1.45";
 
 const downloads = [
   {
@@ -6,7 +6,7 @@ const downloads = [
     name: "Aoryn",
     channel: "Desktop Agent",
     fileName: `Aoryn-Setup-${releaseVersion}.exe`,
-    fileSize: "197.29 MB",
+    fileSize: "224.51 MB",
     platform: "Windows 10 / 11",
     packageType: "EXE Installer",
     hosting: "Cloudflare Pages Functions + R2",
@@ -17,7 +17,7 @@ const downloads = [
     name: "Aoryn Browser",
     channel: "Managed Browser",
     fileName: `AorynBrowser-Setup-${releaseVersion}.exe`,
-    fileSize: "282.60 MB",
+    fileSize: "322.54 MB",
     platform: "Windows 10 / 11",
     packageType: "EXE Installer",
     hosting: "Cloudflare Pages Functions + R2",
