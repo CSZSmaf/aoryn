@@ -286,7 +286,7 @@ html[data-theme="dark"] .topnav__link:hover {
 .detail-hero__copy h1 {
   margin: 0.72rem 0 1rem;
   color: var(--text);
-  font-size: clamp(3rem, 4.25vw, 4.45rem);
+  font-size: clamp(2.8rem, 3.6vw, 3.45rem);
   font-weight: 800;
   line-height: 1.03;
 }
