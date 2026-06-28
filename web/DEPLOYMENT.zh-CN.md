@@ -5,7 +5,8 @@
 - `https://aoryn.org` 作为正式官网
 - `https://www.aoryn.org` 跳转到 `https://aoryn.org`
 - `GET /api/downloads/windows-installer` 作为登录保护的安装包下载入口
-- 一个名为 `AORYN_DOWNLOADS` 的 R2 bucket binding，用来存放 `Aoryn-Setup-0.1.6.exe`
+- `GET /api/downloads/windows-browser-installer` 作为登录保护的托管浏览器安装包下载入口
+- 一个名为 `AORYN_DOWNLOADS` 的 R2 bucket binding，用来存放 `latest/Aoryn-Setup-latest.exe` 和 `latest/AorynBrowser-Setup-latest.exe`
 
 ## 1. GitHub 仓库
 
@@ -38,7 +39,10 @@ Build output directory: dist
 SUPABASE_URL=<你的 Supabase 项目地址>
 SUPABASE_ANON_KEY=<你的 Supabase anon key>
 SUPABASE_SITE_URL=https://aoryn.org
-AORYN_WINDOWS_INSTALLER_KEY=Aoryn-Setup-0.1.6.exe
+AORYN_WINDOWS_INSTALLER_KEY=latest/Aoryn-Setup-latest.exe
+AORYN_WINDOWS_INSTALLER_URL=https://downloads.aoryn.org/latest/Aoryn-Setup-latest.exe
+AORYN_WINDOWS_BROWSER_INSTALLER_KEY=latest/AorynBrowser-Setup-latest.exe
+AORYN_WINDOWS_BROWSER_INSTALLER_URL=https://downloads.aoryn.org/latest/AorynBrowser-Setup-latest.exe
 ```
 
 同时添加一个 R2 bucket binding：
@@ -81,8 +85,11 @@ www.aoryn.org
 
 在存放安装包的 R2 bucket 中：
 
-- 上传 `Aoryn-Setup-0.1.6.exe`
-- 保证对象 key 与 `AORYN_WINDOWS_INSTALLER_KEY` 一致
+- 上传版本化桌面安装包，例如 `Aoryn-Setup-0.1.45.exe`
+- 上传或覆盖 `latest/Aoryn-Setup-latest.exe`
+- 上传版本化托管浏览器安装包，例如 `AorynBrowser-Setup-0.1.45.exe`
+- 上传或覆盖 `latest/AorynBrowser-Setup-latest.exe`
+- 保证对象 key 与 `AORYN_WINDOWS_INSTALLER_KEY`、`AORYN_WINDOWS_BROWSER_INSTALLER_KEY` 一致
 - 如有需要，可以继续绑定 `downloads.aoryn.org` 作为运维或审计用的文件托管域名
 
 官网已经不再把公开下载直链当成主入口。即使保留 `downloads.aoryn.org`，它也只是对象存储层的运维细节，不再是页面下载按钮直接暴露给用户的地址。
@@ -105,7 +112,7 @@ web/dist
 ## 6. 正式发布清单
 
 1. 将包含新版官网与发布元数据的代码推送到 `main`。
-2. 把 `Aoryn-Setup-0.1.6.exe` 上传到绑定的 R2 bucket。
+2. 把 `Aoryn-Setup-0.1.45.exe`、`AorynBrowser-Setup-0.1.45.exe` 以及两个 latest 别名上传到绑定的 R2 bucket。
 3. 确认 `AORYN_WINDOWS_INSTALLER_KEY` 与上传后的对象 key 一致。
 4. 触发一次 Pages 生产部署。
 5. 在 `https://aoryn.org/download` 登录后验证受保护下载流程。
@@ -118,8 +125,8 @@ web/dist
 - `https://aoryn.org` 正常打开
 - `https://www.aoryn.org` 会跳转到 `https://aoryn.org`
 - 未登录访问 `https://aoryn.org/api/downloads/windows-installer` 时返回 `401`
-- 已登录访问时能下载 `Aoryn-Setup-0.1.6.exe`
-- 官网下载按钮指向 `/api/downloads/windows-installer`
+- 已登录访问时能下载 `Aoryn-Setup-0.1.45.exe` 和 `AorynBrowser-Setup-0.1.45.exe`
+- 官网下载按钮指向 `/api/downloads/windows-installer` 和 `/api/downloads/windows-browser-installer`
 
 ## 8. 官方参考文档
 

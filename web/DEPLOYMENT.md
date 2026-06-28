@@ -5,6 +5,7 @@ This website is deployed as a Cloudflare Pages project backed by:
 - `https://aoryn.org` as the primary production site
 - `https://www.aoryn.org` redirecting to `https://aoryn.org`
 - `GET /api/downloads/windows-installer` as the gated installer route
+- `GET /api/downloads/windows-browser-installer` as the gated managed-browser installer route
 - an optional R2 bucket binding named `AORYN_DOWNLOADS` that can stream `latest/Aoryn-Setup-latest.exe`
 - a fallback public installer URL on `downloads.aoryn.org` for Pages environments where R2 bindings cannot be published
 
@@ -41,6 +42,8 @@ SUPABASE_ANON_KEY=<your Supabase anon key>
 SUPABASE_SITE_URL=https://aoryn.org
 AORYN_WINDOWS_INSTALLER_KEY=latest/Aoryn-Setup-latest.exe
 AORYN_WINDOWS_INSTALLER_URL=https://downloads.aoryn.org/latest/Aoryn-Setup-latest.exe
+AORYN_WINDOWS_BROWSER_INSTALLER_KEY=latest/AorynBrowser-Setup-latest.exe
+AORYN_WINDOWS_BROWSER_INSTALLER_URL=https://downloads.aoryn.org/latest/AorynBrowser-Setup-latest.exe
 ```
 
 Optional: add an R2 bucket binding if your Pages project can publish Functions with R2 successfully:
@@ -85,9 +88,11 @@ Recommended redirect setup:
 
 On the R2 bucket that stores the installer:
 
-- upload the versioned installer, for example `Aoryn-Setup-0.1.6.exe`
+- upload the versioned installer, for example `Aoryn-Setup-0.1.45.exe`
 - upload or overwrite `latest/Aoryn-Setup-latest.exe`
-- keep `AORYN_WINDOWS_INSTALLER_KEY` pointed at the stable latest alias
+- upload the versioned managed-browser installer, for example `AorynBrowser-Setup-0.1.45.exe`
+- upload or overwrite `latest/AorynBrowser-Setup-latest.exe`
+- keep `AORYN_WINDOWS_INSTALLER_KEY` and `AORYN_WINDOWS_BROWSER_INSTALLER_KEY` pointed at the stable latest aliases
 - keep `downloads.aoryn.org` pointed at the bucket if you want the authenticated route to fall back to a public installer URL
 
 The website button still points to `/api/downloads/windows-installer`. When R2 bindings are healthy, the Function streams from R2. When Pages cannot publish the binding, the Function can fall back to `AORYN_WINDOWS_INSTALLER_URL` after login.
