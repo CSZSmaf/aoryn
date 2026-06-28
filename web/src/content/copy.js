@@ -72,12 +72,12 @@ export const siteCopy = {
       home: {
         meta: {
           title: "Aoryn | 可见执行，本地优先的桌面工作台",
-          description: "让桌面执行清晰、可控、可恢复。",
+          description: "桌面执行清晰可控。",
         },
         hero: {
           eyebrow: "本地优先的桌面 Agent",
-          title: "让桌面执行清晰、可控、可恢复。",
-          body: "Aoryn 是本地优先的 Windows 桌面 AI Agent / 工作台。它把任务规划、视觉分析、网页研究、执行日志和证据结果放在同一个界面，让复杂任务真实可见、稳定完成。",
+          title: "桌面执行清晰可控。",
+          body: "Aoryn 是本地优先的 Windows 桌面 Agent。它把任务规划、视觉分析、网页研究、执行日志和证据结果放进同一工作台，帮助复杂任务稳定完成。",
           primaryCta: "下载桌面版",
           secondaryCta: "查看工作台",
           tertiaryCta: "了解产品",
@@ -101,8 +101,8 @@ export const siteCopy = {
         ],
         stage: {
           eyebrow: "工作台视角",
-          title: "生成桌面智能代理系统成果交付报告",
-          body: "桌面应用负责真实执行和回放，官网账号只负责身份、下载和访问边界。",
+          title: "正在执行：成果交付报告",
+          body: "计划、视觉扫描、网页资料和证据归档会按时间线留下。",
           windowLabel: "Aoryn Workbench",
           windowMeta: "Visible runs, local history, recoverable workflow",
           status: "Ready after install",
@@ -404,12 +404,12 @@ export const siteCopy = {
       home: {
         meta: {
           title: "Aoryn | Visible execution, local-first desktop workbench",
-          description: "Keep desktop execution clear, controllable, and recoverable.",
+          description: "Keep desktop execution clear and controllable.",
         },
         hero: {
           eyebrow: "Local-first desktop agent",
-          title: "Keep desktop execution clear, controllable, and recoverable.",
-          body: "Aoryn brings conversation, execution, screenshots, and timelines into one workbench so every automated run has an observable path and a state you can take over.",
+          title: "Keep desktop execution clear and controllable.",
+          body: "Aoryn brings planning, visual analysis, web research, logs, and evidence into one local-first Windows workbench.",
           primaryCta: "Download desktop app",
           secondaryCta: "View workbench",
           tertiaryCta: "Explore product",
@@ -433,8 +433,8 @@ export const siteCopy = {
         ],
         stage: {
           eyebrow: "Workbench view",
-          title: "Execution stays local. Access stays managed.",
-          body: "The desktop app owns execution and replay. The website account only handles identity, downloads, and access boundaries.",
+          title: "Running: delivery report",
+          body: "Plans, visual checks, web research, and evidence stay on the timeline.",
           windowLabel: "Aoryn Workbench",
           windowMeta: "Visible runs, local history, recoverable workflow",
           status: "Ready after install",
